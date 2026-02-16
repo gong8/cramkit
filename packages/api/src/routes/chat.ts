@@ -26,14 +26,17 @@ chatRoutes.post("/stream", async (c) => {
 	const session = await db.session.findUnique({
 		where: { id: sessionId },
 		include: {
-			files: {
+			resources: {
 				select: {
 					id: true,
-					filename: true,
+					name: true,
 					type: true,
 					label: true,
 					isIndexed: true,
 					isGraphIndexed: true,
+					files: {
+						select: { filename: true, role: true },
+					},
 				},
 			},
 		},
@@ -43,30 +46,10 @@ chatRoutes.post("/stream", async (c) => {
 		return c.json({ error: "Session not found" }, 404);
 	}
 
-	// Get file links (file-to-file relationships)
-	const fileLinks = await db.relationship.findMany({
-		where: {
-			sessionId,
-			sourceType: "file",
-			targetType: "file",
-		},
-		select: {
-			sourceId: true,
-			targetId: true,
-			relationship: true,
-		},
-	});
-
-	const fileListStr = session.files
-		.map((f) => {
-			const links = fileLinks
-				.filter((l) => l.sourceId === f.id)
-				.map((l) => {
-					const target = session.files.find((t) => t.id === l.targetId);
-					return `→ ${l.relationship}: ${target?.label || target?.filename || l.targetId}`;
-				});
-			const linkStr = links.length > 0 ? ` (${links.join(", ")})` : "";
-			return `- ${f.label || f.filename} [${f.type}]${linkStr}`;
+	const resourceListStr = session.resources
+		.map((r) => {
+			const fileList = r.files.map((f) => `    - ${f.filename} (${f.role})`).join("\n");
+			return `- ${r.label || r.name} [${r.type}]\n${fileList}`;
 		})
 		.join("\n");
 
@@ -79,7 +62,7 @@ ${session.scope ? `Exam scope: ${session.scope}` : ""}
 ${session.notes ? `Student notes: ${session.notes}` : ""}
 
 Uploaded materials:
-${fileListStr || "No files uploaded yet."}
+${resourceListStr || "No resources uploaded yet."}
 
 Help the student study effectively. You can reference their materials by name. Be concise and focused on exam preparation. If asked about specific content from their files, explain that you can see what files they have but would need the MCP tools to read specific content.`;
 

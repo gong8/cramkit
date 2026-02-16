@@ -9,7 +9,7 @@ export const sessionsRoutes = new Hono();
 sessionsRoutes.get("/", async (c) => {
 	const db = getDb();
 	const sessions = await db.session.findMany({
-		include: { _count: { select: { files: true } } },
+		include: { _count: { select: { resources: true } } },
 		orderBy: { updatedAt: "desc" },
 	});
 
@@ -20,7 +20,7 @@ sessionsRoutes.get("/", async (c) => {
 			name: s.name,
 			module: s.module,
 			examDate: s.examDate,
-			fileCount: s._count.files,
+			resourceCount: s._count.resources,
 			scope: s.scope,
 			createdAt: s.createdAt,
 			updatedAt: s.updatedAt,
@@ -33,7 +33,7 @@ sessionsRoutes.get("/:id", async (c) => {
 	const db = getDb();
 	const session = await db.session.findUnique({
 		where: { id: c.req.param("id") },
-		include: { files: true },
+		include: { resources: { include: { files: true }, orderBy: { createdAt: "desc" } } },
 	});
 
 	if (!session) {

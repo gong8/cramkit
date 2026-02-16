@@ -6,7 +6,7 @@ const MAX_NEW_RELATIONSHIPS = 10;
 
 interface SearchResult {
 	chunkId: string;
-	fileId: string;
+	resourceId: string;
 }
 
 export async function amortiseSearchResults(

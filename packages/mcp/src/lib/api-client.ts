@@ -31,10 +31,17 @@ export const apiClient = {
 
 	getSession: (sessionId: string) => request<unknown>(`/sessions/${sessionId}`),
 
-	// Files
-	getFileContent: (fileId: string) => request<unknown>(`/files/${fileId}`),
+	// Resources
+	listResources: (sessionId: string) =>
+		request<unknown[]>(`/resources/sessions/${sessionId}/resources`),
 
-	getFileChunks: (fileId: string) => request<unknown[]>(`/files/${fileId}/chunks`),
+	getResource: (resourceId: string) => request<unknown>(`/resources/${resourceId}`),
+
+	getResourceContent: (resourceId: string) =>
+		request<unknown>(`/resources/${resourceId}/content`),
+
+	getResourceTree: (resourceId: string) =>
+		request<unknown>(`/resources/${resourceId}/tree`),
 
 	// Chunks
 	getChunk: (chunkId: string) => request<unknown>(`/chunks/${chunkId}`),

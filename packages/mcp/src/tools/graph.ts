@@ -7,13 +7,13 @@ const log = createLogger("mcp");
 export const graphTools = {
 	create_link: {
 		description:
-			"Create a relationship link between two entities in the knowledge graph. Entities can be files, chunks, or concepts.",
+			"Create a relationship link between two entities in the knowledge graph. Entities can be resources, chunks, or concepts.",
 		parameters: z.object({
 			sessionId: z.string().describe("The session ID"),
-			sourceType: z.string().describe("Type of the source entity: 'file', 'chunk', or 'concept'"),
+			sourceType: z.string().describe("Type of the source entity: 'resource', 'chunk', or 'concept'"),
 			sourceId: z.string().describe("ID of the source entity"),
 			sourceLabel: z.string().optional().describe("Human-readable label for the source"),
-			targetType: z.string().describe("Type of the target entity: 'file', 'chunk', or 'concept'"),
+			targetType: z.string().describe("Type of the target entity: 'resource', 'chunk', or 'concept'"),
 			targetId: z.string().describe("ID of the target entity"),
 			targetLabel: z.string().optional().describe("Human-readable label for the target"),
 			relationship: z.string().describe("Type of relationship: 'prerequisite', 'related_to', 'extends', 'covers', etc."),
@@ -50,7 +50,7 @@ export const graphTools = {
 		description:
 			"Get related items for an entity in the knowledge graph. Returns all relationships where the entity is source or target.",
 		parameters: z.object({
-			type: z.string().describe("Entity type: 'file', 'chunk', or 'concept'"),
+			type: z.string().describe("Entity type: 'resource', 'chunk', or 'concept'"),
 			id: z.string().describe("Entity ID"),
 			relationshipType: z.string().optional().describe("Filter by relationship type"),
 		}),

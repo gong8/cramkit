@@ -1,4 +1,4 @@
-import { createLogger, getDb, indexFileRequestSchema } from "@cramkit/shared";
+import { createLogger, getDb, indexResourceRequestSchema } from "@cramkit/shared";
 import { Hono } from "hono";
 import { cancelSessionIndexing, enqueueGraphIndexing, enqueueSessionGraphIndexing, getIndexingQueueSize, getSessionBatchStatus } from "../lib/queue.js";
 
@@ -99,23 +99,23 @@ graphRoutes.get("/related", async (c) => {
 	return c.json(relationships);
 });
 
-// Trigger graph indexing for one file
-graphRoutes.post("/sessions/:sessionId/index-file", async (c) => {
+// Trigger graph indexing for one resource
+graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 	const sessionId = c.req.param("sessionId");
 	const body = await c.req.json();
-	const parsed = indexFileRequestSchema.safeParse(body);
+	const parsed = indexResourceRequestSchema.safeParse(body);
 
 	if (!parsed.success) {
-		log.warn(`POST /graph/sessions/${sessionId}/index-file — validation failed`, parsed.error.flatten());
+		log.warn(`POST /graph/sessions/${sessionId}/index-resource — validation failed`, parsed.error.flatten());
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
-	enqueueGraphIndexing(parsed.data.fileId);
-	log.info(`POST /graph/sessions/${sessionId}/index-file — queued ${parsed.data.fileId}`);
-	return c.json({ ok: true, fileId: parsed.data.fileId });
+	enqueueGraphIndexing(parsed.data.resourceId);
+	log.info(`POST /graph/sessions/${sessionId}/index-resource — queued ${parsed.data.resourceId}`);
+	return c.json({ ok: true, resourceId: parsed.data.resourceId });
 });
 
-// Trigger graph indexing for all files in session
+// Trigger graph indexing for all resources in session
 graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
@@ -128,32 +128,32 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 		// No body or invalid JSON — default to non-reindex
 	}
 
-	let fileIds: string[];
+	let resourceIds: string[];
 	if (reindex) {
-		// Include already-indexed files; reset their isGraphIndexed flag
-		const files = await db.file.findMany({
+		// Include already-indexed resources; reset their isGraphIndexed flag
+		const resources = await db.resource.findMany({
 			where: { sessionId, isIndexed: true },
 			select: { id: true },
 		});
-		fileIds = files.map((f) => f.id);
-		if (fileIds.length > 0) {
-			await db.file.updateMany({
-				where: { id: { in: fileIds } },
+		resourceIds = resources.map((r) => r.id);
+		if (resourceIds.length > 0) {
+			await db.resource.updateMany({
+				where: { id: { in: resourceIds } },
 				data: { isGraphIndexed: false, graphIndexDurationMs: null },
 			});
 		}
 	} else {
-		const files = await db.file.findMany({
+		const resources = await db.resource.findMany({
 			where: { sessionId, isIndexed: true, isGraphIndexed: false },
 			select: { id: true },
 		});
-		fileIds = files.map((f) => f.id);
+		resourceIds = resources.map((r) => r.id);
 	}
 
-	enqueueSessionGraphIndexing(sessionId, fileIds);
+	enqueueSessionGraphIndexing(sessionId, resourceIds);
 
-	log.info(`POST /graph/sessions/${sessionId}/index-all — queued ${fileIds.length} files (reindex=${reindex})`);
-	return c.json({ ok: true, queued: fileIds.length });
+	log.info(`POST /graph/sessions/${sessionId}/index-all — queued ${resourceIds.length} resources (reindex=${reindex})`);
+	return c.json({ ok: true, queued: resourceIds.length });
 });
 
 // Cancel indexing for a session
@@ -169,19 +169,19 @@ graphRoutes.get("/sessions/:sessionId/full", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 
-	const [concepts, relationships, files] = await Promise.all([
+	const [concepts, relationships, resources] = await Promise.all([
 		db.concept.findMany({ where: { sessionId }, orderBy: { name: "asc" } }),
 		db.relationship.findMany({ where: { sessionId } }),
-		db.file.findMany({
+		db.resource.findMany({
 			where: { sessionId },
-			select: { id: true, filename: true, type: true, label: true },
+			select: { id: true, name: true, type: true, label: true },
 		}),
 	]);
 
 	log.info(
-		`GET /graph/sessions/${sessionId}/full — ${concepts.length} concepts, ${relationships.length} relationships, ${files.length} files`,
+		`GET /graph/sessions/${sessionId}/full — ${concepts.length} concepts, ${relationships.length} relationships, ${resources.length} resources`,
 	);
-	return c.json({ concepts, relationships, files });
+	return c.json({ concepts, relationships, resources });
 });
 
 // Get indexing progress
@@ -190,15 +190,15 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	const sessionId = c.req.param("sessionId");
 
 	const [total, indexed] = await Promise.all([
-		db.file.count({ where: { sessionId, isIndexed: true } }),
-		db.file.count({ where: { sessionId, isGraphIndexed: true } }),
+		db.resource.count({ where: { sessionId, isIndexed: true } }),
+		db.resource.count({ where: { sessionId, isGraphIndexed: true } }),
 	]);
 
 	const inProgress = getIndexingQueueSize();
 	const batch = getSessionBatchStatus(sessionId);
 
 	// Calculate avg duration from historical data in this session
-	const durationStats = await db.file.aggregate({
+	const durationStats = await db.resource.aggregate({
 		where: { sessionId, graphIndexDurationMs: { not: null } },
 		_avg: { graphIndexDurationMs: true },
 	});
@@ -212,9 +212,9 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 		avgDurationMs,
 		batch: batch
 			? {
-					batchTotal: batch.fileIds.length,
-					batchCompleted: batch.completedFileIds.length,
-					currentFileId: batch.currentFileId,
+					batchTotal: batch.resourceIds.length,
+					batchCompleted: batch.completedResourceIds.length,
+					currentResourceId: batch.currentResourceId,
 					startedAt: batch.startedAt,
 					cancelled: batch.cancelled,
 				}

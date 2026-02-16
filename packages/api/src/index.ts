@@ -5,9 +5,9 @@ import { cors } from "./middleware/cors.js";
 const log = createLogger("api");
 import { chatRoutes } from "./routes/chat.js";
 import { chunksRoutes } from "./routes/chunks.js";
-import { filesRoutes } from "./routes/files.js";
 import { graphRoutes } from "./routes/graph.js";
 import { relationshipsRoutes } from "./routes/relationships.js";
+import { resourcesRoutes } from "./routes/resources.js";
 import { searchRoutes } from "./routes/search.js";
 import { sessionsRoutes } from "./routes/sessions.js";
 
@@ -16,7 +16,7 @@ const app = new Hono();
 app.use("*", cors());
 
 app.route("/sessions", sessionsRoutes);
-app.route("/files", filesRoutes);
+app.route("/resources", resourcesRoutes);
 app.route("/chunks", chunksRoutes);
 app.route("/relationships", relationshipsRoutes);
 app.route("/search", searchRoutes);

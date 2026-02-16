@@ -46,7 +46,7 @@ export function Dashboard() {
 							<p className="mt-1 text-sm text-muted-foreground">{session.module}</p>
 						)}
 						<div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
-							<span>{session.fileCount} files</span>
+							<span>{session.resourceCount} resource{session.resourceCount !== 1 ? "s" : ""}</span>
 							{session.examDate && (
 								<span>Exam: {new Date(session.examDate).toLocaleDateString()}</span>
 							)}

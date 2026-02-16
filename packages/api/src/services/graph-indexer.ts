@@ -13,7 +13,7 @@ interface ConceptLink {
 	conceptName: string;
 	relationship: string;
 	confidence?: number;
-	chunkTitle?: string; // optional: which chunk this link applies to
+	chunkTitle?: string;
 }
 
 interface ConceptConceptLink {
@@ -54,12 +54,7 @@ interface ChunkInfo {
 	diskPath: string | null;
 }
 
-/**
- * Build a structured content string from the chunk tree,
- * providing hierarchy info and node types to the LLM.
- */
 function buildStructuredContent(chunks: ChunkInfo[]): string {
-	// Build parent-child map
 	const childMap = new Map<string | null, ChunkInfo[]>();
 	for (const chunk of chunks) {
 		const parentId = chunk.parentId;
@@ -74,7 +69,6 @@ function buildStructuredContent(chunks: ChunkInfo[]): string {
 		const nodeLabel = chunk.nodeType !== "section" ? `[${chunk.nodeType}] ` : "";
 		lines.push(`${prefix}${nodeLabel}${chunk.title || "(untitled)"} (depth=${chunk.depth})`);
 		if (chunk.content) {
-			// Include first 500 chars of content for context
 			const preview = chunk.content.slice(0, 500);
 			for (const line of preview.split("\n")) {
 				lines.push(`${prefix}  ${line}`);
@@ -91,7 +85,6 @@ function buildStructuredContent(chunks: ChunkInfo[]): string {
 		}
 	}
 
-	// Start from root nodes (parentId = null)
 	const roots = childMap.get(null) || [];
 	for (const root of roots) {
 		renderNode(root, 0);
@@ -101,7 +94,8 @@ function buildStructuredContent(chunks: ChunkInfo[]): string {
 }
 
 function buildPrompt(
-	file: { filename: string; type: string; label: string | null },
+	resource: { name: string; type: string; label: string | null },
+	files: Array<{ filename: string; role: string }>,
 	chunks: ChunkInfo[],
 	existingConcepts: Array<{ name: string; description: string | null }>,
 ): Array<{ role: "system" | "user"; content: string }> {
@@ -125,6 +119,8 @@ function buildPrompt(
 		? `\nThe content is organized as a hierarchical tree of sections. Each section has a type (e.g., definition, theorem, proof, example, question, chapter, section). Use this structure to better understand the material's organization. When creating file_concept_links, include the chunkTitle to specify which section the concept appears in.`
 		: "";
 
+	const fileList = files.map((f) => `  - ${f.filename} (${f.role})`).join("\n");
+
 	return [
 		{
 			role: "system",
@@ -132,7 +128,7 @@ function buildPrompt(
 ${structuredNote}
 Extract the following:
 1. **concepts**: Key topics, theorems, definitions, methods, and important ideas. Each concept has: name (Title Case), description (brief), aliases (comma-separated alternative names, optional).
-2. **file_concept_links**: How this file relates to each concept. relationship can be: "covers", "introduces", "applies", "references", "proves". Include confidence (0-1).${hasTree ? " Optionally include chunkTitle to specify which section." : ""}
+2. **file_concept_links**: How this resource relates to each concept. relationship can be: "covers", "introduces", "applies", "references", "proves". Include confidence (0-1).${hasTree ? " Optionally include chunkTitle to specify which section." : ""}
 3. **concept_concept_links**: Relationships between concepts. relationship can be: "prerequisite", "related_to", "extends", "generalizes", "special_case_of", "contradicts". Include confidence (0-1).
 4. **question_concept_links**: For past papers and problem sheets, which questions test which concepts. relationship can be: "tests", "applies", "requires". Include confidence (0-1).
 
@@ -152,8 +148,10 @@ Respond with ONLY valid JSON in this exact format:
 		},
 		{
 			role: "user",
-			content: `File: ${file.filename}
-Type: ${file.type}${file.label ? `\nLabel: ${file.label}` : ""}
+			content: `Resource: ${resource.name}
+Type: ${resource.type}${resource.label ? `\nLabel: ${resource.label}` : ""}
+Files:
+${fileList}
 
 Content:
 ${contentStr.slice(0, 30000)}`,
@@ -161,12 +159,15 @@ ${contentStr.slice(0, 30000)}`,
 	];
 }
 
-export async function indexFileGraph(fileId: string): Promise<void> {
+export async function indexResourceGraph(resourceId: string): Promise<void> {
 	const db = getDb();
 
-	const file = await db.file.findUnique({
-		where: { id: fileId },
+	const resource = await db.resource.findUnique({
+		where: { id: resourceId },
 		include: {
+			files: {
+				select: { id: true, filename: true, role: true },
+			},
 			chunks: {
 				select: {
 					id: true,
@@ -182,52 +183,52 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 		},
 	});
 
-	if (!file) {
-		log.error(`indexFileGraph — file ${fileId} not found`);
+	if (!resource) {
+		log.error(`indexResourceGraph — resource ${resourceId} not found`);
 		return;
 	}
 
-	if (!file.isIndexed) {
-		log.warn(`indexFileGraph — file ${fileId} not content-indexed yet, skipping`);
+	if (!resource.isIndexed) {
+		log.warn(`indexResourceGraph — resource ${resourceId} not content-indexed yet, skipping`);
 		return;
 	}
 
-	log.info(`indexFileGraph — starting "${file.filename}" (${fileId})`);
+	log.info(`indexResourceGraph — starting "${resource.name}" (${resourceId})`);
 
 	const startTime = Date.now();
 
 	const existingConcepts = await db.concept.findMany({
-		where: { sessionId: file.sessionId },
+		where: { sessionId: resource.sessionId },
 		select: { name: true, description: true },
 	});
 
 	const messages = buildPrompt(
-		{ filename: file.filename, type: file.type, label: file.label },
-		file.chunks,
+		{ name: resource.name, type: resource.type, label: resource.label },
+		resource.files,
+		resource.chunks,
 		existingConcepts,
 	);
 
 	let result: ExtractionResult;
 	try {
 		const response = await chatCompletion(messages);
-		// Extract JSON from response (handle markdown code blocks)
 		const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, response];
 		result = JSON.parse(jsonMatch[1]!.trim()) as ExtractionResult;
 	} catch (error) {
-		log.error(`indexFileGraph — LLM call/parse failed for "${file.filename}"`, error);
+		log.error(`indexResourceGraph — LLM call/parse failed for "${resource.name}"`, error);
 		return;
 	}
 
-	// Delete existing system-created relationships for this file before re-indexing
-	const chunkIds = file.chunks.map((c) => c.id);
-	const sourceIds = [fileId, ...chunkIds];
+	// Delete existing system-created relationships for this resource before re-indexing
+	const chunkIds = resource.chunks.map((c) => c.id);
+	const sourceIds = [resourceId, ...chunkIds];
 	await db.relationship.deleteMany({
 		where: {
-			sessionId: file.sessionId,
+			sessionId: resource.sessionId,
 			createdBy: "system",
 			OR: [
 				{ sourceId: { in: sourceIds } },
-				{ sourceType: "file", sourceId: fileId },
+				{ sourceType: "resource", sourceId: resourceId },
 			],
 		},
 	});
@@ -237,14 +238,14 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 		const name = toTitleCase(concept.name);
 		await db.concept.upsert({
 			where: {
-				sessionId_name: { sessionId: file.sessionId, name },
+				sessionId_name: { sessionId: resource.sessionId, name },
 			},
 			update: {
 				description: concept.description || undefined,
 				aliases: concept.aliases || undefined,
 			},
 			create: {
-				sessionId: file.sessionId,
+				sessionId: resource.sessionId,
 				name,
 				description: concept.description || null,
 				aliases: concept.aliases || null,
@@ -255,29 +256,28 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 
 	// Reload concepts to get IDs
 	const allConcepts = await db.concept.findMany({
-		where: { sessionId: file.sessionId },
+		where: { sessionId: resource.sessionId },
 		select: { id: true, name: true },
 	});
 	const conceptMap = new Map(allConcepts.map((c) => [c.name, c.id]));
 
 	// Build chunk lookup by title for targeted relationships
 	const chunkByTitle = new Map<string, string>();
-	for (const chunk of file.chunks) {
+	for (const chunk of resource.chunks) {
 		if (chunk.title) {
 			chunkByTitle.set(chunk.title.toLowerCase(), chunk.id);
 		}
 	}
 
-	// Create file-concept relationships (point to specific chunks when possible)
+	// Create resource-concept relationships (point to specific chunks when possible)
 	for (const link of result.file_concept_links) {
 		const conceptName = toTitleCase(link.conceptName);
 		const conceptId = conceptMap.get(conceptName);
 		if (!conceptId) continue;
 
-		// Try to find the specific chunk this concept is in
-		let sourceType = "file";
-		let sourceId = fileId;
-		let sourceLabel = file.filename;
+		let sourceType = "resource";
+		let sourceId = resourceId;
+		let sourceLabel = resource.name;
 
 		if (link.chunkTitle) {
 			const chunkId = chunkByTitle.get(link.chunkTitle.toLowerCase());
@@ -290,7 +290,7 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 
 		await db.relationship.create({
 			data: {
-				sessionId: file.sessionId,
+				sessionId: resource.sessionId,
 				sourceType,
 				sourceId,
 				sourceLabel,
@@ -312,7 +312,7 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 
 		await db.relationship.create({
 			data: {
-				sessionId: file.sessionId,
+				sessionId: resource.sessionId,
 				sourceType: "concept",
 				sourceId,
 				sourceLabel: toTitleCase(link.sourceConcept),
@@ -332,16 +332,15 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 		const conceptId = conceptMap.get(conceptName);
 		if (!conceptId) continue;
 
-		// Find the chunk most relevant to this question
-		const matchingChunk = file.chunks.find(
+		const matchingChunk = resource.chunks.find(
 			(c) => c.title?.includes(link.questionLabel) || c.content.includes(link.questionLabel),
 		);
 
 		await db.relationship.create({
 			data: {
-				sessionId: file.sessionId,
-				sourceType: matchingChunk ? "chunk" : "file",
-				sourceId: matchingChunk?.id || fileId,
+				sessionId: resource.sessionId,
+				sourceType: matchingChunk ? "chunk" : "resource",
+				sourceId: matchingChunk?.id || resourceId,
 				sourceLabel: link.questionLabel,
 				targetType: "concept",
 				targetId: conceptId,
@@ -353,14 +352,14 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 		});
 	}
 
-	// Mark file as graph-indexed with duration
+	// Mark resource as graph-indexed with duration
 	const graphIndexDurationMs = Date.now() - startTime;
-	await db.file.update({
-		where: { id: fileId },
+	await db.resource.update({
+		where: { id: resourceId },
 		data: { isGraphIndexed: true, graphIndexDurationMs },
 	});
 
 	log.info(
-		`indexFileGraph — completed "${file.filename}": ${result.concepts.length} concepts, ${result.file_concept_links.length + result.concept_concept_links.length + result.question_concept_links.length} relationships`,
+		`indexResourceGraph — completed "${resource.name}": ${result.concepts.length} concepts, ${result.file_concept_links.length + result.concept_concept_links.length + result.question_concept_links.length} relationships`,
 	);
 }

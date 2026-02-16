@@ -5,14 +5,14 @@ const log = createLogger("api");
 
 export const chunksRoutes = new Hono();
 
-// Get chunks for a file
-chunksRoutes.get("/files/:fileId/chunks", async (c) => {
+// Get chunks for a resource
+chunksRoutes.get("/resources/:resourceId/chunks", async (c) => {
 	const db = getDb();
 	const chunks = await db.chunk.findMany({
-		where: { fileId: c.req.param("fileId") },
+		where: { resourceId: c.req.param("resourceId") },
 		orderBy: { index: "asc" },
 	});
-	log.info(`GET /files/${c.req.param("fileId")}/chunks — found ${chunks.length} chunks`);
+	log.info(`GET /resources/${c.req.param("resourceId")}/chunks — found ${chunks.length} chunks`);
 	return c.json(chunks);
 });
 
@@ -21,7 +21,7 @@ chunksRoutes.get("/:id", async (c) => {
 	const db = getDb();
 	const chunk = await db.chunk.findUnique({
 		where: { id: c.req.param("id") },
-		include: { file: { select: { filename: true, type: true } } },
+		include: { resource: { select: { name: true, type: true } } },
 	});
 
 	if (!chunk) {

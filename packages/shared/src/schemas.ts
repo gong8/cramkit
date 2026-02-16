@@ -1,16 +1,21 @@
 import { z } from "zod";
 
-export const FileTypeEnum = z.enum([
+export const ResourceTypeEnum = z.enum([
 	"LECTURE_NOTES",
 	"PAST_PAPER",
-	"MARK_SCHEME",
 	"PROBLEM_SHEET",
-	"PROBLEM_SHEET_SOLUTIONS",
-	"PAST_PAPER_WITH_MARK_SCHEME",
-	"PROBLEM_SHEET_WITH_SOLUTIONS",
 	"SPECIFICATION",
 	"OTHER",
 ]);
+
+export const FileRoleEnum = z.enum([
+	"PRIMARY",
+	"MARK_SCHEME",
+	"SOLUTIONS",
+	"SUPPLEMENT",
+]);
+
+export const SplitModeEnum = z.enum(["auto", "split", "single"]);
 
 export const createSessionSchema = z.object({
 	name: z.string().min(1),
@@ -28,17 +33,16 @@ export const updateSessionSchema = z.object({
 	notes: z.string().nullable().optional(),
 });
 
-export const SplitModeEnum = z.enum(["auto", "split", "single"]);
-
-export const uploadFileMetadataSchema = z.object({
-	type: FileTypeEnum,
+export const createResourceSchema = z.object({
+	name: z.string().min(1),
+	type: ResourceTypeEnum,
 	label: z.string().optional(),
 	splitMode: SplitModeEnum.optional().default("auto"),
 });
 
-export const updateFileSchema = z.object({
+export const updateResourceSchema = z.object({
+	name: z.string().min(1).optional(),
 	label: z.string().nullable().optional(),
-	type: FileTypeEnum.optional(),
 });
 
 export const createRelationshipSchema = z.object({
@@ -54,7 +58,7 @@ export const createRelationshipSchema = z.object({
 
 export const searchQuerySchema = z.object({
 	q: z.string().min(1),
-	fileTypes: z.array(FileTypeEnum).optional(),
+	resourceTypes: z.array(ResourceTypeEnum).optional(),
 	limit: z.coerce.number().int().positive().max(50).optional().default(10),
 });
 
@@ -65,17 +69,8 @@ export const createConceptSchema = z.object({
 	createdBy: z.enum(["system", "claude", "amortised"]).optional(),
 });
 
-export const indexFileRequestSchema = z.object({
-	fileId: z.string(),
-});
-
-export const fileLinkSchema = z.object({
-	targetFileId: z.string(),
-	relationship: z.enum(["mark_scheme_of", "solutions_of"]),
-});
-
-export const fileUnlinkSchema = z.object({
-	targetFileId: z.string(),
+export const indexResourceRequestSchema = z.object({
+	resourceId: z.string(),
 });
 
 export const chatStreamRequestSchema = z.object({

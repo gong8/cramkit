@@ -1,13 +1,12 @@
-import { FileList } from "@/components/FileList";
-import { FileUpload } from "@/components/FileUpload";
+import { ResourceList } from "@/components/ResourceList";
+import { ResourceUpload } from "@/components/ResourceUpload";
 import { FileViewer } from "@/components/FileViewer";
 import {
 	cancelIndexing,
 	fetchIndexStatus,
 	fetchSession,
-	fetchSessionFiles,
-	indexAllFiles,
-	reindexAllFiles,
+	indexAllResources,
+	reindexAllResources,
 	updateSession,
 	type IndexStatus,
 } from "@/lib/api";
@@ -41,8 +40,8 @@ function computeEta(status: IndexStatus): string | null {
 
 	// Fallback: elapsed / completed ratio
 	const elapsed = Date.now() - batch.startedAt;
-	const msPerFile = elapsed / batch.batchCompleted;
-	const etaSeconds = (remaining * msPerFile) / 1000;
+	const msPerResource = elapsed / batch.batchCompleted;
+	const etaSeconds = (remaining * msPerResource) / 1000;
 	return formatEta(etaSeconds);
 }
 
@@ -60,14 +59,7 @@ export function SessionDetail() {
 		enabled: !!sessionId,
 	});
 
-	const { data: files, refetch: refetchFiles } = useQuery({
-		queryKey: ["session-files", sessionId],
-		queryFn: () => {
-			log.info(`SessionDetail — fetching files for session ${sessionId}`);
-			return fetchSessionFiles(sessionId);
-		},
-		enabled: !!sessionId,
-	});
+	const resources = session?.resources ?? [];
 
 	const [scope, setScope] = useState("");
 	const [notes, setNotes] = useState("");
@@ -101,6 +93,8 @@ export function SessionDetail() {
 		};
 	}, []);
 
+	const queryClient = useQuery({ queryKey: ["session", sessionId], enabled: false }).refetch;
+
 	const startPolling = useCallback(() => {
 		pollRef.current = setInterval(async () => {
 			try {
@@ -118,13 +112,13 @@ export function SessionDetail() {
 					pollRef.current = null;
 					setIsIndexingAll(false);
 					setIndexStatus(null);
-					refetchFiles();
+					queryClient();
 				}
 			} catch (err) {
 				log.error("polling index status failed", err);
 			}
 		}, 2000);
-	}, [sessionId, refetchFiles]);
+	}, [sessionId, queryClient]);
 
 	// Restore indexing state on mount (e.g. after page navigation)
 	useEffect(() => {
@@ -146,7 +140,7 @@ export function SessionDetail() {
 		setIsIndexingAll(true);
 		setIndexStatus(null);
 		try {
-			await indexAllFiles(sessionId);
+			await indexAllResources(sessionId);
 			startPolling();
 		} catch (err) {
 			log.error("handleIndexAll — failed", err);
@@ -159,7 +153,7 @@ export function SessionDetail() {
 		setIsIndexingAll(true);
 		setIndexStatus(null);
 		try {
-			await reindexAllFiles(sessionId);
+			await reindexAllResources(sessionId);
 			startPolling();
 		} catch (err) {
 			log.error("handleReindexAll — failed", err);
@@ -176,12 +170,12 @@ export function SessionDetail() {
 		}
 	}, [sessionId]);
 
-	const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+	const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null);
 
-	const hasUnindexedFiles = files?.some((f) => f.isIndexed && !f.isGraphIndexed) ?? false;
+	const hasUnindexedResources = resources.some((r) => r.isIndexed && !r.isGraphIndexed);
 	const allGraphIndexed =
-		files && files.length > 0 && files.every((f) => !f.isIndexed || f.isGraphIndexed);
-	const hasIndexedFiles = files?.some((f) => f.isIndexed) ?? false;
+		resources.length > 0 && resources.every((r) => !r.isIndexed || r.isGraphIndexed);
+	const hasIndexedResources = resources.some((r) => r.isIndexed);
 
 	// Progress bar values
 	const batch = indexStatus?.batch;
@@ -195,13 +189,13 @@ export function SessionDetail() {
 
 	return (
 		<div className="flex gap-6">
-			{/* File viewer — first column */}
+			{/* Resource viewer — first column */}
 			<div className="hidden w-80 shrink-0 lg:block">
 				<div className="sticky top-0 h-[calc(100vh-7rem)] overflow-hidden rounded-lg border border-border">
 					<FileViewer
-						files={files || []}
-						selectedFileId={selectedFileId}
-						onSelectFile={setSelectedFileId}
+						resources={resources}
+						selectedResourceId={selectedResourceId}
+						onSelectResource={setSelectedResourceId}
 					/>
 				</div>
 			</div>
@@ -266,7 +260,7 @@ export function SessionDetail() {
 
 				<div className="mb-6">
 					<div className="mb-3 flex items-center justify-between">
-						<h2 className="text-lg font-semibold">Files</h2>
+						<h2 className="text-lg font-semibold">Resources</h2>
 						<div className="flex items-center gap-2">
 							{isIndexingAll && (
 								<button
@@ -278,7 +272,7 @@ export function SessionDetail() {
 									Cancel
 								</button>
 							)}
-							{!isIndexingAll && hasUnindexedFiles && (
+							{!isIndexingAll && hasUnindexedResources && (
 								<button
 									onClick={handleIndexAll}
 									className="flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/20"
@@ -287,7 +281,7 @@ export function SessionDetail() {
 									Index All
 								</button>
 							)}
-							{!isIndexingAll && !hasUnindexedFiles && allGraphIndexed && hasIndexedFiles && (
+							{!isIndexingAll && !hasUnindexedResources && allGraphIndexed && hasIndexedResources && (
 								<button
 									onClick={handleReindexAll}
 									className="flex items-center gap-1.5 rounded-md bg-violet-500/10 px-3 py-1.5 text-sm font-medium text-violet-600 hover:bg-violet-500/20"
@@ -310,7 +304,7 @@ export function SessionDetail() {
 							<div className="flex items-center justify-between text-xs text-muted-foreground">
 								<span>
 									{batch
-										? `Indexing ${batch.batchCompleted}/${batch.batchTotal} files`
+										? `Indexing ${batch.batchCompleted}/${batch.batchTotal} resources`
 										: "Starting..."}
 								</span>
 								<span>{etaText ?? "Estimating..."}</span>
@@ -318,8 +312,8 @@ export function SessionDetail() {
 						</div>
 					)}
 
-					<FileUpload sessionId={sessionId} />
-					<FileList files={files || []} sessionId={sessionId} />
+					<ResourceUpload sessionId={sessionId} existingResources={resources} />
+					<ResourceList resources={resources} sessionId={sessionId} />
 				</div>
 			</div>
 		</div>

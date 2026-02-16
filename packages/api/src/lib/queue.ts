@@ -1,68 +1,68 @@
 import { createLogger } from "@cramkit/shared";
 import PQueue from "p-queue";
-import { processFile } from "../services/file-processor.js";
-import { indexFileGraph } from "../services/graph-indexer.js";
+import { processResource } from "../services/resource-processor.js";
+import { indexResourceGraph } from "../services/graph-indexer.js";
 
 const log = createLogger("api");
 const queue = new PQueue({ concurrency: 1 });
 const indexingQueue = new PQueue({ concurrency: 2 });
 
-export function enqueueProcessing(fileId: string): void {
-	queue.add(() => processFile(fileId));
-	log.info(`enqueueProcessing — file ${fileId}, queue size: ${queue.size + queue.pending}`);
+export function enqueueProcessing(resourceId: string): void {
+	queue.add(() => processResource(resourceId));
+	log.info(`enqueueProcessing — resource ${resourceId}, queue size: ${queue.size + queue.pending}`);
 }
 
 export function getQueueSize(): number {
 	return queue.size + queue.pending;
 }
 
-export function enqueueGraphIndexing(fileId: string): void {
-	indexingQueue.add(() => indexFileGraph(fileId));
-	log.info(`enqueueGraphIndexing — file ${fileId}, indexing queue size: ${indexingQueue.size + indexingQueue.pending}`);
+export function enqueueGraphIndexing(resourceId: string): void {
+	indexingQueue.add(() => indexResourceGraph(resourceId));
+	log.info(`enqueueGraphIndexing — resource ${resourceId}, indexing queue size: ${indexingQueue.size + indexingQueue.pending}`);
 }
 
 // --- Session batch tracking ---
 
 interface SessionBatchState {
-	fileIds: string[];
-	completedFileIds: string[];
-	currentFileId: string | null;
+	resourceIds: string[];
+	completedResourceIds: string[];
+	currentResourceId: string | null;
 	startedAt: number;
 	cancelled: boolean;
 }
 
 const sessionBatches = new Map<string, SessionBatchState>();
 
-export function enqueueSessionGraphIndexing(sessionId: string, fileIds: string[]): void {
+export function enqueueSessionGraphIndexing(sessionId: string, resourceIds: string[]): void {
 	const batch: SessionBatchState = {
-		fileIds,
-		completedFileIds: [],
-		currentFileId: null,
+		resourceIds,
+		completedResourceIds: [],
+		currentResourceId: null,
 		startedAt: Date.now(),
 		cancelled: false,
 	};
 	sessionBatches.set(sessionId, batch);
 
-	for (const fileId of fileIds) {
+	for (const resourceId of resourceIds) {
 		indexingQueue.add(async () => {
 			if (batch.cancelled) {
-				log.info(`enqueueSessionGraphIndexing — skipping ${fileId} (cancelled)`);
+				log.info(`enqueueSessionGraphIndexing — skipping ${resourceId} (cancelled)`);
 				return;
 			}
-			batch.currentFileId = fileId;
-			await indexFileGraph(fileId);
-			batch.completedFileIds.push(fileId);
-			batch.currentFileId = null;
+			batch.currentResourceId = resourceId;
+			await indexResourceGraph(resourceId);
+			batch.completedResourceIds.push(resourceId);
+			batch.currentResourceId = null;
 		});
 	}
-	log.info(`enqueueSessionGraphIndexing — session ${sessionId}, ${fileIds.length} files queued`);
+	log.info(`enqueueSessionGraphIndexing — session ${sessionId}, ${resourceIds.length} resources queued`);
 }
 
 export function cancelSessionIndexing(sessionId: string): boolean {
 	const batch = sessionBatches.get(sessionId);
 	if (!batch) return false;
 	batch.cancelled = true;
-	log.info(`cancelSessionIndexing — session ${sessionId}, cancelled (${batch.completedFileIds.length}/${batch.fileIds.length} done)`);
+	log.info(`cancelSessionIndexing — session ${sessionId}, cancelled (${batch.completedResourceIds.length}/${batch.resourceIds.length} done)`);
 	return true;
 }
 

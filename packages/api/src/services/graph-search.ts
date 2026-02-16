@@ -4,9 +4,9 @@ const log = createLogger("api");
 
 export interface GraphSearchResult {
 	chunkId: string;
-	fileId: string;
-	fileName: string;
-	fileType: string;
+	resourceId: string;
+	resourceName: string;
+	resourceType: string;
 	title: string | null;
 	content: string;
 	source: "graph";
@@ -19,7 +19,6 @@ export async function searchGraph(
 	limit: number,
 ): Promise<GraphSearchResult[]> {
 	const db = getDb();
-	const queryLower = query.toLowerCase();
 
 	// Find concepts matching the query
 	const concepts = await db.concept.findMany({
@@ -53,9 +52,9 @@ export async function searchGraph(
 		},
 	});
 
-	// Collect chunk IDs and file IDs from relationships
+	// Collect chunk IDs and resource IDs from relationships
 	const chunkIds = new Set<string>();
-	const fileIds = new Set<string>();
+	const resourceIds = new Set<string>();
 	const chunkConceptMap = new Map<string, Array<{ name: string; relationship: string }>>();
 
 	for (const rel of relationships) {
@@ -83,33 +82,32 @@ export async function searchGraph(
 				relationship: rel.relationship,
 			});
 			chunkConceptMap.set(entityId, existing);
-		} else if (entityType === "file") {
-			fileIds.add(entityId);
+		} else if (entityType === "resource") {
+			resourceIds.add(entityId);
 		}
 	}
 
-	// For file-level relationships, get their chunks
-	if (fileIds.size > 0) {
-		const fileChunks = await db.chunk.findMany({
-			where: { fileId: { in: Array.from(fileIds) } },
-			select: { id: true, fileId: true },
+	// For resource-level relationships, get their chunks
+	if (resourceIds.size > 0) {
+		const resourceChunks = await db.chunk.findMany({
+			where: { resourceId: { in: Array.from(resourceIds) } },
+			select: { id: true, resourceId: true },
 		});
-		for (const fc of fileChunks) {
-			chunkIds.add(fc.id);
-			// Find which concepts linked to this file
-			const fileRels = relationships.filter(
+		for (const rc of resourceChunks) {
+			chunkIds.add(rc.id);
+			const resourceRels = relationships.filter(
 				(r) =>
-					(r.sourceType === "file" && r.sourceId === fc.fileId) ||
-					(r.targetType === "file" && r.targetId === fc.fileId),
+					(r.sourceType === "resource" && r.sourceId === rc.resourceId) ||
+					(r.targetType === "resource" && r.targetId === rc.resourceId),
 			);
-			for (const rel of fileRels) {
+			for (const rel of resourceRels) {
 				const conceptId = rel.sourceType === "concept" ? rel.sourceId : rel.targetId;
-				const existing = chunkConceptMap.get(fc.id) || [];
+				const existing = chunkConceptMap.get(rc.id) || [];
 				existing.push({
 					name: conceptNames.get(conceptId) || "",
 					relationship: rel.relationship,
 				});
-				chunkConceptMap.set(fc.id, existing);
+				chunkConceptMap.set(rc.id, existing);
 			}
 		}
 	}
@@ -119,11 +117,11 @@ export async function searchGraph(
 		return [];
 	}
 
-	// Fetch chunks with file metadata
+	// Fetch chunks with resource metadata
 	const chunks = await db.chunk.findMany({
 		where: { id: { in: Array.from(chunkIds) } },
 		include: {
-			file: { select: { id: true, filename: true, type: true } },
+			resource: { select: { id: true, name: true, type: true } },
 		},
 		take: limit,
 	});
@@ -132,9 +130,9 @@ export async function searchGraph(
 
 	return chunks.map((chunk) => ({
 		chunkId: chunk.id,
-		fileId: chunk.file.id,
-		fileName: chunk.file.filename,
-		fileType: chunk.file.type,
+		resourceId: chunk.resource.id,
+		resourceName: chunk.resource.name,
+		resourceType: chunk.resource.type,
 		title: chunk.title,
 		content: chunk.content,
 		source: "graph" as const,

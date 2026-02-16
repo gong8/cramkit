@@ -17,53 +17,63 @@ model Session {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  files         File[]
+  resources     Resource[]
   relationships Relationship[]
   concepts      Concept[]
 }
 
-model File {
-  id            String   @id @default(cuid())
-  sessionId     String
-  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  filename      String
-  type          FileType
-  label         String?
-
-  rawPath       String
-  processedPath String?
-  indexPath      String?
-
-  pageCount Int?
-  fileSize             Int?
-  splitMode  String  @default("auto")
-
-  isIndexed            Boolean @default(false)
-  isGraphIndexed       Boolean @default(false)
+model Resource {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name      String
+  type      ResourceType
+  label     String?
+  splitMode String       @default("auto")
+  isIndexed      Boolean @default(false)
+  isGraphIndexed Boolean @default(false)
   graphIndexDurationMs Int?
+  files     File[]
   chunks    Chunk[]
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  @@index([sessionId])
 }
 
-enum FileType {
+enum ResourceType {
   LECTURE_NOTES
   PAST_PAPER
-  MARK_SCHEME
   PROBLEM_SHEET
-  PROBLEM_SHEET_SOLUTIONS
-  PAST_PAPER_WITH_MARK_SCHEME
-  PROBLEM_SHEET_WITH_SOLUTIONS
   SPECIFICATION
   OTHER
 }
 
+model File {
+  id         String   @id @default(cuid())
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  filename   String
+  role       FileRole
+  rawPath       String
+  processedPath String?
+  pageCount  Int?
+  fileSize   Int?
+  createdAt  DateTime @default(now())
+  @@index([resourceId])
+}
+
+enum FileRole {
+  PRIMARY
+  MARK_SCHEME
+  SOLUTIONS
+  SUPPLEMENT
+}
+
 model Chunk {
-  id     String @id @default(cuid())
-  fileId String
-  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  sourceFileId String?
 
   parentId  String?
   parent    Chunk?  @relation("ChunkTree", fields: [parentId], references: [id], onDelete: Cascade)
@@ -83,7 +93,7 @@ model Chunk {
 
   createdAt DateTime @default(now())
 
-  @@index([fileId])
+  @@index([resourceId])
   @@index([parentId])
 }
 

@@ -29,8 +29,26 @@ export interface SessionSummary {
 	name: string;
 	module: string | null;
 	examDate: string | null;
-	fileCount: number;
+	resourceCount: number;
 	scope: string | null;
+}
+
+export interface ResourceFile {
+	id: string;
+	filename: string;
+	role: string;
+	fileSize: number | null;
+}
+
+export interface Resource {
+	id: string;
+	name: string;
+	type: string;
+	label: string | null;
+	isIndexed: boolean;
+	isGraphIndexed: boolean;
+	graphIndexDurationMs: number | null;
+	files: ResourceFile[];
 }
 
 export interface Session {
@@ -40,18 +58,7 @@ export interface Session {
 	examDate: string | null;
 	scope: string | null;
 	notes: string | null;
-	files: FileItem[];
-}
-
-export interface FileItem {
-	id: string;
-	filename: string;
-	type: string;
-	label: string | null;
-	isIndexed: boolean;
-	isGraphIndexed: boolean;
-	fileSize: number | null;
-	graphIndexDurationMs: number | null;
+	resources: Resource[];
 }
 
 export interface Concept {
@@ -74,9 +81,9 @@ export interface Relationship {
 	confidence: number;
 }
 
-export interface GraphFile {
+export interface GraphResource {
 	id: string;
-	filename: string;
+	name: string;
 	type: string;
 	label: string | null;
 }
@@ -84,13 +91,13 @@ export interface GraphFile {
 export interface SessionGraph {
 	concepts: Concept[];
 	relationships: Relationship[];
-	files: GraphFile[];
+	resources: GraphResource[];
 }
 
 export interface BatchStatus {
 	batchTotal: number;
 	batchCompleted: number;
-	currentFileId: string | null;
+	currentResourceId: string | null;
 	startedAt: number;
 	cancelled: boolean;
 }
@@ -103,6 +110,13 @@ export interface IndexStatus {
 	batch: BatchStatus | null;
 }
 
+export interface ResourceContent {
+	id: string;
+	name: string;
+	type: string;
+	content: string;
+}
+
 export async function fetchSessions(): Promise<SessionSummary[]> {
 	log.info("fetchSessions");
 	const sessions = await request<SessionSummary[]>("/sessions");
@@ -113,13 +127,6 @@ export async function fetchSessions(): Promise<SessionSummary[]> {
 export function fetchSession(id: string): Promise<Session> {
 	log.info(`fetchSession — ${id}`);
 	return request(`/sessions/${id}`);
-}
-
-export async function fetchSessionFiles(sessionId: string): Promise<FileItem[]> {
-	log.info(`fetchSessionFiles — ${sessionId}`);
-	const files = await request<FileItem[]>(`/files/sessions/${sessionId}/files`);
-	log.info(`fetchSessionFiles — got ${files.length} files`);
-	return files;
 }
 
 export async function createSession(data: {
@@ -147,52 +154,100 @@ export function updateSession(
 	});
 }
 
-export function deleteFile(fileId: string): Promise<void> {
-	log.info(`deleteFile — ${fileId}`);
-	return request(`/files/${fileId}`, { method: "DELETE" });
-}
-
-export async function uploadFile(
+// Resource operations
+export async function createResource(
 	sessionId: string,
-	file: File,
-	type: string,
-	label?: string,
-): Promise<FileItem> {
-	log.info(`uploadFile — "${file.name}" (${file.size} bytes, type=${type})`);
+	data: {
+		name: string;
+		type: string;
+		label?: string;
+		splitMode?: string;
+		files: File[];
+		markScheme?: File;
+		solutions?: File;
+	},
+): Promise<Resource> {
+	log.info(`createResource — "${data.name}" (${data.type}), ${data.files.length} files`);
 	const formData = new FormData();
-	formData.append("file", file);
-	formData.append("type", type);
-	if (label) formData.append("label", label);
+	formData.append("name", data.name);
+	formData.append("type", data.type);
+	if (data.label) formData.append("label", data.label);
+	if (data.splitMode) formData.append("splitMode", data.splitMode);
 
-	const response = await fetch(`${BASE_URL}/files/sessions/${sessionId}/files`, {
+	for (const file of data.files) {
+		formData.append("files", file);
+	}
+	if (data.markScheme) formData.append("markScheme", data.markScheme);
+	if (data.solutions) formData.append("solutions", data.solutions);
+
+	const response = await fetch(`${BASE_URL}/resources/sessions/${sessionId}/resources`, {
 		method: "POST",
 		body: formData,
 	});
 
 	if (!response.ok) {
-		log.error(`uploadFile — failed "${file.name}": ${response.status}`);
+		log.error(`createResource — failed: ${response.status}`);
 		throw new Error(`Upload error: ${response.status}`);
 	}
 
-	log.info(`uploadFile — completed "${file.name}"`);
-	return response.json() as Promise<FileItem>;
+	log.info(`createResource — completed "${data.name}"`);
+	return response.json() as Promise<Resource>;
 }
 
-export function indexFile(sessionId: string, fileId: string): Promise<void> {
-	log.info(`indexFile — session=${sessionId}, file=${fileId}`);
-	return request(`/graph/sessions/${sessionId}/index-file`, {
+export async function addFilesToResource(
+	resourceId: string,
+	files: File[],
+	role?: string,
+): Promise<Resource> {
+	log.info(`addFilesToResource — ${resourceId}, ${files.length} files`);
+	const formData = new FormData();
+	if (role) formData.append("role", role);
+	for (const file of files) {
+		formData.append("files", file);
+	}
+
+	const response = await fetch(`${BASE_URL}/resources/${resourceId}/files`, {
 		method: "POST",
-		body: JSON.stringify({ fileId }),
+		body: formData,
+	});
+
+	if (!response.ok) {
+		throw new Error(`Upload error: ${response.status}`);
+	}
+
+	return response.json() as Promise<Resource>;
+}
+
+export function removeFileFromResource(resourceId: string, fileId: string): Promise<void> {
+	log.info(`removeFileFromResource — resource=${resourceId}, file=${fileId}`);
+	return request(`/resources/${resourceId}/files/${fileId}`, { method: "DELETE" });
+}
+
+export function deleteResource(resourceId: string): Promise<void> {
+	log.info(`deleteResource — ${resourceId}`);
+	return request(`/resources/${resourceId}`, { method: "DELETE" });
+}
+
+export function fetchResourceContent(resourceId: string): Promise<ResourceContent> {
+	log.info(`fetchResourceContent — ${resourceId}`);
+	return request(`/resources/${resourceId}/content`);
+}
+
+export function indexResource(sessionId: string, resourceId: string): Promise<void> {
+	log.info(`indexResource — session=${sessionId}, resource=${resourceId}`);
+	return request(`/graph/sessions/${sessionId}/index-resource`, {
+		method: "POST",
+		body: JSON.stringify({ resourceId }),
 	});
 }
 
-export function indexAllFiles(sessionId: string): Promise<void> {
-	log.info(`indexAllFiles — session=${sessionId}`);
+export function indexAllResources(sessionId: string): Promise<void> {
+	log.info(`indexAllResources — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/index-all`, { method: "POST" });
 }
 
-export function reindexAllFiles(sessionId: string): Promise<void> {
-	log.info(`reindexAllFiles — session=${sessionId}`);
+export function reindexAllResources(sessionId: string): Promise<void> {
+	log.info(`reindexAllResources — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/index-all`, {
 		method: "POST",
 		body: JSON.stringify({ reindex: true }),
@@ -216,72 +271,4 @@ export function fetchConcepts(sessionId: string): Promise<Concept[]> {
 export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
 	log.info(`fetchSessionGraph — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/full`);
-}
-
-// File detail (with chunks/content)
-export interface FileDetail {
-	id: string;
-	filename: string;
-	type: string;
-	label: string | null;
-	processedContent: string | null;
-	chunks: Array<{
-		id: string;
-		title: string | null;
-		content: string;
-		index: number;
-		nodeType: string;
-		depth: number;
-	}>;
-}
-
-export function fetchFileDetail(fileId: string): Promise<FileDetail> {
-	log.info(`fetchFileDetail — ${fileId}`);
-	return request(`/files/${fileId}`);
-}
-
-// File linking
-export interface FileLink {
-	sourceId: string;
-	targetId: string;
-	relationship: string;
-}
-
-export function linkFile(
-	sourceFileId: string,
-	targetFileId: string,
-	relationship: "mark_scheme_of" | "solutions_of",
-): Promise<void> {
-	log.info(`linkFile — ${sourceFileId} -> ${targetFileId} (${relationship})`);
-	return request(`/files/${sourceFileId}/link`, {
-		method: "POST",
-		body: JSON.stringify({ targetFileId, relationship }),
-	});
-}
-
-export function unlinkFile(sourceFileId: string, targetFileId: string): Promise<void> {
-	log.info(`unlinkFile — ${sourceFileId} -x- ${targetFileId}`);
-	return request(`/files/${sourceFileId}/unlink`, {
-		method: "DELETE",
-		body: JSON.stringify({ targetFileId }),
-	});
-}
-
-export async function fetchFileLinks(sessionId: string): Promise<FileLink[]> {
-	log.info(`fetchFileLinks — session=${sessionId}`);
-	const relationships = await request<Array<{
-		sourceType: string;
-		sourceId: string;
-		targetType: string;
-		targetId: string;
-		relationship: string;
-	}>>(`/relationships/sessions/${sessionId}/relationships`);
-	// Filter to file-to-file relationships only
-	return relationships
-		.filter((r) => r.sourceType === "file" && r.targetType === "file")
-		.map((r) => ({
-			sourceId: r.sourceId,
-			targetId: r.targetId,
-			relationship: r.relationship,
-		}));
 }

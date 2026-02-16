@@ -2,7 +2,7 @@ import { createLogger } from "@cramkit/shared";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { TreeNode } from "./markdown-parser.js";
-import { getSessionDir } from "./storage.js";
+import { getResourceDir, getSessionDir } from "./storage.js";
 
 const log = createLogger("api");
 
@@ -91,8 +91,29 @@ async function writeNodeToDisk(
 }
 
 /**
- * Write a parsed tree to disk as a directory hierarchy.
+ * Write a parsed tree to disk for a resource as a directory hierarchy.
  * Returns mappings from tree nodes to disk paths.
+ */
+export async function writeResourceTreeToDisk(
+	sessionId: string,
+	resourceId: string,
+	resourceSlug: string,
+	tree: TreeNode,
+): Promise<DiskMapping[]> {
+	const resourceDir = getResourceDir(sessionId, resourceId);
+	const baseDir = join(resourceDir, "tree", resourceSlug);
+	const relativeBase = join("tree", resourceSlug);
+	const mappings: DiskMapping[] = [];
+
+	log.info(`writeResourceTreeToDisk — writing to ${baseDir}`);
+	await writeNodeToDisk(baseDir, relativeBase, tree, mappings);
+	log.info(`writeResourceTreeToDisk — wrote ${mappings.length} nodes`);
+
+	return mappings;
+}
+
+/**
+ * @deprecated Use writeResourceTreeToDisk instead
  */
 export async function writeTreeToDisk(
 	sessionId: string,

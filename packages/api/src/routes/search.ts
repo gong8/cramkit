@@ -9,9 +9,9 @@ export const searchRoutes = new Hono();
 
 interface ContentResult {
 	chunkId: string;
-	fileId: string;
-	fileName: string;
-	fileType: string;
+	resourceId: string;
+	resourceName: string;
+	resourceType: string;
 	title: string | null;
 	content: string;
 	source: "content" | "graph" | "both";
@@ -100,7 +100,7 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 	const [contentChunks, graphResults] = await Promise.all([
 		db.chunk.findMany({
 			where: {
-				file: { sessionId },
+				resource: { sessionId },
 				OR: [
 					{ content: { contains: parsed.data.q } },
 					{ title: { contains: parsed.data.q } },
@@ -108,7 +108,7 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 				],
 			},
 			include: {
-				file: { select: { id: true, filename: true, type: true } },
+				resource: { select: { id: true, name: true, type: true } },
 			},
 			take: overFetchLimit,
 		}),
@@ -136,9 +136,9 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 
 		return {
 			chunkId: chunk.id,
-			fileId: chunk.file.id,
-			fileName: chunk.file.filename,
-			fileType: chunk.file.type,
+			resourceId: chunk.resource.id,
+			resourceName: chunk.resource.name,
+			resourceType: chunk.resource.type,
 			title: chunk.title,
 			content: chunk.content,
 			source: isGraphResult ? ("both" as const) : ("content" as const),
@@ -185,7 +185,7 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 	amortiseSearchResults(
 		sessionId,
 		parsed.data.q,
-		contentChunks.map((c) => ({ chunkId: c.id, fileId: c.file.id })),
+		contentChunks.map((c) => ({ chunkId: c.id, resourceId: c.resource.id })),
 	).catch((err) => log.error("amortisation failed", err));
 
 	return c.json(merged);

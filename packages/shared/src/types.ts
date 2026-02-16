@@ -1,16 +1,21 @@
-export const FileType = {
+export const ResourceType = {
 	LECTURE_NOTES: "LECTURE_NOTES",
 	PAST_PAPER: "PAST_PAPER",
-	MARK_SCHEME: "MARK_SCHEME",
 	PROBLEM_SHEET: "PROBLEM_SHEET",
-	PROBLEM_SHEET_SOLUTIONS: "PROBLEM_SHEET_SOLUTIONS",
-	PAST_PAPER_WITH_MARK_SCHEME: "PAST_PAPER_WITH_MARK_SCHEME",
-	PROBLEM_SHEET_WITH_SOLUTIONS: "PROBLEM_SHEET_WITH_SOLUTIONS",
 	SPECIFICATION: "SPECIFICATION",
 	OTHER: "OTHER",
 } as const;
 
-export type FileType = (typeof FileType)[keyof typeof FileType];
+export type ResourceType = (typeof ResourceType)[keyof typeof ResourceType];
+
+export const FileRole = {
+	PRIMARY: "PRIMARY",
+	MARK_SCHEME: "MARK_SCHEME",
+	SOLUTIONS: "SOLUTIONS",
+	SUPPLEMENT: "SUPPLEMENT",
+} as const;
+
+export type FileRole = (typeof FileRole)[keyof typeof FileRole];
 
 export type ProcessingStatus = "uploading" | "converting" | "indexing" | "ready" | "error";
 
@@ -19,17 +24,18 @@ export interface SessionSummary {
 	name: string;
 	module: string | null;
 	examDate: Date | null;
-	fileCount: number;
+	resourceCount: number;
 	scope: string | null;
 }
 
-export interface FileSummary {
+export interface ResourceSummary {
 	id: string;
-	filename: string;
-	type: FileType;
+	name: string;
+	type: ResourceType;
 	label: string | null;
 	isIndexed: boolean;
-	processingStatus: ProcessingStatus;
+	isGraphIndexed: boolean;
+	fileCount: number;
 }
 
 export interface ChunkSummary {

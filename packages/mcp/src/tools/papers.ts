@@ -4,61 +4,39 @@ import { apiClient } from "../lib/api-client.js";
 
 const log = createLogger("mcp");
 
-interface FileInfo {
+interface ResourceInfo {
 	id: string;
+	name: string;
 	type: string;
 	label: string | null;
-	filename: string;
-}
-
-interface RelationshipInfo {
-	sourceType: string;
-	sourceId: string;
-	targetType: string;
-	targetId: string;
-	relationship: string;
+	files: Array<{ id: string; filename: string; role: string }>;
 }
 
 export const paperTools = {
 	list_past_papers: {
-		description: "List all past papers and their associated mark schemes for a session.",
+		description: "List all past paper resources and whether they have mark schemes for a session.",
 		parameters: z.object({
 			sessionId: z.string().describe("The session ID"),
 		}),
 		execute: async ({ sessionId }: { sessionId: string }) => {
 			log.info(`list_past_papers — session=${sessionId}`);
-			const session = (await apiClient.getSession(sessionId)) as {
-				files?: FileInfo[];
-			};
-			const files = session.files || [];
-			const relationships = (await apiClient.getRelationships(sessionId)) as RelationshipInfo[];
+			const resources = (await apiClient.listResources(sessionId)) as ResourceInfo[];
 
-			// Find papers: PAST_PAPER or PAST_PAPER_WITH_MARK_SCHEME
-			const papers = files.filter(
-				(f) => f.type === "PAST_PAPER" || f.type === "PAST_PAPER_WITH_MARK_SCHEME",
-			);
+			const papers = resources.filter((r) => r.type === "PAST_PAPER");
 
-			// Build file-to-file link map
-			const fileLinks = relationships.filter(
-				(r) => r.sourceType === "file" && r.targetType === "file",
-			);
-
-			log.info(`list_past_papers — found ${papers.length} papers, ${fileLinks.length} file links`);
+			log.info(`list_past_papers — found ${papers.length} past papers`);
 			return JSON.stringify(
 				papers.map((paper) => {
-					// Check for linked mark scheme via Relationship
-					const msLink = fileLinks.find(
-						(l) => l.sourceId === paper.id && l.relationship === "mark_scheme_of",
-					);
-					const hasMarkScheme =
-						paper.type === "PAST_PAPER_WITH_MARK_SCHEME" || !!msLink;
-
+					const hasMarkScheme = paper.files.some((f) => f.role === "MARK_SCHEME");
 					return {
-						paperId: paper.id,
-						label: paper.label || paper.filename,
+						resourceId: paper.id,
+						name: paper.label || paper.name,
 						hasMarkScheme,
-						markSchemeId: msLink?.targetId || null,
-						isCombined: paper.type === "PAST_PAPER_WITH_MARK_SCHEME",
+						files: paper.files.map((f) => ({
+							id: f.id,
+							filename: f.filename,
+							role: f.role,
+						})),
 					};
 				}),
 				null,
@@ -70,52 +48,39 @@ export const paperTools = {
 	get_past_paper: {
 		description: "Get a specific past paper's content.",
 		parameters: z.object({
-			fileId: z.string().describe("The file ID of the past paper"),
+			resourceId: z.string().describe("The resource ID of the past paper"),
 		}),
-		execute: async ({ fileId }: { fileId: string }) => {
-			log.info(`get_past_paper — ${fileId}`);
-			const file = await apiClient.getFileContent(fileId);
-			return JSON.stringify(file, null, 2);
+		execute: async ({ resourceId }: { resourceId: string }) => {
+			log.info(`get_past_paper — ${resourceId}`);
+			const resource = await apiClient.getResourceContent(resourceId);
+			return JSON.stringify(resource, null, 2);
 		},
 	},
 
 	list_problem_sheets: {
-		description: "List all problem sheets and their solutions for a session.",
+		description: "List all problem sheet resources and whether they have solutions for a session.",
 		parameters: z.object({
 			sessionId: z.string().describe("The session ID"),
 		}),
 		execute: async ({ sessionId }: { sessionId: string }) => {
 			log.info(`list_problem_sheets — session=${sessionId}`);
-			const session = (await apiClient.getSession(sessionId)) as {
-				files?: FileInfo[];
-			};
-			const files = session.files || [];
-			const relationships = (await apiClient.getRelationships(sessionId)) as RelationshipInfo[];
+			const resources = (await apiClient.listResources(sessionId)) as ResourceInfo[];
 
-			// Find sheets: PROBLEM_SHEET or PROBLEM_SHEET_WITH_SOLUTIONS
-			const sheets = files.filter(
-				(f) => f.type === "PROBLEM_SHEET" || f.type === "PROBLEM_SHEET_WITH_SOLUTIONS",
-			);
+			const sheets = resources.filter((r) => r.type === "PROBLEM_SHEET");
 
-			const fileLinks = relationships.filter(
-				(r) => r.sourceType === "file" && r.targetType === "file",
-			);
-
-			log.info(`list_problem_sheets — found ${sheets.length} sheets, ${fileLinks.length} file links`);
+			log.info(`list_problem_sheets — found ${sheets.length} problem sheets`);
 			return JSON.stringify(
 				sheets.map((sheet) => {
-					const solLink = fileLinks.find(
-						(l) => l.sourceId === sheet.id && l.relationship === "solutions_of",
-					);
-					const hasSolutions =
-						sheet.type === "PROBLEM_SHEET_WITH_SOLUTIONS" || !!solLink;
-
+					const hasSolutions = sheet.files.some((f) => f.role === "SOLUTIONS");
 					return {
-						sheetId: sheet.id,
-						label: sheet.label || sheet.filename,
+						resourceId: sheet.id,
+						name: sheet.label || sheet.name,
 						hasSolutions,
-						solutionsId: solLink?.targetId || null,
-						isCombined: sheet.type === "PROBLEM_SHEET_WITH_SOLUTIONS",
+						files: sheet.files.map((f) => ({
+							id: f.id,
+							filename: f.filename,
+							role: f.role,
+						})),
 					};
 				}),
 				null,

@@ -1,5 +1,5 @@
 import { fetchSession, fetchSessionGraph } from "@/lib/api";
-import type { Concept, GraphFile, Relationship } from "@/lib/api";
+import type { Concept, GraphResource, Relationship } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { GraphCanvas, type GraphCanvasRef, type GraphEdge, type GraphNode, type LayoutTypes } from "reagraph";
 import { ArrowLeft, ArrowRight, Search, X } from "lucide-react";
@@ -10,7 +10,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 const NODE_COLORS: Record<string, string> = {
 	concept: "#7c3aed",
-	file: "#2563eb",
+	resource: "#2563eb",
 	chunk: "#059669",
 	question: "#d97706",
 };
@@ -31,26 +31,18 @@ const EDGE_COLORS: Record<string, string> = {
 	requires: "#e11d48",
 };
 
-const FILE_TYPE_LABELS: Record<string, string> = {
+const RESOURCE_TYPE_LABELS: Record<string, string> = {
 	LECTURE_NOTES: "Lecture Notes",
 	PAST_PAPER: "Past Paper",
-	MARK_SCHEME: "Mark Scheme",
 	PROBLEM_SHEET: "Problem Sheet",
-	PROBLEM_SHEET_SOLUTIONS: "Solutions",
-	PAST_PAPER_WITH_MARK_SCHEME: "Paper + MS",
-	PROBLEM_SHEET_WITH_SOLUTIONS: "Sheet + Solutions",
 	SPECIFICATION: "Specification",
 	OTHER: "Other",
 };
 
-const FILE_TYPE_COLORS: Record<string, string> = {
+const RESOURCE_TYPE_COLORS: Record<string, string> = {
 	LECTURE_NOTES: "#3b82f6",
 	PAST_PAPER: "#f59e0b",
-	MARK_SCHEME: "#22c55e",
 	PROBLEM_SHEET: "#a855f7",
-	PROBLEM_SHEET_SOLUTIONS: "#6366f1",
-	PAST_PAPER_WITH_MARK_SCHEME: "#f59e0b",
-	PROBLEM_SHEET_WITH_SOLUTIONS: "#a855f7",
 	SPECIFICATION: "#6b7280",
 	OTHER: "#6b7280",
 };
@@ -72,19 +64,19 @@ interface FullGraphData {
 	edges: GraphEdge[];
 	nodeTypes: string[];
 	relTypes: string[];
-	files: GraphFile[];
-	filesByType: Map<string, GraphFile[]>;
+	resources: GraphResource[];
+	resourcesByType: Map<string, GraphResource[]>;
 }
 
-function buildGraphData(concepts: Concept[], relationships: Relationship[], files: GraphFile[]): FullGraphData {
+function buildGraphData(concepts: Concept[], relationships: Relationship[], resources: GraphResource[]): FullGraphData {
 	const nodeMap = new Map<string, GraphNode>();
 	const nodeTypeSet = new Set<string>();
 	const relTypeSet = new Set<string>();
 
-	// Build a lookup for file metadata
-	const fileMap = new Map<string, GraphFile>();
-	for (const f of files) {
-		fileMap.set(f.id, f);
+	// Build a lookup for resource metadata
+	const resourceMap = new Map<string, GraphResource>();
+	for (const r of resources) {
+		resourceMap.set(r.id, r);
 	}
 
 	for (const c of concepts) {
@@ -103,15 +95,15 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[], file
 		const sourceKey = `${r.sourceType}:${r.sourceId}`;
 		if (!nodeMap.has(sourceKey)) {
 			nodeTypeSet.add(r.sourceType);
-			const fileMeta = r.sourceType === "file" ? fileMap.get(r.sourceId) : undefined;
+			const resMeta = r.sourceType === "resource" ? resourceMap.get(r.sourceId) : undefined;
 			nodeMap.set(sourceKey, {
 				id: sourceKey,
-				label: fileMeta?.filename || r.sourceLabel || r.sourceId.slice(0, 8),
-				fill: (fileMeta && FILE_TYPE_COLORS[fileMeta.type]) || NODE_COLORS[r.sourceType] || "#6b7280",
+				label: resMeta?.name || r.sourceLabel || r.sourceId.slice(0, 8),
+				fill: (resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.sourceType] || "#6b7280",
 				data: {
 					type: r.sourceType,
-					fileId: r.sourceType === "file" ? r.sourceId : undefined,
-					fileType: fileMeta?.type,
+					resourceId: r.sourceType === "resource" ? r.sourceId : undefined,
+					resourceType: resMeta?.type,
 				},
 			});
 		}
@@ -119,15 +111,15 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[], file
 		const targetKey = `${r.targetType}:${r.targetId}`;
 		if (!nodeMap.has(targetKey)) {
 			nodeTypeSet.add(r.targetType);
-			const fileMeta = r.targetType === "file" ? fileMap.get(r.targetId) : undefined;
+			const resMeta = r.targetType === "resource" ? resourceMap.get(r.targetId) : undefined;
 			nodeMap.set(targetKey, {
 				id: targetKey,
-				label: fileMeta?.filename || r.targetLabel || r.targetId.slice(0, 8),
-				fill: (fileMeta && FILE_TYPE_COLORS[fileMeta.type]) || NODE_COLORS[r.targetType] || "#6b7280",
+				label: resMeta?.name || r.targetLabel || r.targetId.slice(0, 8),
+				fill: (resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.targetType] || "#6b7280",
 				data: {
 					type: r.targetType,
-					fileId: r.targetType === "file" ? r.targetId : undefined,
-					fileType: fileMeta?.type,
+					resourceId: r.targetType === "resource" ? r.targetId : undefined,
+					resourceType: resMeta?.type,
 				},
 			});
 		}
@@ -143,12 +135,12 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[], file
 		data: { relationship: r.relationship, confidence: r.confidence },
 	}));
 
-	// Group files by type for the sidebar
-	const filesByType = new Map<string, GraphFile[]>();
-	for (const f of files) {
-		const list = filesByType.get(f.type) || [];
-		list.push(f);
-		filesByType.set(f.type, list);
+	// Group resources by type for the sidebar
+	const resourcesByType = new Map<string, GraphResource[]>();
+	for (const r of resources) {
+		const list = resourcesByType.get(r.type) || [];
+		list.push(r);
+		resourcesByType.set(r.type, list);
 	}
 
 	return {
@@ -156,8 +148,8 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[], file
 		edges,
 		nodeTypes: Array.from(nodeTypeSet).sort(),
 		relTypes: Array.from(relTypeSet).sort(),
-		files,
-		filesByType,
+		resources,
+		resourcesByType,
 	};
 }
 
@@ -351,7 +343,7 @@ export function KnowledgeGraph() {
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [disabledNodeTypes, setDisabledNodeTypes] = useState<Set<string>>(new Set());
 	const [disabledRelTypes, setDisabledRelTypes] = useState<Set<string>>(new Set());
-	const [disabledFileIds, setDisabledFileIds] = useState<Set<string>>(new Set());
+	const [disabledResourceIds, setDisabledResourceIds] = useState<Set<string>>(new Set());
 	const [confidenceThreshold, setConfidenceThreshold] = useState(0);
 	const [layoutType, setLayoutType] = useState<LayoutTypes>("forceDirected2d");
 	const [pathFrom, setPathFrom] = useState<string | null>(null);
@@ -362,7 +354,7 @@ export function KnowledgeGraph() {
 
 	// Full graph (unfiltered)
 	const fullGraph = useMemo(
-		() => (graph ? buildGraphData(graph.concepts, graph.relationships, graph.files) : null),
+		() => (graph ? buildGraphData(graph.concepts, graph.relationships, graph.resources) : null),
 		[graph],
 	);
 
@@ -377,7 +369,7 @@ export function KnowledgeGraph() {
 		for (const node of fullGraph.nodes) {
 			if (disabledNodeTypes.has(node.data?.type)) continue;
 			// Hide individual file nodes that are disabled
-			if (node.data?.type === "file" && node.data?.fileId && disabledFileIds.has(node.data.fileId)) continue;
+			if (node.data?.type === "resource" && node.data?.resourceId && disabledResourceIds.has(node.data.resourceId)) continue;
 			filteredNodeIds.add(node.id);
 		}
 
@@ -390,7 +382,7 @@ export function KnowledgeGraph() {
 
 		const visibleNodes = fullGraph.nodes.filter((n) => filteredNodeIds.has(n.id));
 		return { nodes: visibleNodes, edges: visibleEdges };
-	}, [fullGraph, disabledNodeTypes, disabledRelTypes, disabledFileIds, confidenceThreshold]);
+	}, [fullGraph, disabledNodeTypes, disabledRelTypes, disabledResourceIds, confidenceThreshold]);
 
 	// Search results
 	const searchResults = useMemo(() => {
@@ -484,24 +476,24 @@ export function KnowledgeGraph() {
 		});
 	}, []);
 
-	const toggleFile = useCallback((fileId: string) => {
-		setDisabledFileIds((prev) => {
+	const toggleResource = useCallback((resourceId: string) => {
+		setDisabledResourceIds((prev) => {
 			const next = new Set(prev);
-			if (next.has(fileId)) next.delete(fileId);
-			else next.add(fileId);
+			if (next.has(resourceId)) next.delete(resourceId);
+			else next.add(resourceId);
 			return next;
 		});
 	}, []);
 
-	const toggleFileType = useCallback(
-		(fileType: string) => {
+	const toggleResourceType = useCallback(
+		(resourceType: string) => {
 			if (!fullGraph) return;
-			const filesOfType = fullGraph.filesByType.get(fileType) || [];
-			const fileIds = filesOfType.map((f) => f.id);
-			setDisabledFileIds((prev) => {
-				const allDisabled = fileIds.every((id) => prev.has(id));
+			const resourcesOfType = fullGraph.resourcesByType.get(resourceType) || [];
+			const ids = resourcesOfType.map((r) => r.id);
+			setDisabledResourceIds((prev) => {
+				const allDisabled = ids.every((id) => prev.has(id));
 				const next = new Set(prev);
-				for (const id of fileIds) {
+				for (const id of ids) {
 					if (allDisabled) next.delete(id);
 					else next.add(id);
 				}
@@ -536,7 +528,7 @@ export function KnowledgeGraph() {
 				</div>
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
 					<p className="text-lg font-medium">No graph data yet</p>
-					<p className="text-sm">Index some files first to see the knowledge graph.</p>
+					<p className="text-sm">Index some resources first to see the knowledge graph.</p>
 				</div>
 			</div>
 		);
@@ -653,19 +645,19 @@ export function KnowledgeGraph() {
 						</div>
 					</div>
 
-					{/* Resource filter (individual files grouped by type) */}
-					{fullGraph.filesByType.size > 0 && (
+					{/* Resource filter (grouped by type) */}
+					{fullGraph.resourcesByType.size > 0 && (
 						<div className="border-b border-border p-3">
 							<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
 								Resources
 							</h3>
 							<div className="space-y-2">
-								{Array.from(fullGraph.filesByType.entries()).map(([fileType, typeFiles]) => {
-									const allDisabled = typeFiles.every((f) => disabledFileIds.has(f.id));
+								{Array.from(fullGraph.resourcesByType.entries()).map(([resType, typeResources]) => {
+									const allDisabled = typeResources.every((r) => disabledResourceIds.has(r.id));
 									const someDisabled =
-										!allDisabled && typeFiles.some((f) => disabledFileIds.has(f.id));
+										!allDisabled && typeResources.some((r) => disabledResourceIds.has(r.id));
 									return (
-										<div key={fileType}>
+										<div key={resType}>
 											<label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
 												<input
 													type="checkbox"
@@ -673,43 +665,43 @@ export function KnowledgeGraph() {
 													ref={(el) => {
 														if (el) el.indeterminate = someDisabled;
 													}}
-													onChange={() => toggleFileType(fileType)}
+													onChange={() => toggleResourceType(resType)}
 													className="rounded"
 												/>
 												<span
 													className="h-2 w-2 rounded-full"
 													style={{
 														backgroundColor:
-															FILE_TYPE_COLORS[fileType] || "#6b7280",
+															RESOURCE_TYPE_COLORS[resType] || "#6b7280",
 													}}
 												/>
 												<span>
-													{FILE_TYPE_LABELS[fileType] || fileType}
+													{RESOURCE_TYPE_LABELS[resType] || resType}
 												</span>
 												<span className="ml-auto text-muted-foreground">
-													{typeFiles.length}
+													{typeResources.length}
 												</span>
 											</label>
 											<div className="ml-5 mt-1 space-y-0.5">
-												{typeFiles.map((f) => (
+												{typeResources.map((r) => (
 													<label
-														key={f.id}
+														key={r.id}
 														className="flex cursor-pointer items-center gap-2 text-xs"
 													>
 														<input
 															type="checkbox"
-															checked={!disabledFileIds.has(f.id)}
-															onChange={() => toggleFile(f.id)}
+															checked={!disabledResourceIds.has(r.id)}
+															onChange={() => toggleResource(r.id)}
 															className="rounded"
 														/>
 														<span className="truncate text-muted-foreground">
-															{f.label || f.filename}
+															{r.label || r.name}
 														</span>
 													</label>
 												))}
 											</div>
 										</div>
-									);
+);
 								})}
 							</div>
 						</div>
