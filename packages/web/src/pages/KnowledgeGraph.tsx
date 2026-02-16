@@ -1,5 +1,5 @@
 import { fetchSession, fetchSessionGraph } from "@/lib/api";
-import type { Concept, Relationship } from "@/lib/api";
+import type { Concept, GraphFile, Relationship } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { GraphCanvas, type GraphCanvasRef, type GraphEdge, type GraphNode, type LayoutTypes } from "reagraph";
 import { ArrowLeft, ArrowRight, Search, X } from "lucide-react";
@@ -31,6 +31,30 @@ const EDGE_COLORS: Record<string, string> = {
 	requires: "#e11d48",
 };
 
+const FILE_TYPE_LABELS: Record<string, string> = {
+	LECTURE_NOTES: "Lecture Notes",
+	PAST_PAPER: "Past Paper",
+	MARK_SCHEME: "Mark Scheme",
+	PROBLEM_SHEET: "Problem Sheet",
+	PROBLEM_SHEET_SOLUTIONS: "Solutions",
+	PAST_PAPER_WITH_MARK_SCHEME: "Paper + MS",
+	PROBLEM_SHEET_WITH_SOLUTIONS: "Sheet + Solutions",
+	SPECIFICATION: "Specification",
+	OTHER: "Other",
+};
+
+const FILE_TYPE_COLORS: Record<string, string> = {
+	LECTURE_NOTES: "#3b82f6",
+	PAST_PAPER: "#f59e0b",
+	MARK_SCHEME: "#22c55e",
+	PROBLEM_SHEET: "#a855f7",
+	PROBLEM_SHEET_SOLUTIONS: "#6366f1",
+	PAST_PAPER_WITH_MARK_SCHEME: "#f59e0b",
+	PROBLEM_SHEET_WITH_SOLUTIONS: "#a855f7",
+	SPECIFICATION: "#6b7280",
+	OTHER: "#6b7280",
+};
+
 const LAYOUT_OPTIONS: { value: LayoutTypes; label: string }[] = [
 	{ value: "forceDirected2d", label: "Force Directed" },
 	{ value: "circular2d", label: "Circular" },
@@ -48,12 +72,20 @@ interface FullGraphData {
 	edges: GraphEdge[];
 	nodeTypes: string[];
 	relTypes: string[];
+	files: GraphFile[];
+	filesByType: Map<string, GraphFile[]>;
 }
 
-function buildGraphData(concepts: Concept[], relationships: Relationship[]): FullGraphData {
+function buildGraphData(concepts: Concept[], relationships: Relationship[], files: GraphFile[]): FullGraphData {
 	const nodeMap = new Map<string, GraphNode>();
 	const nodeTypeSet = new Set<string>();
 	const relTypeSet = new Set<string>();
+
+	// Build a lookup for file metadata
+	const fileMap = new Map<string, GraphFile>();
+	for (const f of files) {
+		fileMap.set(f.id, f);
+	}
 
 	for (const c of concepts) {
 		nodeTypeSet.add("concept");
@@ -71,22 +103,32 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[]): Ful
 		const sourceKey = `${r.sourceType}:${r.sourceId}`;
 		if (!nodeMap.has(sourceKey)) {
 			nodeTypeSet.add(r.sourceType);
+			const fileMeta = r.sourceType === "file" ? fileMap.get(r.sourceId) : undefined;
 			nodeMap.set(sourceKey, {
 				id: sourceKey,
-				label: r.sourceLabel || r.sourceId.slice(0, 8),
-				fill: NODE_COLORS[r.sourceType] || "#6b7280",
-				data: { type: r.sourceType },
+				label: fileMeta?.filename || r.sourceLabel || r.sourceId.slice(0, 8),
+				fill: (fileMeta && FILE_TYPE_COLORS[fileMeta.type]) || NODE_COLORS[r.sourceType] || "#6b7280",
+				data: {
+					type: r.sourceType,
+					fileId: r.sourceType === "file" ? r.sourceId : undefined,
+					fileType: fileMeta?.type,
+				},
 			});
 		}
 
 		const targetKey = `${r.targetType}:${r.targetId}`;
 		if (!nodeMap.has(targetKey)) {
 			nodeTypeSet.add(r.targetType);
+			const fileMeta = r.targetType === "file" ? fileMap.get(r.targetId) : undefined;
 			nodeMap.set(targetKey, {
 				id: targetKey,
-				label: r.targetLabel || r.targetId.slice(0, 8),
-				fill: NODE_COLORS[r.targetType] || "#6b7280",
-				data: { type: r.targetType },
+				label: fileMeta?.filename || r.targetLabel || r.targetId.slice(0, 8),
+				fill: (fileMeta && FILE_TYPE_COLORS[fileMeta.type]) || NODE_COLORS[r.targetType] || "#6b7280",
+				data: {
+					type: r.targetType,
+					fileId: r.targetType === "file" ? r.targetId : undefined,
+					fileType: fileMeta?.type,
+				},
 			});
 		}
 	}
@@ -101,11 +143,21 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[]): Ful
 		data: { relationship: r.relationship, confidence: r.confidence },
 	}));
 
+	// Group files by type for the sidebar
+	const filesByType = new Map<string, GraphFile[]>();
+	for (const f of files) {
+		const list = filesByType.get(f.type) || [];
+		list.push(f);
+		filesByType.set(f.type, list);
+	}
+
 	return {
 		nodes: Array.from(nodeMap.values()),
 		edges,
 		nodeTypes: Array.from(nodeTypeSet).sort(),
 		relTypes: Array.from(relTypeSet).sort(),
+		files,
+		filesByType,
 	};
 }
 
@@ -299,6 +351,7 @@ export function KnowledgeGraph() {
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [disabledNodeTypes, setDisabledNodeTypes] = useState<Set<string>>(new Set());
 	const [disabledRelTypes, setDisabledRelTypes] = useState<Set<string>>(new Set());
+	const [disabledFileIds, setDisabledFileIds] = useState<Set<string>>(new Set());
 	const [confidenceThreshold, setConfidenceThreshold] = useState(0);
 	const [layoutType, setLayoutType] = useState<LayoutTypes>("forceDirected2d");
 	const [pathFrom, setPathFrom] = useState<string | null>(null);
@@ -308,7 +361,10 @@ export function KnowledgeGraph() {
 	const [highlightOrphans, setHighlightOrphans] = useState(false);
 
 	// Full graph (unfiltered)
-	const fullGraph = useMemo(() => (graph ? buildGraphData(graph.concepts, graph.relationships) : null), [graph]);
+	const fullGraph = useMemo(
+		() => (graph ? buildGraphData(graph.concepts, graph.relationships, graph.files) : null),
+		[graph],
+	);
 
 	// Stats (from full graph)
 	const stats = useMemo(() => (fullGraph ? computeStats(fullGraph.nodes, fullGraph.edges) : null), [fullGraph]);
@@ -319,9 +375,10 @@ export function KnowledgeGraph() {
 
 		const filteredNodeIds = new Set<string>();
 		for (const node of fullGraph.nodes) {
-			if (!disabledNodeTypes.has(node.data?.type)) {
-				filteredNodeIds.add(node.id);
-			}
+			if (disabledNodeTypes.has(node.data?.type)) continue;
+			// Hide individual file nodes that are disabled
+			if (node.data?.type === "file" && node.data?.fileId && disabledFileIds.has(node.data.fileId)) continue;
+			filteredNodeIds.add(node.id);
 		}
 
 		const visibleEdges = fullGraph.edges.filter((e) => {
@@ -333,7 +390,7 @@ export function KnowledgeGraph() {
 
 		const visibleNodes = fullGraph.nodes.filter((n) => filteredNodeIds.has(n.id));
 		return { nodes: visibleNodes, edges: visibleEdges };
-	}, [fullGraph, disabledNodeTypes, disabledRelTypes, confidenceThreshold]);
+	}, [fullGraph, disabledNodeTypes, disabledRelTypes, disabledFileIds, confidenceThreshold]);
 
 	// Search results
 	const searchResults = useMemo(() => {
@@ -426,6 +483,33 @@ export function KnowledgeGraph() {
 			return next;
 		});
 	}, []);
+
+	const toggleFile = useCallback((fileId: string) => {
+		setDisabledFileIds((prev) => {
+			const next = new Set(prev);
+			if (next.has(fileId)) next.delete(fileId);
+			else next.add(fileId);
+			return next;
+		});
+	}, []);
+
+	const toggleFileType = useCallback(
+		(fileType: string) => {
+			if (!fullGraph) return;
+			const filesOfType = fullGraph.filesByType.get(fileType) || [];
+			const fileIds = filesOfType.map((f) => f.id);
+			setDisabledFileIds((prev) => {
+				const allDisabled = fileIds.every((id) => prev.has(id));
+				const next = new Set(prev);
+				for (const id of fileIds) {
+					if (allDisabled) next.delete(id);
+					else next.add(id);
+				}
+				return next;
+			});
+		},
+		[fullGraph],
+	);
 
 	// Loading / error / empty
 	if (isLoading) {
@@ -568,6 +652,68 @@ export function KnowledgeGraph() {
 							))}
 						</div>
 					</div>
+
+					{/* Resource filter (individual files grouped by type) */}
+					{fullGraph.filesByType.size > 0 && (
+						<div className="border-b border-border p-3">
+							<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+								Resources
+							</h3>
+							<div className="space-y-2">
+								{Array.from(fullGraph.filesByType.entries()).map(([fileType, typeFiles]) => {
+									const allDisabled = typeFiles.every((f) => disabledFileIds.has(f.id));
+									const someDisabled =
+										!allDisabled && typeFiles.some((f) => disabledFileIds.has(f.id));
+									return (
+										<div key={fileType}>
+											<label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+												<input
+													type="checkbox"
+													checked={!allDisabled}
+													ref={(el) => {
+														if (el) el.indeterminate = someDisabled;
+													}}
+													onChange={() => toggleFileType(fileType)}
+													className="rounded"
+												/>
+												<span
+													className="h-2 w-2 rounded-full"
+													style={{
+														backgroundColor:
+															FILE_TYPE_COLORS[fileType] || "#6b7280",
+													}}
+												/>
+												<span>
+													{FILE_TYPE_LABELS[fileType] || fileType}
+												</span>
+												<span className="ml-auto text-muted-foreground">
+													{typeFiles.length}
+												</span>
+											</label>
+											<div className="ml-5 mt-1 space-y-0.5">
+												{typeFiles.map((f) => (
+													<label
+														key={f.id}
+														className="flex cursor-pointer items-center gap-2 text-xs"
+													>
+														<input
+															type="checkbox"
+															checked={!disabledFileIds.has(f.id)}
+															onChange={() => toggleFile(f.id)}
+															className="rounded"
+														/>
+														<span className="truncate text-muted-foreground">
+															{f.label || f.filename}
+														</span>
+													</label>
+												))}
+											</div>
+										</div>
+									);
+								})}
+							</div>
+						</div>
+					)}
 
 					{/* Relationship type filters */}
 					<div className="border-b border-border p-3">

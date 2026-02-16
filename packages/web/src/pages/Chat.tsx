@@ -7,6 +7,7 @@ import {
 	ComposerPrimitive,
 	MessagePrimitive,
 } from "@assistant-ui/react";
+import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Send } from "lucide-react";
 import { useMemo } from "react";
@@ -22,11 +23,15 @@ function UserMessage() {
 	);
 }
 
+function MarkdownText() {
+	return <MarkdownTextPrimitive />;
+}
+
 function AssistantMessage() {
 	return (
 		<MessagePrimitive.Root className="flex px-4 py-2">
-			<div className="max-w-[80%] rounded-2xl bg-muted px-4 py-2">
-				<MessagePrimitive.Content />
+			<div className="prose prose-sm max-w-[80%] rounded-2xl bg-muted px-4 py-2">
+				<MessagePrimitive.Content components={{ Text: MarkdownText }} />
 			</div>
 		</MessagePrimitive.Root>
 	);

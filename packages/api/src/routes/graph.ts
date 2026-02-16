@@ -169,15 +169,19 @@ graphRoutes.get("/sessions/:sessionId/full", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 
-	const [concepts, relationships] = await Promise.all([
+	const [concepts, relationships, files] = await Promise.all([
 		db.concept.findMany({ where: { sessionId }, orderBy: { name: "asc" } }),
 		db.relationship.findMany({ where: { sessionId } }),
+		db.file.findMany({
+			where: { sessionId },
+			select: { id: true, filename: true, type: true, label: true },
+		}),
 	]);
 
 	log.info(
-		`GET /graph/sessions/${sessionId}/full — ${concepts.length} concepts, ${relationships.length} relationships`,
+		`GET /graph/sessions/${sessionId}/full — ${concepts.length} concepts, ${relationships.length} relationships, ${files.length} files`,
 	);
-	return c.json({ concepts, relationships });
+	return c.json({ concepts, relationships, files });
 });
 
 // Get indexing progress

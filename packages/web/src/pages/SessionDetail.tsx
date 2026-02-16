@@ -1,5 +1,6 @@
 import { FileList } from "@/components/FileList";
 import { FileUpload } from "@/components/FileUpload";
+import { FileViewer } from "@/components/FileViewer";
 import {
 	cancelIndexing,
 	fetchIndexStatus,
@@ -175,6 +176,8 @@ export function SessionDetail() {
 		}
 	}, [sessionId]);
 
+	const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+
 	const hasUnindexedFiles = files?.some((f) => f.isIndexed && !f.isGraphIndexed) ?? false;
 	const allGraphIndexed =
 		files && files.length > 0 && files.every((f) => !f.isIndexed || f.isGraphIndexed);
@@ -191,119 +194,133 @@ export function SessionDetail() {
 	if (!session) return <p className="text-muted-foreground">Session not found.</p>;
 
 	return (
-		<div>
-			<div className="mb-6">
-				<h1 className="text-2xl font-bold">{session.name}</h1>
-				{session.module && <p className="mt-1 text-muted-foreground">{session.module}</p>}
-				{session.examDate && (
-					<p className="mt-1 text-sm text-muted-foreground">
-						Exam: {new Date(session.examDate).toLocaleDateString()}
-					</p>
-				)}
-			</div>
-
-			<div className="mb-6 space-y-4">
-				<div>
-					<label htmlFor="scope" className="mb-1 block text-sm font-semibold uppercase text-muted-foreground">
-						Exam Scope
-					</label>
-					<textarea
-						id="scope"
-						value={scope}
-						onChange={(e) => setScope(e.target.value)}
-						placeholder="Describe what's covered in the exam..."
-						rows={3}
-						className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-					/>
-				</div>
-				<div>
-					<label htmlFor="notes" className="mb-1 block text-sm font-semibold uppercase text-muted-foreground">
-						Notes
-					</label>
-					<textarea
-						id="notes"
-						value={notes}
-						onChange={(e) => setNotes(e.target.value)}
-						placeholder="Any additional notes..."
-						rows={3}
-						className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+		<div className="flex gap-6">
+			{/* File viewer — first column */}
+			<div className="hidden w-80 shrink-0 lg:block">
+				<div className="sticky top-0 h-[calc(100vh-7rem)] overflow-hidden rounded-lg border border-border">
+					<FileViewer
+						files={files || []}
+						selectedFileId={selectedFileId}
+						onSelectFile={setSelectedFileId}
 					/>
 				</div>
 			</div>
 
-			<div className="mb-6 flex gap-3">
-				<Link
-					to={`/session/${sessionId}/graph`}
-					className="flex flex-1 items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-accent"
-				>
-					<Network className="h-4 w-4" />
-					Knowledge Graph
-				</Link>
-				<Link
-					to={`/session/${sessionId}/chat`}
-					className="flex flex-1 items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-accent"
-				>
-					<MessageSquare className="h-4 w-4" />
-					Chat
-				</Link>
-			</div>
+			{/* Session detail — main column */}
+			<div className="min-w-0 flex-1">
+				<div className="mb-6">
+					<h1 className="text-2xl font-bold">{session.name}</h1>
+					{session.module && <p className="mt-1 text-muted-foreground">{session.module}</p>}
+					{session.examDate && (
+						<p className="mt-1 text-sm text-muted-foreground">
+							Exam: {new Date(session.examDate).toLocaleDateString()}
+						</p>
+					)}
+				</div>
 
-			<div className="mb-6">
-				<div className="mb-3 flex items-center justify-between">
-					<h2 className="text-lg font-semibold">Files</h2>
-					<div className="flex items-center gap-2">
-						{isIndexingAll && (
-							<button
-								onClick={handleCancel}
-								className="flex items-center gap-1 rounded-md bg-destructive/10 px-2.5 py-1.5 text-sm font-medium text-destructive hover:bg-destructive/20"
-								title="Cancel indexing"
-							>
-								<X className="h-4 w-4" />
-								Cancel
-							</button>
-						)}
-						{!isIndexingAll && hasUnindexedFiles && (
-							<button
-								onClick={handleIndexAll}
-								className="flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/20"
-							>
-								<BrainCircuit className="h-4 w-4" />
-								Index All
-							</button>
-						)}
-						{!isIndexingAll && !hasUnindexedFiles && allGraphIndexed && hasIndexedFiles && (
-							<button
-								onClick={handleReindexAll}
-								className="flex items-center gap-1.5 rounded-md bg-violet-500/10 px-3 py-1.5 text-sm font-medium text-violet-600 hover:bg-violet-500/20"
-							>
-								<RefreshCw className="h-4 w-4" />
-								Reindex All
-							</button>
-						)}
+				<div className="mb-6 space-y-4">
+					<div>
+						<label htmlFor="scope" className="mb-1 block text-sm font-semibold uppercase text-muted-foreground">
+							Exam Scope
+						</label>
+						<textarea
+							id="scope"
+							value={scope}
+							onChange={(e) => setScope(e.target.value)}
+							placeholder="Describe what's covered in the exam..."
+							rows={3}
+							className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+						/>
+					</div>
+					<div>
+						<label htmlFor="notes" className="mb-1 block text-sm font-semibold uppercase text-muted-foreground">
+							Notes
+						</label>
+						<textarea
+							id="notes"
+							value={notes}
+							onChange={(e) => setNotes(e.target.value)}
+							placeholder="Any additional notes..."
+							rows={3}
+							className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+						/>
 					</div>
 				</div>
 
-				{isIndexingAll && (
-					<div className="mb-3 space-y-1.5">
-						<div className="h-2 w-full overflow-hidden rounded-full bg-primary/10">
-							<div
-								className="h-full rounded-full bg-primary transition-all duration-500"
-								style={{ width: `${progressPercent}%` }}
-							/>
-						</div>
-						<div className="flex items-center justify-between text-xs text-muted-foreground">
-							<span>
-								{batch
-									? `Indexing ${batch.batchCompleted}/${batch.batchTotal} files`
-									: "Starting..."}
-							</span>
-							<span>{etaText ?? "Estimating..."}</span>
+				<div className="mb-6 flex gap-3">
+					<Link
+						to={`/session/${sessionId}/graph`}
+						className="flex flex-1 items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-accent"
+					>
+						<Network className="h-4 w-4" />
+						Knowledge Graph
+					</Link>
+					<Link
+						to={`/session/${sessionId}/chat`}
+						className="flex flex-1 items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-accent"
+					>
+						<MessageSquare className="h-4 w-4" />
+						Chat
+					</Link>
+				</div>
+
+				<div className="mb-6">
+					<div className="mb-3 flex items-center justify-between">
+						<h2 className="text-lg font-semibold">Files</h2>
+						<div className="flex items-center gap-2">
+							{isIndexingAll && (
+								<button
+									onClick={handleCancel}
+									className="flex items-center gap-1 rounded-md bg-destructive/10 px-2.5 py-1.5 text-sm font-medium text-destructive hover:bg-destructive/20"
+									title="Cancel indexing"
+								>
+									<X className="h-4 w-4" />
+									Cancel
+								</button>
+							)}
+							{!isIndexingAll && hasUnindexedFiles && (
+								<button
+									onClick={handleIndexAll}
+									className="flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/20"
+								>
+									<BrainCircuit className="h-4 w-4" />
+									Index All
+								</button>
+							)}
+							{!isIndexingAll && !hasUnindexedFiles && allGraphIndexed && hasIndexedFiles && (
+								<button
+									onClick={handleReindexAll}
+									className="flex items-center gap-1.5 rounded-md bg-violet-500/10 px-3 py-1.5 text-sm font-medium text-violet-600 hover:bg-violet-500/20"
+								>
+									<RefreshCw className="h-4 w-4" />
+									Reindex All
+								</button>
+							)}
 						</div>
 					</div>
-				)}
 
-				<FileUpload sessionId={sessionId} />
-				<FileList files={files || []} sessionId={sessionId} />
+					{isIndexingAll && (
+						<div className="mb-3 space-y-1.5">
+							<div className="h-2 w-full overflow-hidden rounded-full bg-primary/10">
+								<div
+									className="h-full rounded-full bg-primary transition-all duration-500"
+									style={{ width: `${progressPercent}%` }}
+								/>
+							</div>
+							<div className="flex items-center justify-between text-xs text-muted-foreground">
+								<span>
+									{batch
+										? `Indexing ${batch.batchCompleted}/${batch.batchTotal} files`
+										: "Starting..."}
+								</span>
+								<span>{etaText ?? "Estimating..."}</span>
+							</div>
+						</div>
+					)}
+
+					<FileUpload sessionId={sessionId} />
+					<FileList files={files || []} sessionId={sessionId} />
+				</div>
 			</div>
 		</div>
 	);

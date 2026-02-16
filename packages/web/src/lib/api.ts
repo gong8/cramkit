@@ -74,9 +74,17 @@ export interface Relationship {
 	confidence: number;
 }
 
+export interface GraphFile {
+	id: string;
+	filename: string;
+	type: string;
+	label: string | null;
+}
+
 export interface SessionGraph {
 	concepts: Concept[];
 	relationships: Relationship[];
+	files: GraphFile[];
 }
 
 export interface BatchStatus {
@@ -208,6 +216,28 @@ export function fetchConcepts(sessionId: string): Promise<Concept[]> {
 export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
 	log.info(`fetchSessionGraph — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/full`);
+}
+
+// File detail (with chunks/content)
+export interface FileDetail {
+	id: string;
+	filename: string;
+	type: string;
+	label: string | null;
+	processedContent: string | null;
+	chunks: Array<{
+		id: string;
+		title: string | null;
+		content: string;
+		index: number;
+		nodeType: string;
+		depth: number;
+	}>;
+}
+
+export function fetchFileDetail(fileId: string): Promise<FileDetail> {
+	log.info(`fetchFileDetail — ${fileId}`);
+	return request(`/files/${fileId}`);
 }
 
 // File linking
