@@ -1,0 +1,92 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  name      String
+  module    String?
+  examDate  DateTime?
+  scope     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  files         File[]
+  relationships Relationship[]
+}
+
+model File {
+  id            String   @id @default(cuid())
+  sessionId     String
+  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  filename      String
+  type          FileType
+  label         String?
+
+  rawPath       String
+  processedPath String?
+  indexPath      String?
+
+  pageCount Int?
+  isIndexed Boolean @default(false)
+  chunks    Chunk[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum FileType {
+  LECTURE_NOTES
+  PAST_PAPER
+  MARK_SCHEME
+  PROBLEM_SHEET
+  PROBLEM_SHEET_SOLUTIONS
+  SPECIFICATION
+  OTHER
+}
+
+model Chunk {
+  id     String @id @default(cuid())
+  fileId String
+  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  index     Int
+  title     String?
+  content   String
+  startPage Int?
+  endPage   Int?
+  keywords  String?
+
+  createdAt DateTime @default(now())
+}
+
+model Relationship {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  sourceType  String
+  sourceId    String
+  sourceLabel String?
+
+  targetType  String
+  targetId    String
+  targetLabel String?
+
+  relationship String
+  confidence   Float  @default(1.0)
+  createdBy    String @default("system")
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([sourceType, sourceId])
+  @@index([targetType, targetId])
+}
