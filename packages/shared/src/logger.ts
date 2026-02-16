@@ -18,7 +18,7 @@ export function createLogger(prefix: string): Logger {
 		`[${timestamp()}] [${level}] [${prefix}] ${message}`;
 
 	return {
-		debug: (message, ...args) => console.debug(fmt("DEBUG", message), ...args),
+		debug: (message, ...args) => console.error(fmt("DEBUG", message), ...args),
 		info: (message, ...args) => console.error(fmt("INFO", message), ...args),
 		warn: (message, ...args) => console.warn(fmt("WARN", message), ...args),
 		error: (message, ...args) => console.error(fmt("ERROR", message), ...args),
