@@ -118,7 +118,10 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 		select: { name: true, description: true },
 	});
 
-	const content = file.chunks.map((c) => c.content).join("\n\n");
+	const content = file.chunks
+		.map((c) => c.content)
+		.join("\n\n")
+		.replace(/\0/g, "");
 	const messages = buildPrompt(
 		{ filename: file.filename, type: file.type, label: file.label },
 		content,

@@ -125,6 +125,21 @@ export function SessionDetail() {
 		}, 2000);
 	}, [sessionId, refetchFiles]);
 
+	// Restore indexing state on mount (e.g. after page navigation)
+	useEffect(() => {
+		let cancelled = false;
+		fetchIndexStatus(sessionId).then((status) => {
+			if (cancelled) return;
+			const batch = status.batch;
+			if (batch && !batch.cancelled && batch.batchCompleted < batch.batchTotal) {
+				setIndexStatus(status);
+				setIsIndexingAll(true);
+				startPolling();
+			}
+		}).catch(() => {});
+		return () => { cancelled = true; };
+	}, [sessionId, startPolling]);
+
 	const handleIndexAll = useCallback(async () => {
 		log.info(`handleIndexAll — session ${sessionId}`);
 		setIsIndexingAll(true);
