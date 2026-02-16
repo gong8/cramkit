@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "./middleware/cors.js";
 
 const log = createLogger("api");
+import { chatRoutes } from "./routes/chat.js";
 import { chunksRoutes } from "./routes/chunks.js";
 import { filesRoutes } from "./routes/files.js";
 import { graphRoutes } from "./routes/graph.js";
@@ -20,6 +21,7 @@ app.route("/chunks", chunksRoutes);
 app.route("/relationships", relationshipsRoutes);
 app.route("/search", searchRoutes);
 app.route("/graph", graphRoutes);
+app.route("/chat", chatRoutes);
 
 app.get("/", (c) => c.json({ name: "cramkit-api", version: "0.0.1" }));
 

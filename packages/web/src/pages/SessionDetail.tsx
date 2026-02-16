@@ -12,7 +12,7 @@ import {
 } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQuery } from "@tanstack/react-query";
-import { BrainCircuit, Network, RefreshCw, X } from "lucide-react";
+import { BrainCircuit, MessageSquare, Network, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -231,13 +231,20 @@ export function SessionDetail() {
 				</div>
 			</div>
 
-			<div className="mb-6">
+			<div className="mb-6 flex gap-3">
 				<Link
 					to={`/session/${sessionId}/graph`}
-					className="flex items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-accent"
+					className="flex flex-1 items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-accent"
 				>
 					<Network className="h-4 w-4" />
-					View Knowledge Graph
+					Knowledge Graph
+				</Link>
+				<Link
+					to={`/session/${sessionId}/chat`}
+					className="flex flex-1 items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-accent"
+				>
+					<MessageSquare className="h-4 w-4" />
+					Chat
 				</Link>
 			</div>
 

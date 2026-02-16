@@ -1,5 +1,6 @@
 import { createBrowserRouter, Outlet } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
 import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { NewSession } from "./pages/NewSession";
@@ -24,6 +25,9 @@ export const router = createBrowserRouter([
 	},
 	{
 		element: <FullscreenLayout />,
-		children: [{ path: "/session/:id/graph", element: <KnowledgeGraph /> }],
+		children: [
+			{ path: "/session/:id/graph", element: <KnowledgeGraph /> },
+			{ path: "/session/:id/chat", element: <Chat /> },
+		],
 	},
 ]);

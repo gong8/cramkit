@@ -37,6 +37,8 @@ model File {
 
   pageCount Int?
   fileSize             Int?
+  splitMode  String  @default("auto")
+
   isIndexed            Boolean @default(false)
   isGraphIndexed       Boolean @default(false)
   graphIndexDurationMs Int?
@@ -52,6 +54,8 @@ enum FileType {
   MARK_SCHEME
   PROBLEM_SHEET
   PROBLEM_SHEET_SOLUTIONS
+  PAST_PAPER_WITH_MARK_SCHEME
+  PROBLEM_SHEET_WITH_SOLUTIONS
   SPECIFICATION
   OTHER
 }
@@ -61,7 +65,16 @@ model Chunk {
   fileId String
   file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
+  parentId  String?
+  parent    Chunk?  @relation("ChunkTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Chunk[] @relation("ChunkTree")
+
   index     Int
+  depth     Int     @default(0)
+  nodeType  String  @default("section")
+  slug      String?
+  diskPath  String?
+
   title     String?
   content   String
   startPage Int?
@@ -69,6 +82,9 @@ model Chunk {
   keywords  String?
 
   createdAt DateTime @default(now())
+
+  @@index([fileId])
+  @@index([parentId])
 }
 
 model Relationship {

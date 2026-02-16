@@ -6,6 +6,8 @@ export const FileTypeEnum = z.enum([
 	"MARK_SCHEME",
 	"PROBLEM_SHEET",
 	"PROBLEM_SHEET_SOLUTIONS",
+	"PAST_PAPER_WITH_MARK_SCHEME",
+	"PROBLEM_SHEET_WITH_SOLUTIONS",
 	"SPECIFICATION",
 	"OTHER",
 ]);
@@ -26,9 +28,12 @@ export const updateSessionSchema = z.object({
 	notes: z.string().nullable().optional(),
 });
 
+export const SplitModeEnum = z.enum(["auto", "split", "single"]);
+
 export const uploadFileMetadataSchema = z.object({
 	type: FileTypeEnum,
 	label: z.string().optional(),
+	splitMode: SplitModeEnum.optional().default("auto"),
 });
 
 export const updateFileSchema = z.object({
@@ -62,4 +67,23 @@ export const createConceptSchema = z.object({
 
 export const indexFileRequestSchema = z.object({
 	fileId: z.string(),
+});
+
+export const fileLinkSchema = z.object({
+	targetFileId: z.string(),
+	relationship: z.enum(["mark_scheme_of", "solutions_of"]),
+});
+
+export const fileUnlinkSchema = z.object({
+	targetFileId: z.string(),
+});
+
+export const chatStreamRequestSchema = z.object({
+	sessionId: z.string(),
+	messages: z.array(
+		z.object({
+			role: z.enum(["user", "assistant"]),
+			content: z.string(),
+		}),
+	),
 });

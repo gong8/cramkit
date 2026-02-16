@@ -11,7 +11,10 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 vi.mock("../../packages/api/src/lib/queue.js", () => ({
 	enqueueGraphIndexing: vi.fn(),
 	enqueueSessionGraphIndexing: vi.fn(),
+	enqueueProcessing: vi.fn(),
 	getIndexingQueueSize: vi.fn().mockReturnValue(0),
+	getSessionBatchStatus: vi.fn().mockReturnValue(null),
+	cancelSessionIndexing: vi.fn().mockReturnValue(false),
 }));
 
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";

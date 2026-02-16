@@ -1,5 +1,5 @@
 import { createLogger } from "@cramkit/shared";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,5 +54,15 @@ export async function deleteSessionFile(_sessionId: string, filePath: string): P
 		log.debug(`deleteSessionFile — deleted ${filePath}`);
 	} catch {
 		log.debug(`deleteSessionFile — already gone ${filePath}`);
+	}
+}
+
+export async function deleteProcessedTree(sessionId: string, fileSlug: string): Promise<void> {
+	const dir = join(getSessionDir(sessionId), "processed", fileSlug);
+	try {
+		await rm(dir, { recursive: true, force: true });
+		log.debug(`deleteProcessedTree — deleted ${dir}`);
+	} catch {
+		log.debug(`deleteProcessedTree — already gone ${dir}`);
 	}
 }

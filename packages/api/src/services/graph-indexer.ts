@@ -13,6 +13,7 @@ interface ConceptLink {
 	conceptName: string;
 	relationship: string;
 	confidence?: number;
+	chunkTitle?: string; // optional: which chunk this link applies to
 }
 
 interface ConceptConceptLink {
@@ -43,24 +44,95 @@ function toTitleCase(str: string): string {
 		.join(" ");
 }
 
+interface ChunkInfo {
+	id: string;
+	title: string | null;
+	content: string;
+	depth: number;
+	nodeType: string;
+	parentId: string | null;
+	diskPath: string | null;
+}
+
+/**
+ * Build a structured content string from the chunk tree,
+ * providing hierarchy info and node types to the LLM.
+ */
+function buildStructuredContent(chunks: ChunkInfo[]): string {
+	// Build parent-child map
+	const childMap = new Map<string | null, ChunkInfo[]>();
+	for (const chunk of chunks) {
+		const parentId = chunk.parentId;
+		if (!childMap.has(parentId)) childMap.set(parentId, []);
+		childMap.get(parentId)!.push(chunk);
+	}
+
+	const lines: string[] = [];
+
+	function renderNode(chunk: ChunkInfo, indent: number): void {
+		const prefix = "  ".repeat(indent);
+		const nodeLabel = chunk.nodeType !== "section" ? `[${chunk.nodeType}] ` : "";
+		lines.push(`${prefix}${nodeLabel}${chunk.title || "(untitled)"} (depth=${chunk.depth})`);
+		if (chunk.content) {
+			// Include first 500 chars of content for context
+			const preview = chunk.content.slice(0, 500);
+			for (const line of preview.split("\n")) {
+				lines.push(`${prefix}  ${line}`);
+			}
+			if (chunk.content.length > 500) {
+				lines.push(`${prefix}  [...${chunk.content.length - 500} more chars]`);
+			}
+		}
+		lines.push("");
+
+		const children = childMap.get(chunk.id) || [];
+		for (const child of children) {
+			renderNode(child, indent + 1);
+		}
+	}
+
+	// Start from root nodes (parentId = null)
+	const roots = childMap.get(null) || [];
+	for (const root of roots) {
+		renderNode(root, 0);
+	}
+
+	return lines.join("\n");
+}
+
 function buildPrompt(
 	file: { filename: string; type: string; label: string | null },
-	content: string,
+	chunks: ChunkInfo[],
 	existingConcepts: Array<{ name: string; description: string | null }>,
 ): Array<{ role: "system" | "user"; content: string }> {
+	const hasTree = chunks.some((c) => c.parentId !== null);
 	const existingConceptsList =
 		existingConcepts.length > 0
 			? `\n\nExisting concepts in this session (reuse exact names where applicable):\n${existingConcepts.map((c) => `- ${c.name}${c.description ? `: ${c.description}` : ""}`).join("\n")}`
 			: "";
 
+	let contentStr: string;
+	if (hasTree) {
+		contentStr = buildStructuredContent(chunks);
+	} else {
+		contentStr = chunks
+			.map((c) => c.content)
+			.join("\n\n")
+			.replace(/\0/g, "");
+	}
+
+	const structuredNote = hasTree
+		? `\nThe content is organized as a hierarchical tree of sections. Each section has a type (e.g., definition, theorem, proof, example, question, chapter, section). Use this structure to better understand the material's organization. When creating file_concept_links, include the chunkTitle to specify which section the concept appears in.`
+		: "";
+
 	return [
 		{
 			role: "system",
 			content: `You are a knowledge graph extraction system. Analyze the provided academic material and extract structured knowledge.
-
+${structuredNote}
 Extract the following:
 1. **concepts**: Key topics, theorems, definitions, methods, and important ideas. Each concept has: name (Title Case), description (brief), aliases (comma-separated alternative names, optional).
-2. **file_concept_links**: How this file relates to each concept. relationship can be: "covers", "introduces", "applies", "references", "proves". Include confidence (0-1).
+2. **file_concept_links**: How this file relates to each concept. relationship can be: "covers", "introduces", "applies", "references", "proves". Include confidence (0-1).${hasTree ? " Optionally include chunkTitle to specify which section." : ""}
 3. **concept_concept_links**: Relationships between concepts. relationship can be: "prerequisite", "related_to", "extends", "generalizes", "special_case_of", "contradicts". Include confidence (0-1).
 4. **question_concept_links**: For past papers and problem sheets, which questions test which concepts. relationship can be: "tests", "applies", "requires". Include confidence (0-1).
 
@@ -73,7 +145,7 @@ Rules:
 Respond with ONLY valid JSON in this exact format:
 {
   "concepts": [{ "name": "...", "description": "...", "aliases": "..." }],
-  "file_concept_links": [{ "conceptName": "...", "relationship": "...", "confidence": 0.9 }],
+  "file_concept_links": [{ "conceptName": "...", "relationship": "...", "confidence": 0.9${hasTree ? ', "chunkTitle": "..."' : ""} }],
   "concept_concept_links": [{ "sourceConcept": "...", "targetConcept": "...", "relationship": "...", "confidence": 0.8 }],
   "question_concept_links": [{ "questionLabel": "...", "conceptName": "...", "relationship": "...", "confidence": 0.9 }]
 }`,
@@ -84,7 +156,7 @@ Respond with ONLY valid JSON in this exact format:
 Type: ${file.type}${file.label ? `\nLabel: ${file.label}` : ""}
 
 Content:
-${content.slice(0, 30000)}`,
+${contentStr.slice(0, 30000)}`,
 		},
 	];
 }
@@ -95,7 +167,18 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 	const file = await db.file.findUnique({
 		where: { id: fileId },
 		include: {
-			chunks: { select: { id: true, content: true, title: true } },
+			chunks: {
+				select: {
+					id: true,
+					content: true,
+					title: true,
+					depth: true,
+					nodeType: true,
+					parentId: true,
+					diskPath: true,
+				},
+				orderBy: { index: "asc" },
+			},
 		},
 	});
 
@@ -118,13 +201,9 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 		select: { name: true, description: true },
 	});
 
-	const content = file.chunks
-		.map((c) => c.content)
-		.join("\n\n")
-		.replace(/\0/g, "");
 	const messages = buildPrompt(
 		{ filename: file.filename, type: file.type, label: file.label },
-		content,
+		file.chunks,
 		existingConcepts,
 	);
 
@@ -181,18 +260,40 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 	});
 	const conceptMap = new Map(allConcepts.map((c) => [c.name, c.id]));
 
-	// Create file-concept relationships
+	// Build chunk lookup by title for targeted relationships
+	const chunkByTitle = new Map<string, string>();
+	for (const chunk of file.chunks) {
+		if (chunk.title) {
+			chunkByTitle.set(chunk.title.toLowerCase(), chunk.id);
+		}
+	}
+
+	// Create file-concept relationships (point to specific chunks when possible)
 	for (const link of result.file_concept_links) {
 		const conceptName = toTitleCase(link.conceptName);
 		const conceptId = conceptMap.get(conceptName);
 		if (!conceptId) continue;
 
+		// Try to find the specific chunk this concept is in
+		let sourceType = "file";
+		let sourceId = fileId;
+		let sourceLabel = file.filename;
+
+		if (link.chunkTitle) {
+			const chunkId = chunkByTitle.get(link.chunkTitle.toLowerCase());
+			if (chunkId) {
+				sourceType = "chunk";
+				sourceId = chunkId;
+				sourceLabel = link.chunkTitle;
+			}
+		}
+
 		await db.relationship.create({
 			data: {
 				sessionId: file.sessionId,
-				sourceType: "file",
-				sourceId: fileId,
-				sourceLabel: file.filename,
+				sourceType,
+				sourceId,
+				sourceLabel,
 				targetType: "concept",
 				targetId: conceptId,
 				targetLabel: conceptName,

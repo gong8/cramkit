@@ -209,3 +209,49 @@ export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
 	log.info(`fetchSessionGraph — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/full`);
 }
+
+// File linking
+export interface FileLink {
+	sourceId: string;
+	targetId: string;
+	relationship: string;
+}
+
+export function linkFile(
+	sourceFileId: string,
+	targetFileId: string,
+	relationship: "mark_scheme_of" | "solutions_of",
+): Promise<void> {
+	log.info(`linkFile — ${sourceFileId} -> ${targetFileId} (${relationship})`);
+	return request(`/files/${sourceFileId}/link`, {
+		method: "POST",
+		body: JSON.stringify({ targetFileId, relationship }),
+	});
+}
+
+export function unlinkFile(sourceFileId: string, targetFileId: string): Promise<void> {
+	log.info(`unlinkFile — ${sourceFileId} -x- ${targetFileId}`);
+	return request(`/files/${sourceFileId}/unlink`, {
+		method: "DELETE",
+		body: JSON.stringify({ targetFileId }),
+	});
+}
+
+export async function fetchFileLinks(sessionId: string): Promise<FileLink[]> {
+	log.info(`fetchFileLinks — session=${sessionId}`);
+	const relationships = await request<Array<{
+		sourceType: string;
+		sourceId: string;
+		targetType: string;
+		targetId: string;
+		relationship: string;
+	}>>(`/relationships/sessions/${sessionId}/relationships`);
+	// Filter to file-to-file relationships only
+	return relationships
+		.filter((r) => r.sourceType === "file" && r.targetType === "file")
+		.map((r) => ({
+			sourceId: r.sourceId,
+			targetId: r.targetId,
+			relationship: r.relationship,
+		}));
+}

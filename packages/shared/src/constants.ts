@@ -6,6 +6,8 @@ export const FILE_TYPE_LABELS: Record<FileType, string> = {
 	MARK_SCHEME: "Mark Scheme",
 	PROBLEM_SHEET: "Problem Sheet",
 	PROBLEM_SHEET_SOLUTIONS: "Problem Sheet Solutions",
+	PAST_PAPER_WITH_MARK_SCHEME: "Past Paper + Mark Scheme",
+	PROBLEM_SHEET_WITH_SOLUTIONS: "Problem Sheet + Solutions",
 	SPECIFICATION: "Specification",
 	OTHER: "Other",
 };
