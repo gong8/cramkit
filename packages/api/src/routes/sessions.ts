@@ -1,5 +1,7 @@
-import { createSessionSchema, getDb, updateSessionSchema } from "@cramkit/shared";
+import { createLogger, createSessionSchema, getDb, updateSessionSchema } from "@cramkit/shared";
 import { Hono } from "hono";
+
+const log = createLogger("api");
 
 export const sessionsRoutes = new Hono();
 
@@ -11,6 +13,7 @@ sessionsRoutes.get("/", async (c) => {
 		orderBy: { updatedAt: "desc" },
 	});
 
+	log.info(`GET /sessions — found ${sessions.length} sessions`);
 	return c.json(
 		sessions.map((s) => ({
 			id: s.id,
@@ -33,7 +36,11 @@ sessionsRoutes.get("/:id", async (c) => {
 		include: { files: true },
 	});
 
-	if (!session) return c.json({ error: "Session not found" }, 404);
+	if (!session) {
+		log.warn(`GET /sessions/${c.req.param("id")} — not found`);
+		return c.json({ error: "Session not found" }, 404);
+	}
+	log.info(`GET /sessions/${session.id} — found "${session.name}"`);
 	return c.json(session);
 });
 
@@ -44,6 +51,7 @@ sessionsRoutes.post("/", async (c) => {
 	const parsed = createSessionSchema.safeParse(body);
 
 	if (!parsed.success) {
+		log.warn("POST /sessions — validation failed", parsed.error.flatten());
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
@@ -54,6 +62,7 @@ sessionsRoutes.post("/", async (c) => {
 		},
 	});
 
+	log.info(`POST /sessions — created "${session.name}" (${session.id})`);
 	return c.json(session, 201);
 });
 
@@ -64,6 +73,7 @@ sessionsRoutes.patch("/:id", async (c) => {
 	const parsed = updateSessionSchema.safeParse(body);
 
 	if (!parsed.success) {
+		log.warn(`PATCH /sessions/${c.req.param("id")} — validation failed`, parsed.error.flatten());
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
@@ -77,12 +87,15 @@ sessionsRoutes.patch("/:id", async (c) => {
 		data,
 	});
 
+	log.info(`PATCH /sessions/${session.id} — updated`);
 	return c.json(session);
 });
 
 // Delete session
 sessionsRoutes.delete("/:id", async (c) => {
 	const db = getDb();
-	await db.session.delete({ where: { id: c.req.param("id") } });
+	const id = c.req.param("id");
+	await db.session.delete({ where: { id } });
+	log.info(`DELETE /sessions/${id} — deleted`);
 	return c.json({ ok: true });
 });

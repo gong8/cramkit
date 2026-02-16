@@ -1,5 +1,7 @@
-import { getDb, searchQuerySchema } from "@cramkit/shared";
+import { createLogger, getDb, searchQuerySchema } from "@cramkit/shared";
 import { Hono } from "hono";
+
+const log = createLogger("api");
 
 export const searchRoutes = new Hono();
 
@@ -12,6 +14,7 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 
 	const parsed = searchQuerySchema.safeParse({ q: query, limit });
 	if (!parsed.success) {
+		log.warn(`GET /sessions/${sessionId}/search — validation failed`, parsed.error.flatten());
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
@@ -33,6 +36,7 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 		take: parsed.data.limit,
 	});
 
+	log.info(`GET /sessions/${sessionId}/search — query="${parsed.data.q}", found ${chunks.length} results`);
 	return c.json(
 		chunks.map((chunk) => ({
 			chunkId: chunk.id,

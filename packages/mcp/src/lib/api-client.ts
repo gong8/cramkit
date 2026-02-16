@@ -1,6 +1,12 @@
+import { createLogger } from "@cramkit/shared";
+
+const log = createLogger("mcp");
 const API_URL = process.env.CRAMKIT_API_URL || "http://localhost:8787";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+	const method = options?.method || "GET";
+	log.debug(`${method} ${API_URL}${path}`);
+
 	const response = await fetch(`${API_URL}${path}`, {
 		...options,
 		headers: {
@@ -11,9 +17,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 	if (!response.ok) {
 		const error = await response.text();
+		log.error(`${method} ${path} — ${response.status}: ${error}`);
 		throw new Error(`API error ${response.status}: ${error}`);
 	}
 
+	log.debug(`${method} ${path} — ${response.status} OK`);
 	return response.json() as Promise<T>;
 }
 

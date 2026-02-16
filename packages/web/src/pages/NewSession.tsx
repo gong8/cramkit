@@ -1,6 +1,9 @@
 import { createSession } from "@/lib/api";
+import { createLogger } from "@/lib/logger";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+
+const log = createLogger("web");
 
 export function NewSession() {
 	const navigate = useNavigate();
@@ -14,13 +17,17 @@ export function NewSession() {
 		if (!name.trim()) return;
 
 		setSubmitting(true);
+		log.info(`handleSubmit — creating session "${name.trim()}"`);
 		try {
 			const session = await createSession({
 				name: name.trim(),
 				module: module.trim() || undefined,
 				examDate: examDate || undefined,
 			});
+			log.info(`handleSubmit — created ${session.id}, navigating`);
 			navigate(`/session/${session.id}`);
+		} catch (err) {
+			log.error("handleSubmit — creation failed", err);
 		} finally {
 			setSubmitting(false);
 		}

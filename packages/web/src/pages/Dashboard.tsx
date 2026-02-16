@@ -1,11 +1,17 @@
 import { fetchSessions } from "@/lib/api";
+import { createLogger } from "@/lib/logger";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+
+const log = createLogger("web");
 
 export function Dashboard() {
 	const { data: sessions, isLoading } = useQuery({
 		queryKey: ["sessions"],
-		queryFn: fetchSessions,
+		queryFn: () => {
+			log.info("Dashboard — fetching sessions");
+			return fetchSessions();
+		},
 	});
 
 	return (

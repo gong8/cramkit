@@ -1,5 +1,7 @@
-import { getDb } from "@cramkit/shared";
+import { createLogger, getDb } from "@cramkit/shared";
 import { Hono } from "hono";
+
+const log = createLogger("api");
 
 export const chunksRoutes = new Hono();
 
@@ -10,6 +12,7 @@ chunksRoutes.get("/files/:fileId/chunks", async (c) => {
 		where: { fileId: c.req.param("fileId") },
 		orderBy: { index: "asc" },
 	});
+	log.info(`GET /files/${c.req.param("fileId")}/chunks — found ${chunks.length} chunks`);
 	return c.json(chunks);
 });
 
@@ -21,6 +24,10 @@ chunksRoutes.get("/:id", async (c) => {
 		include: { file: { select: { filename: true, type: true } } },
 	});
 
-	if (!chunk) return c.json({ error: "Chunk not found" }, 404);
+	if (!chunk) {
+		log.warn(`GET /chunks/${c.req.param("id")} — not found`);
+		return c.json({ error: "Chunk not found" }, 404);
+	}
+	log.info(`GET /chunks/${chunk.id} — found`);
 	return c.json(chunk);
 });

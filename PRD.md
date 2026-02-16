@@ -454,23 +454,23 @@ GET    /sessions/:id/search?q=...       Search across session materials
 
 ---
 
-## Claude Desktop MCP Configuration
+## MCP Client Configuration
 
-Add to `claude_desktop_config.json`:
+The MCP server uses the **Streamable HTTP** transport, exposing an HTTP endpoint at `http://127.0.0.1:3001/mcp`.
+
+Add to your MCP client config (e.g. `claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "cramkit": {
-      "command": "node",
-      "args": ["path/to/cramkit/packages/mcp/dist/index.js"],
-      "env": {
-        "CRAMKIT_API_URL": "http://localhost:3456"
-      }
+      "url": "http://127.0.0.1:3001/mcp"
     }
   }
 }
 ```
+
+The port is configurable via the `CRAMKIT_MCP_PORT` environment variable (default: `3001`).
 
 The MCP server communicates with the API server over HTTP to fetch data. This keeps the MCP server thin (just tool definitions + API calls) and all business logic in the API.
 
@@ -494,7 +494,7 @@ The MCP server communicates with the API server over HTTP to fetch data. This ke
 
 - Reference `nasty-plot` project for the Claude proxy setup (API key, endpoint config)
 - Use `tsx` for running TypeScript directly during development
-- For the MCP server, use `stdio` transport (standard for Claude Desktop)
+- For the MCP server, use `streamable-http` transport (exposes an HTTP endpoint at `/mcp`)
 - The MCP server should be stateless — it fetches everything from the API server per request
 - Prisma generate needs to run in the shared package; other packages import from there
 - Use `zod` schemas in shared package, derive Prisma types from them or vice versa

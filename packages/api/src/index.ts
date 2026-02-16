@@ -1,5 +1,8 @@
+import { createLogger } from "@cramkit/shared";
 import { Hono } from "hono";
 import { cors } from "./middleware/cors.js";
+
+const log = createLogger("api");
 import { chunksRoutes } from "./routes/chunks.js";
 import { filesRoutes } from "./routes/files.js";
 import { relationshipsRoutes } from "./routes/relationships.js";
@@ -19,7 +22,7 @@ app.route("/search", searchRoutes);
 app.get("/", (c) => c.json({ name: "cramkit-api", version: "0.0.1" }));
 
 const port = Number(process.env.PORT) || 8787;
-console.log(`CramKit API running on http://localhost:${port}`);
+log.info(`CramKit API running on http://localhost:${port}`);
 
 export default {
 	port,

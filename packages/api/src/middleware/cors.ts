@@ -1,4 +1,7 @@
+import { createLogger } from "@cramkit/shared";
 import { createMiddleware } from "hono/factory";
+
+const log = createLogger("api");
 
 export function cors() {
 	return createMiddleware(async (c, next) => {
@@ -7,6 +10,7 @@ export function cors() {
 		c.header("Access-Control-Allow-Headers", "Content-Type");
 
 		if (c.req.method === "OPTIONS") {
+			log.debug(`CORS preflight — ${c.req.url}`);
 			return c.text("", 204);
 		}
 

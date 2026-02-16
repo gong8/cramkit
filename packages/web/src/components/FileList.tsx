@@ -1,3 +1,10 @@
+import { deleteFile } from "@/lib/api";
+import { createLogger } from "@/lib/logger";
+import { useQueryClient } from "@tanstack/react-query";
+import { Trash2 } from "lucide-react";
+
+const log = createLogger("web");
+
 const TYPE_COLORS: Record<string, string> = {
 	LECTURE_NOTES: "bg-blue-100 text-blue-800",
 	PAST_PAPER: "bg-amber-100 text-amber-800",
@@ -28,9 +35,23 @@ interface FileItem {
 
 interface FileListProps {
 	files: FileItem[];
+	sessionId: string;
 }
 
-export function FileList({ files }: FileListProps) {
+export function FileList({ files, sessionId }: FileListProps) {
+	const queryClient = useQueryClient();
+
+	const handleDelete = async (fileId: string) => {
+		log.info(`handleDelete — deleting file ${fileId}`);
+		try {
+			await deleteFile(fileId);
+			log.info(`handleDelete — deleted file ${fileId}`);
+			queryClient.invalidateQueries({ queryKey: ["session-files", sessionId] });
+		} catch (err) {
+			log.error(`handleDelete — failed to delete file ${fileId}`, err);
+		}
+	};
+
 	if (files.length === 0) {
 		return <p className="text-sm text-muted-foreground">No files uploaded yet.</p>;
 	}
@@ -52,11 +73,19 @@ export function FileList({ files }: FileListProps) {
 						</span>
 						<span className="text-sm">{file.label || file.filename}</span>
 					</div>
-					<span
-						className={`text-xs ${file.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
-					>
-						{file.isIndexed ? "Ready" : "Processing"}
-					</span>
+					<div className="flex items-center gap-2">
+						<span
+							className={`text-xs ${file.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
+						>
+							{file.isIndexed ? "Ready" : "Processing"}
+						</span>
+						<button
+							onClick={() => handleDelete(file.id)}
+							className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+						>
+							<Trash2 className="h-4 w-4" />
+						</button>
+					</div>
 				</div>
 			))}
 		</div>

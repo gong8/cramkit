@@ -10,6 +10,7 @@
 	"dependencies": {
 		"@cramkit/shared": "workspace:*",
 		"hono": "^4.7.2",
+		"markitdown-ts": "^0.0.10",
 		"p-queue": "^8.1.0"
 	},
 	"devDependencies": {

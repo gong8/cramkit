@@ -13,7 +13,7 @@ export const FileTypeEnum = z.enum([
 export const createSessionSchema = z.object({
 	name: z.string().min(1),
 	module: z.string().optional(),
-	examDate: z.string().datetime().optional(),
+	examDate: z.string().date().optional(),
 	scope: z.string().optional(),
 	notes: z.string().optional(),
 });
@@ -21,7 +21,7 @@ export const createSessionSchema = z.object({
 export const updateSessionSchema = z.object({
 	name: z.string().min(1).optional(),
 	module: z.string().nullable().optional(),
-	examDate: z.string().datetime().nullable().optional(),
+	examDate: z.string().date().nullable().optional(),
 	scope: z.string().nullable().optional(),
 	notes: z.string().nullable().optional(),
 });

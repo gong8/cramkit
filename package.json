@@ -7,7 +7,8 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"db:generate": "prisma generate",
-		"db:push": "prisma db push"
+		"db:push": "prisma db push",
+		"kill": "lsof -ti :8787,:5173,:3456 | xargs kill -9 2>/dev/null; echo 'Killed ports 8787, 5173, 3456'"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
