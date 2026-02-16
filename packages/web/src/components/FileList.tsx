@@ -1,7 +1,8 @@
-import { deleteFile } from "@/lib/api";
+import { deleteFile, indexFile } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { BrainCircuit, Trash2 } from "lucide-react";
+import { useState } from "react";
 
 const log = createLogger("web");
 
@@ -31,6 +32,7 @@ interface FileItem {
 	type: string;
 	label: string | null;
 	isIndexed: boolean;
+	isGraphIndexed: boolean;
 }
 
 interface FileListProps {
@@ -40,6 +42,7 @@ interface FileListProps {
 
 export function FileList({ files, sessionId }: FileListProps) {
 	const queryClient = useQueryClient();
+	const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
 
 	const handleDelete = async (fileId: string) => {
 		log.info(`handleDelete — deleting file ${fileId}`);
@@ -49,6 +52,39 @@ export function FileList({ files, sessionId }: FileListProps) {
 			queryClient.invalidateQueries({ queryKey: ["session-files", sessionId] });
 		} catch (err) {
 			log.error(`handleDelete — failed to delete file ${fileId}`, err);
+		}
+	};
+
+	const handleIndex = async (fileId: string) => {
+		log.info(`handleIndex — indexing file ${fileId}`);
+		setIndexingFiles((prev) => new Set(prev).add(fileId));
+		try {
+			await indexFile(sessionId, fileId);
+			log.info(`handleIndex — queued file ${fileId}`);
+			// Poll for completion
+			const poll = setInterval(async () => {
+				const files = await queryClient.fetchQuery({
+					queryKey: ["session-files", sessionId],
+					staleTime: 0,
+				}) as FileItem[];
+				const file = files.find((f) => f.id === fileId);
+				if (file?.isGraphIndexed) {
+					clearInterval(poll);
+					setIndexingFiles((prev) => {
+						const next = new Set(prev);
+						next.delete(fileId);
+						return next;
+					});
+					queryClient.invalidateQueries({ queryKey: ["session-files", sessionId] });
+				}
+			}, 2000);
+		} catch (err) {
+			log.error(`handleIndex — failed to index file ${fileId}`, err);
+			setIndexingFiles((prev) => {
+				const next = new Set(prev);
+				next.delete(fileId);
+				return next;
+			});
 		}
 	};
 
@@ -79,6 +115,22 @@ export function FileList({ files, sessionId }: FileListProps) {
 						>
 							{file.isIndexed ? "Ready" : "Processing"}
 						</span>
+						{file.isIndexed && !file.isGraphIndexed && !indexingFiles.has(file.id) && (
+							<button
+								onClick={() => handleIndex(file.id)}
+								className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
+								title="Index for knowledge graph"
+							>
+								<BrainCircuit className="h-3.5 w-3.5" />
+								Index
+							</button>
+						)}
+						{indexingFiles.has(file.id) && (
+							<span className="text-xs text-amber-600">Indexing...</span>
+						)}
+						{file.isGraphIndexed && (
+							<span className="text-xs text-violet-600">Indexed</span>
+						)}
 						<button
 							onClick={() => handleDelete(file.id)}
 							className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"

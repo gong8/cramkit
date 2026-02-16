@@ -19,6 +19,7 @@ model Session {
 
   files         File[]
   relationships Relationship[]
+  concepts      Concept[]
 }
 
 model File {
@@ -35,7 +36,8 @@ model File {
   indexPath      String?
 
   pageCount Int?
-  isIndexed Boolean @default(false)
+  isIndexed      Boolean @default(false)
+  isGraphIndexed Boolean @default(false)
   chunks    Chunk[]
 
   createdAt DateTime @default(now())
@@ -89,4 +91,21 @@ model Relationship {
   @@index([sessionId])
   @@index([sourceType, sourceId])
   @@index([targetType, targetId])
+}
+
+model Concept {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  aliases     String?
+
+  createdBy   String  @default("system")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([sessionId, name])
+  @@index([sessionId])
 }

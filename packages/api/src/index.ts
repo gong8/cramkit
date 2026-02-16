@@ -5,6 +5,7 @@ import { cors } from "./middleware/cors.js";
 const log = createLogger("api");
 import { chunksRoutes } from "./routes/chunks.js";
 import { filesRoutes } from "./routes/files.js";
+import { graphRoutes } from "./routes/graph.js";
 import { relationshipsRoutes } from "./routes/relationships.js";
 import { searchRoutes } from "./routes/search.js";
 import { sessionsRoutes } from "./routes/sessions.js";
@@ -18,6 +19,7 @@ app.route("/files", filesRoutes);
 app.route("/chunks", chunksRoutes);
 app.route("/relationships", relationshipsRoutes);
 app.route("/search", searchRoutes);
+app.route("/graph", graphRoutes);
 
 app.get("/", (c) => c.json({ name: "cramkit-api", version: "0.0.1" }));
 

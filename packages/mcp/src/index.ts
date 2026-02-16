@@ -1,8 +1,10 @@
 import { createServer } from "node:http";
 import { createLogger } from "@cramkit/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { contentTools } from "./tools/content.js";
+import { graphTools } from "./tools/graph.js";
 import { paperTools } from "./tools/papers.js";
 import { sessionTools } from "./tools/sessions.js";
 
@@ -50,10 +52,19 @@ function registerTools(
 registerTools(sessionTools);
 registerTools(contentTools);
 registerTools(paperTools);
+registerTools(graphTools);
 
 const MCP_PORT = Number(process.env.CRAMKIT_MCP_PORT) || 3001;
+const useStdio = process.argv.includes("--stdio");
 
 async function main() {
+	if (useStdio) {
+		const transport = new StdioServerTransport();
+		await server.connect(transport);
+		log.info("CramKit MCP server running on stdio");
+		return;
+	}
+
 	const transport = new StreamableHTTPServerTransport({
 		sessionIdGenerator: undefined, // stateless mode
 	});

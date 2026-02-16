@@ -31,6 +31,13 @@ pnpm dev
 
 ## MCP Configuration
 
+The MCP server supports two transports:
+
+- **HTTP** (default) — runs on `http://127.0.0.1:3001/mcp`, used during development and by the frontend chatbot
+- **stdio** — for Claude Desktop, which manages the process itself
+
+### Claude Desktop
+
 Add to your `claude_desktop_config.json`:
 
 ```json
@@ -38,7 +45,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "cramkit": {
       "command": "node",
-      "args": ["path/to/cramkit/packages/mcp/dist/index.js"],
+      "args": ["path/to/cramkit/packages/mcp/dist/index.js", "--stdio"],
       "env": {
         "CRAMKIT_API_URL": "http://localhost:3456"
       }
@@ -46,3 +53,7 @@ Add to your `claude_desktop_config.json`:
   }
 }
 ```
+
+### Development
+
+The HTTP server starts automatically with `pnpm dev` on port 3001 (override with `CRAMKIT_MCP_PORT`).

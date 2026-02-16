@@ -54,4 +54,13 @@ export const apiClient = {
 			method: "POST",
 			body: JSON.stringify(data),
 		}),
+
+	// Graph
+	getRelated: (type: string, id: string, relationship?: string) =>
+		request<unknown[]>(
+			`/graph/related?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}${relationship ? `&relationship=${encodeURIComponent(relationship)}` : ""}`,
+		),
+
+	listConcepts: (sessionId: string) =>
+		request<unknown[]>(`/graph/sessions/${sessionId}/concepts`),
 };

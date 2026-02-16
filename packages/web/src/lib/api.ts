@@ -49,6 +49,21 @@ export interface FileItem {
 	type: string;
 	label: string | null;
 	isIndexed: boolean;
+	isGraphIndexed: boolean;
+}
+
+export interface Concept {
+	id: string;
+	name: string;
+	description: string | null;
+	aliases: string | null;
+	createdBy: string;
+}
+
+export interface IndexStatus {
+	total: number;
+	indexed: number;
+	inProgress: number;
 }
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
@@ -124,4 +139,26 @@ export async function uploadFile(
 
 	log.info(`uploadFile — completed "${file.name}"`);
 	return response.json() as Promise<FileItem>;
+}
+
+export function indexFile(sessionId: string, fileId: string): Promise<void> {
+	log.info(`indexFile — session=${sessionId}, file=${fileId}`);
+	return request(`/graph/sessions/${sessionId}/index-file`, {
+		method: "POST",
+		body: JSON.stringify({ fileId }),
+	});
+}
+
+export function indexAllFiles(sessionId: string): Promise<void> {
+	log.info(`indexAllFiles — session=${sessionId}`);
+	return request(`/graph/sessions/${sessionId}/index-all`, { method: "POST" });
+}
+
+export function fetchIndexStatus(sessionId: string): Promise<IndexStatus> {
+	return request(`/graph/sessions/${sessionId}/index-status`);
+}
+
+export function fetchConcepts(sessionId: string): Promise<Concept[]> {
+	log.info(`fetchConcepts — session=${sessionId}`);
+	return request(`/graph/sessions/${sessionId}/concepts`);
 }

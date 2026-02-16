@@ -52,3 +52,14 @@ export const searchQuerySchema = z.object({
 	fileTypes: z.array(FileTypeEnum).optional(),
 	limit: z.coerce.number().int().positive().max(50).optional().default(10),
 });
+
+export const createConceptSchema = z.object({
+	name: z.string().min(1),
+	description: z.string().optional(),
+	aliases: z.string().optional(),
+	createdBy: z.enum(["system", "claude", "amortised"]).optional(),
+});
+
+export const indexFileRequestSchema = z.object({
+	fileId: z.string(),
+});
