@@ -50,6 +50,8 @@ export interface FileItem {
 	label: string | null;
 	isIndexed: boolean;
 	isGraphIndexed: boolean;
+	fileSize: number | null;
+	graphIndexDurationMs: number | null;
 }
 
 export interface Concept {
@@ -60,10 +62,37 @@ export interface Concept {
 	createdBy: string;
 }
 
+export interface Relationship {
+	id: string;
+	sourceType: string;
+	sourceId: string;
+	sourceLabel: string | null;
+	targetType: string;
+	targetId: string;
+	targetLabel: string | null;
+	relationship: string;
+	confidence: number;
+}
+
+export interface SessionGraph {
+	concepts: Concept[];
+	relationships: Relationship[];
+}
+
+export interface BatchStatus {
+	batchTotal: number;
+	batchCompleted: number;
+	currentFileId: string | null;
+	startedAt: number;
+	cancelled: boolean;
+}
+
 export interface IndexStatus {
 	total: number;
 	indexed: number;
 	inProgress: number;
+	avgDurationMs: number | null;
+	batch: BatchStatus | null;
 }
 
 export async function fetchSessions(): Promise<SessionSummary[]> {
@@ -154,6 +183,19 @@ export function indexAllFiles(sessionId: string): Promise<void> {
 	return request(`/graph/sessions/${sessionId}/index-all`, { method: "POST" });
 }
 
+export function reindexAllFiles(sessionId: string): Promise<void> {
+	log.info(`reindexAllFiles — session=${sessionId}`);
+	return request(`/graph/sessions/${sessionId}/index-all`, {
+		method: "POST",
+		body: JSON.stringify({ reindex: true }),
+	});
+}
+
+export function cancelIndexing(sessionId: string): Promise<void> {
+	log.info(`cancelIndexing — session=${sessionId}`);
+	return request(`/graph/sessions/${sessionId}/cancel-indexing`, { method: "POST" });
+}
+
 export function fetchIndexStatus(sessionId: string): Promise<IndexStatus> {
 	return request(`/graph/sessions/${sessionId}/index-status`);
 }
@@ -161,4 +203,9 @@ export function fetchIndexStatus(sessionId: string): Promise<IndexStatus> {
 export function fetchConcepts(sessionId: string): Promise<Concept[]> {
 	log.info(`fetchConcepts — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/concepts`);
+}
+
+export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
+	log.info(`fetchSessionGraph — session=${sessionId}`);
+	return request(`/graph/sessions/${sessionId}/full`);
 }

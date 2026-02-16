@@ -21,11 +21,53 @@ export function enqueueGraphIndexing(fileId: string): void {
 	log.info(`enqueueGraphIndexing — file ${fileId}, indexing queue size: ${indexingQueue.size + indexingQueue.pending}`);
 }
 
+// --- Session batch tracking ---
+
+interface SessionBatchState {
+	fileIds: string[];
+	completedFileIds: string[];
+	currentFileId: string | null;
+	startedAt: number;
+	cancelled: boolean;
+}
+
+const sessionBatches = new Map<string, SessionBatchState>();
+
 export function enqueueSessionGraphIndexing(sessionId: string, fileIds: string[]): void {
+	const batch: SessionBatchState = {
+		fileIds,
+		completedFileIds: [],
+		currentFileId: null,
+		startedAt: Date.now(),
+		cancelled: false,
+	};
+	sessionBatches.set(sessionId, batch);
+
 	for (const fileId of fileIds) {
-		indexingQueue.add(() => indexFileGraph(fileId));
+		indexingQueue.add(async () => {
+			if (batch.cancelled) {
+				log.info(`enqueueSessionGraphIndexing — skipping ${fileId} (cancelled)`);
+				return;
+			}
+			batch.currentFileId = fileId;
+			await indexFileGraph(fileId);
+			batch.completedFileIds.push(fileId);
+			batch.currentFileId = null;
+		});
 	}
 	log.info(`enqueueSessionGraphIndexing — session ${sessionId}, ${fileIds.length} files queued`);
+}
+
+export function cancelSessionIndexing(sessionId: string): boolean {
+	const batch = sessionBatches.get(sessionId);
+	if (!batch) return false;
+	batch.cancelled = true;
+	log.info(`cancelSessionIndexing — session ${sessionId}, cancelled (${batch.completedFileIds.length}/${batch.fileIds.length} done)`);
+	return true;
+}
+
+export function getSessionBatchStatus(sessionId: string): SessionBatchState | null {
+	return sessionBatches.get(sessionId) ?? null;
 }
 
 export function getIndexingQueueSize(): number {

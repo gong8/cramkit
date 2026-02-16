@@ -1,7 +1,7 @@
-import { deleteFile, indexFile } from "@/lib/api";
+import { deleteFile, indexFile, type FileItem } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
-import { BrainCircuit, Trash2 } from "lucide-react";
+import { BrainCircuit, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 const log = createLogger("web");
@@ -25,15 +25,6 @@ const TYPE_LABELS: Record<string, string> = {
 	SPECIFICATION: "Specification",
 	OTHER: "Other",
 };
-
-interface FileItem {
-	id: string;
-	filename: string;
-	type: string;
-	label: string | null;
-	isIndexed: boolean;
-	isGraphIndexed: boolean;
-}
 
 interface FileListProps {
 	files: FileItem[];
@@ -128,8 +119,18 @@ export function FileList({ files, sessionId }: FileListProps) {
 						{indexingFiles.has(file.id) && (
 							<span className="text-xs text-amber-600">Indexing...</span>
 						)}
-						{file.isGraphIndexed && (
-							<span className="text-xs text-violet-600">Indexed</span>
+						{file.isGraphIndexed && !indexingFiles.has(file.id) && (
+							<>
+								<span className="text-xs text-violet-600">Indexed</span>
+								<button
+									onClick={() => handleIndex(file.id)}
+									className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-violet-500/10 hover:text-violet-600"
+									title="Reindex for knowledge graph"
+								>
+									<RefreshCw className="h-3 w-3" />
+									Reindex
+								</button>
+							</>
 						)}
 						<button
 							onClick={() => handleDelete(file.id)}

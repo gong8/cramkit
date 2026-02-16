@@ -1,8 +1,17 @@
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Outlet } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./pages/Dashboard";
+import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { NewSession } from "./pages/NewSession";
 import { SessionDetail } from "./pages/SessionDetail";
+
+function FullscreenLayout() {
+	return (
+		<div className="h-screen bg-background">
+			<Outlet />
+		</div>
+	);
+}
 
 export const router = createBrowserRouter([
 	{
@@ -12,5 +21,9 @@ export const router = createBrowserRouter([
 			{ path: "/new", element: <NewSession /> },
 			{ path: "/session/:id", element: <SessionDetail /> },
 		],
+	},
+	{
+		element: <FullscreenLayout />,
+		children: [{ path: "/session/:id/graph", element: <KnowledgeGraph /> }],
 	},
 ]);

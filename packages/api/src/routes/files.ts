@@ -45,6 +45,7 @@ filesRoutes.post("/sessions/:sessionId/files", async (c) => {
 			type: metaParsed.data.type,
 			label: metaParsed.data.label ?? null,
 			rawPath,
+			fileSize: file.size,
 		},
 	});
 

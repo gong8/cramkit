@@ -1,6 +1,6 @@
 import { createLogger, getDb, indexFileRequestSchema } from "@cramkit/shared";
 import { Hono } from "hono";
-import { enqueueGraphIndexing, enqueueSessionGraphIndexing, getIndexingQueueSize } from "../lib/queue.js";
+import { cancelSessionIndexing, enqueueGraphIndexing, enqueueSessionGraphIndexing, getIndexingQueueSize, getSessionBatchStatus } from "../lib/queue.js";
 
 const log = createLogger("api");
 
@@ -120,16 +120,64 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 
-	const files = await db.file.findMany({
-		where: { sessionId, isIndexed: true, isGraphIndexed: false },
-		select: { id: true },
-	});
+	let reindex = false;
+	try {
+		const body = await c.req.json();
+		reindex = body?.reindex === true;
+	} catch {
+		// No body or invalid JSON — default to non-reindex
+	}
 
-	const fileIds = files.map((f) => f.id);
+	let fileIds: string[];
+	if (reindex) {
+		// Include already-indexed files; reset their isGraphIndexed flag
+		const files = await db.file.findMany({
+			where: { sessionId, isIndexed: true },
+			select: { id: true },
+		});
+		fileIds = files.map((f) => f.id);
+		if (fileIds.length > 0) {
+			await db.file.updateMany({
+				where: { id: { in: fileIds } },
+				data: { isGraphIndexed: false, graphIndexDurationMs: null },
+			});
+		}
+	} else {
+		const files = await db.file.findMany({
+			where: { sessionId, isIndexed: true, isGraphIndexed: false },
+			select: { id: true },
+		});
+		fileIds = files.map((f) => f.id);
+	}
+
 	enqueueSessionGraphIndexing(sessionId, fileIds);
 
-	log.info(`POST /graph/sessions/${sessionId}/index-all — queued ${fileIds.length} files`);
+	log.info(`POST /graph/sessions/${sessionId}/index-all — queued ${fileIds.length} files (reindex=${reindex})`);
 	return c.json({ ok: true, queued: fileIds.length });
+});
+
+// Cancel indexing for a session
+graphRoutes.post("/sessions/:sessionId/cancel-indexing", async (c) => {
+	const sessionId = c.req.param("sessionId");
+	const cancelled = cancelSessionIndexing(sessionId);
+	log.info(`POST /graph/sessions/${sessionId}/cancel-indexing — cancelled=${cancelled}`);
+	return c.json({ ok: true, cancelled });
+});
+
+// Get full graph data (concepts + relationships) for a session
+graphRoutes.get("/sessions/:sessionId/full", async (c) => {
+	const db = getDb();
+	const sessionId = c.req.param("sessionId");
+
+	const [concepts, relationships] = await Promise.all([
+		db.concept.findMany({ where: { sessionId }, orderBy: { name: "asc" } }),
+		db.relationship.findMany({ where: { sessionId } }),
+	]);
+
+	log.info(
+		`GET /graph/sessions/${sessionId}/full — ${concepts.length} concepts, ${relationships.length} relationships`,
+	);
+	return c.json({ concepts, relationships });
 });
 
 // Get indexing progress
@@ -143,7 +191,29 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	]);
 
 	const inProgress = getIndexingQueueSize();
+	const batch = getSessionBatchStatus(sessionId);
+
+	// Calculate avg duration from historical data in this session
+	const durationStats = await db.file.aggregate({
+		where: { sessionId, graphIndexDurationMs: { not: null } },
+		_avg: { graphIndexDurationMs: true },
+	});
+	const avgDurationMs = durationStats._avg.graphIndexDurationMs ?? null;
 
 	log.info(`GET /graph/sessions/${sessionId}/index-status — total=${total}, indexed=${indexed}, inProgress=${inProgress}`);
-	return c.json({ total, indexed, inProgress });
+	return c.json({
+		total,
+		indexed,
+		inProgress,
+		avgDurationMs,
+		batch: batch
+			? {
+					batchTotal: batch.fileIds.length,
+					batchCompleted: batch.completedFileIds.length,
+					currentFileId: batch.currentFileId,
+					startedAt: batch.startedAt,
+					cancelled: batch.cancelled,
+				}
+			: null,
+	});
 });

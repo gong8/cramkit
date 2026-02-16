@@ -36,8 +36,10 @@ model File {
   indexPath      String?
 
   pageCount Int?
-  isIndexed      Boolean @default(false)
-  isGraphIndexed Boolean @default(false)
+  fileSize             Int?
+  isIndexed            Boolean @default(false)
+  isGraphIndexed       Boolean @default(false)
+  graphIndexDurationMs Int?
   chunks    Chunk[]
 
   createdAt DateTime @default(now())

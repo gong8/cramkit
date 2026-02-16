@@ -111,6 +111,8 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 
 	log.info(`indexFileGraph — starting "${file.filename}" (${fileId})`);
 
+	const startTime = Date.now();
+
 	const existingConcepts = await db.concept.findMany({
 		where: { sessionId: file.sessionId },
 		select: { name: true, description: true },
@@ -247,10 +249,11 @@ export async function indexFileGraph(fileId: string): Promise<void> {
 		});
 	}
 
-	// Mark file as graph-indexed
+	// Mark file as graph-indexed with duration
+	const graphIndexDurationMs = Date.now() - startTime;
 	await db.file.update({
 		where: { id: fileId },
-		data: { isGraphIndexed: true },
+		data: { isGraphIndexed: true, graphIndexDurationMs },
 	});
 
 	log.info(
