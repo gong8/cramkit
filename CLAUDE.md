@@ -8,13 +8,13 @@ Local-first study tool that gives Claude (via MCP) structured, indexed access to
 pnpm install              # Install deps
 pnpm db:generate          # Generate Prisma client (run after schema changes)
 pnpm db:push              # Push schema to SQLite
-pnpm dev                  # Start all services (web + api + mcp + Claude proxy)
+pnpm dev                  # Start all services (web + api + mcp)
 pnpm build                # Build all packages
 pnpm test                 # Run all tests
 pnpm test:watch           # Tests in watch mode
 pnpm lint                 # Check with Biome
 pnpm lint:fix             # Auto-fix with Biome
-pnpm kill                 # Kill ports 8787, 5173, 3456
+pnpm kill                 # Kill ports 8787, 5173, 3001
 ```
 
 ## Architecture
@@ -81,7 +81,5 @@ Use conventional commits: `feat:`, `fix:`, `test:`, `docs:`, `refactor:`
 
 Copy `.env.example` to `.env`. Key vars:
 - `DATABASE_URL` — SQLite path (default: `file:./data/cramkit.db`)
-- `LLM_BASE_URL` — Claude proxy URL
-- `LLM_API_KEY` — Proxy key
-- `LLM_MODEL` — Model ID
+- `LLM_MODEL` — Model ID (default: `claude-opus-4-6`)
 - `CRAMKIT_API_URL` — API base URL (default: `http://localhost:8787`)
