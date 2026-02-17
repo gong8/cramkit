@@ -13,7 +13,7 @@ export function ChatComposer() {
 						Attachment: ComposerImageAttachment,
 					}}
 				/>
-				<div className="flex items-end gap-2 px-3 py-2">
+				<div className="flex items-center gap-2 px-3 py-2">
 					<ComposerPrimitive.AddAttachment className="shrink-0 rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
 						<Paperclip className="h-4 w-4" />
 					</ComposerPrimitive.AddAttachment>
