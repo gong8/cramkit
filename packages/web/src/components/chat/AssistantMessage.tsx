@@ -1,12 +1,20 @@
 import { ActionBarPrimitive, MessagePrimitive, useMessage } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { ClipboardCopy, RefreshCw } from "lucide-react";
+import type { Options as RehypeKatexOptions } from "rehype-katex";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { remarkMathDisplay } from "../../lib/remark-math-display.js";
 import { CodeHeader } from "./CodeHeader.js";
 import { ReasoningDisplay } from "./ReasoningDisplay.js";
 import { ToolCallDisplay } from "./ToolCallDisplay.js";
+
+const katexOptions: RehypeKatexOptions = {
+	trust: true,
+	strict: false,
+	errorColor: "#888888",
+};
 
 function formatTimestamp(date: Date): string {
 	return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -25,8 +33,8 @@ function MessageTimestamp() {
 function MarkdownText() {
 	return (
 		<MarkdownTextPrimitive
-			remarkPlugins={[remarkGfm, remarkMath]}
-			rehypePlugins={[rehypeKatex]}
+			remarkPlugins={[remarkGfm, remarkMath, remarkMathDisplay]}
+			rehypePlugins={[[rehypeKatex, katexOptions]]}
 			components={{
 				CodeHeader,
 			}}

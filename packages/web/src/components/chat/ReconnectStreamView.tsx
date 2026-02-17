@@ -1,9 +1,17 @@
 import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import type { Options as RehypeKatexOptions } from "rehype-katex";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { remarkMathDisplay } from "../../lib/remark-math-display.js";
 import { ReasoningDisplay, getToolLabel } from "./MessageComponents.js";
+
+const katexOptions: RehypeKatexOptions = {
+	trust: true,
+	strict: false,
+	errorColor: "#888888",
+};
 
 // ─── Types ───
 
@@ -65,7 +73,10 @@ export function ReconnectStreamView({ stream }: { stream: ReconnectStream }) {
 						);
 					})}
 					{cleanContent && (
-						<ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+						<ReactMarkdown
+							remarkPlugins={[remarkGfm, remarkMath, remarkMathDisplay]}
+							rehypePlugins={[[rehypeKatex, katexOptions]]}
+						>
 							{cleanContent}
 						</ReactMarkdown>
 					)}

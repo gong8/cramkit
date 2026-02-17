@@ -106,9 +106,7 @@ export function collectNewImagePaths(
 ): string[] {
 	const lastUserMsg = [...history].reverse().find((msg) => msg.role === "user");
 	if (!lastUserMsg) return [];
-	return lastUserMsg.attachments
-		.map((att) => att.diskPath)
-		.filter((p): p is string => p !== null);
+	return lastUserMsg.attachments.map((att) => att.diskPath).filter((p): p is string => p !== null);
 }
 
 interface SessionWithResources {
