@@ -97,7 +97,7 @@ chatRoutes.patch("/conversations/:id", async (c) => {
 
 	const conversation = await db.conversation.update({
 		where: { id },
-		data: { title: title.trim() },
+		data: { title: title.trim(), userRenamed: true },
 		select: { id: true, title: true, createdAt: true, updatedAt: true },
 	});
 

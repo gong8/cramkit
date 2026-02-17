@@ -13,20 +13,20 @@ export function ChatComposer() {
 						Attachment: ComposerImageAttachment,
 					}}
 				/>
-				<div className="flex items-center gap-2 px-3 py-2">
-					<ComposerPrimitive.AddAttachment className="rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+				<div className="flex items-end gap-2 px-3 py-2">
+					<ComposerPrimitive.AddAttachment className="shrink-0 rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
 						<Paperclip className="h-4 w-4" />
 					</ComposerPrimitive.AddAttachment>
 					<ComposerPrimitive.Input
 						placeholder="Type a message..."
-						className="flex-1 resize-none bg-transparent text-sm outline-none"
+						className="flex-1 resize-none bg-transparent text-sm outline-none max-h-[200px] overflow-y-auto"
 						autoFocus
 					/>
 					<ThreadPrimitive.If running>
 						<StopButton />
 					</ThreadPrimitive.If>
 					<ThreadPrimitive.If running={false}>
-						<ComposerPrimitive.Send className="rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 disabled:opacity-50">
+						<ComposerPrimitive.Send className="shrink-0 rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 disabled:opacity-50">
 							<Send className="h-4 w-4" />
 						</ComposerPrimitive.Send>
 					</ThreadPrimitive.If>

@@ -145,8 +145,9 @@ model Conversation {
   id        String   @id @default(cuid())
   sessionId String
   session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  title     String   @default("New chat")
-  createdAt DateTime @default(now())
+  title       String   @default("New chat")
+  userRenamed Boolean  @default(false)
+  createdAt   DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   messages Message[]

@@ -247,6 +247,11 @@ export async function autoTitleConversation(
 	message: string,
 ) {
 	if (historyLength !== 1) return;
+	const conv = await db.conversation.findUnique({
+		where: { id: conversationId },
+		select: { userRenamed: true },
+	});
+	if (conv?.userRenamed) return;
 	const titleSource = message || "Image";
 	const title = titleSource.length > 50 ? `${titleSource.slice(0, 50)}…` : titleSource;
 	await db.conversation.update({
