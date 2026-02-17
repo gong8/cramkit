@@ -1,18 +1,19 @@
 import { createResource, type Resource } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { Plus, Upload, X } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 
 const log = createLogger("web");
 
 type ResourceType = "LECTURE_NOTES" | "PAST_PAPER" | "PROBLEM_SHEET" | "SPECIFICATION" | "OTHER";
 
-const TYPE_OPTIONS: Array<{ value: ResourceType; label: string }> = [
-	{ value: "LECTURE_NOTES", label: "Lecture Notes" },
-	{ value: "PAST_PAPER", label: "Past Paper" },
-	{ value: "PROBLEM_SHEET", label: "Problem Sheet" },
-	{ value: "SPECIFICATION", label: "Specification" },
-	{ value: "OTHER", label: "Other" },
+const TYPE_OPTIONS: Array<{ value: ResourceType; label: string; description: string }> = [
+	{ value: "LECTURE_NOTES", label: "Lecture Notes", description: "One or more lecture PDFs" },
+	{ value: "PAST_PAPER", label: "Past Paper", description: "A single exam paper PDF" },
+	{ value: "PROBLEM_SHEET", label: "Problem Sheet", description: "A single problem sheet PDF" },
+	{ value: "SPECIFICATION", label: "Specification", description: "Module or exam specification" },
+	{ value: "OTHER", label: "Other", description: "Any other resource" },
 ];
 
 interface ResourceUploadProps {
@@ -22,158 +23,279 @@ interface ResourceUploadProps {
 
 export function ResourceUpload({ sessionId, existingResources }: ResourceUploadProps) {
 	const queryClient = useQueryClient();
-	const [isDragging, setIsDragging] = useState(false);
-	const [uploading, setUploading] = useState(false);
-	const [resourceType, setResourceType] = useState<ResourceType>("OTHER");
+	const [isOpen, setIsOpen] = useState(false);
+	const [step, setStep] = useState<"type" | "details">("type");
+	const [resourceType, setResourceType] = useState<ResourceType | null>(null);
 	const [resourceName, setResourceName] = useState("");
-	const [secondaryFile, setSecondaryFile] = useState<File | null>(null);
+	const [files, setFiles] = useState<File[]>([]);
+	const [hasMarkScheme, setHasMarkScheme] = useState(false);
+	const [hasSolutions, setHasSolutions] = useState(false);
+	const [splitMode, setSplitMode] = useState<"auto" | "split" | "single">("auto");
+	const [uploading, setUploading] = useState(false);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
-	const needsSecondary = resourceType === "PAST_PAPER" || resourceType === "PROBLEM_SHEET";
-	const secondaryLabel = resourceType === "PAST_PAPER" ? "Mark Scheme" : "Solutions";
-
-	// Check if session already has lecture notes
 	const existingLectureNotes = existingResources?.find((r) => r.type === "LECTURE_NOTES");
 	const isAddingToExisting = resourceType === "LECTURE_NOTES" && !!existingLectureNotes;
 
-	const handleFiles = useCallback(
-		async (files: FileList) => {
-			log.info(`handleFiles — ${files.length} file(s) selected, type=${resourceType}`);
-			setUploading(true);
-			try {
-				const fileArray = Array.from(files);
-				const name = resourceName || fileArray.map((f) => f.name.replace(/\.[^.]+$/, "")).join(", ");
+	const allowMultipleFiles = resourceType === "LECTURE_NOTES";
 
-				await createResource(sessionId, {
-					name,
-					type: resourceType,
-					files: fileArray,
-					markScheme: resourceType === "PAST_PAPER" ? secondaryFile ?? undefined : undefined,
-					solutions: resourceType === "PROBLEM_SHEET" ? secondaryFile ?? undefined : undefined,
-				});
+	const reset = useCallback(() => {
+		setStep("type");
+		setResourceType(null);
+		setResourceName("");
+		setFiles([]);
+		setHasMarkScheme(false);
+		setHasSolutions(false);
+		setSplitMode("auto");
+	}, []);
 
-				log.info("handleFiles — resource created");
-				setResourceName("");
-				setSecondaryFile(null);
-				queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
-			} catch (err) {
-				log.error("handleFiles — upload error", err);
-			} finally {
-				setUploading(false);
+	const handleOpen = () => {
+		reset();
+		setIsOpen(true);
+	};
+
+	const handleClose = () => {
+		if (!uploading) {
+			setIsOpen(false);
+			reset();
+		}
+	};
+
+	const handleTypeSelect = (type: ResourceType) => {
+		setResourceType(type);
+		setStep("details");
+	};
+
+	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+		if (e.target.files) {
+			const newFiles = Array.from(e.target.files);
+			if (allowMultipleFiles) {
+				setFiles((prev) => [...prev, ...newFiles]);
+			} else {
+				setFiles(newFiles.slice(0, 1));
 			}
-		},
-		[sessionId, queryClient, resourceType, resourceName, secondaryFile],
-	);
+		}
+		if (fileInputRef.current) fileInputRef.current.value = "";
+	};
+
+	const removeFile = (index: number) => {
+		setFiles((prev) => prev.filter((_, i) => i !== index));
+	};
+
+	const handleSubmit = useCallback(async () => {
+		if (!resourceType || files.length === 0) return;
+		setUploading(true);
+		try {
+			const name = resourceName || files.map((f) => f.name.replace(/\.[^.]+$/, "")).join(", ");
+
+			let label: string | undefined;
+			if (resourceType === "PAST_PAPER" && hasMarkScheme) {
+				label = "includes_mark_scheme";
+			} else if (resourceType === "PROBLEM_SHEET" && hasSolutions) {
+				label = "includes_solutions";
+			}
+
+			await createResource(sessionId, {
+				name,
+				type: resourceType,
+				label,
+				splitMode: splitMode !== "auto" ? splitMode : undefined,
+				files,
+			});
+
+			log.info("ResourceUpload — resource created");
+			queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+			setIsOpen(false);
+			reset();
+		} catch (err) {
+			log.error("ResourceUpload — upload error", err);
+		} finally {
+			setUploading(false);
+		}
+	}, [resourceType, files, resourceName, hasMarkScheme, hasSolutions, splitMode, sessionId, queryClient, reset]);
 
 	return (
-		<div className="mb-4 space-y-3">
-			{/* Resource type selector */}
-			<div className="flex flex-wrap gap-2">
-				{TYPE_OPTIONS.map((opt) => (
-					<button
-						key={opt.value}
-						type="button"
-						onClick={() => {
-							setResourceType(opt.value);
-							setSecondaryFile(null);
-						}}
-						className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
-							resourceType === opt.value
-								? "bg-primary text-primary-foreground"
-								: "bg-secondary text-secondary-foreground hover:opacity-80"
-						}`}
+		<>
+			<button
+				onClick={handleOpen}
+				className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-3 text-sm font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+			>
+				<Plus className="h-4 w-4" />
+				Add Resource
+			</button>
+
+			{isOpen && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={handleClose}>
+					<div
+						className="relative w-full max-w-lg rounded-lg border border-border bg-background p-6 shadow-lg"
+						onClick={(e) => e.stopPropagation()}
 					>
-						{opt.label}
-					</button>
-				))}
-			</div>
+						<button
+							onClick={handleClose}
+							className="absolute right-3 top-3 rounded p-1 text-muted-foreground hover:text-foreground"
+						>
+							<X className="h-4 w-4" />
+						</button>
 
-			{/* Info about adding to existing lecture notes */}
-			{isAddingToExisting && (
-				<p className="text-xs text-muted-foreground">
-					Files will be added to existing Lecture Notes resource.
-				</p>
-			)}
+						{/* Step 1: Pick resource type */}
+						{step === "type" && (
+							<>
+								<h2 className="mb-4 text-lg font-semibold">What are you uploading?</h2>
+								<div className="space-y-2">
+									{TYPE_OPTIONS.map((opt) => {
+										const isExisting = opt.value === "LECTURE_NOTES" && !!existingLectureNotes;
+										return (
+											<button
+												key={opt.value}
+												onClick={() => handleTypeSelect(opt.value)}
+												className="flex w-full items-center justify-between rounded-md border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-primary/5"
+											>
+												<div>
+													<div className="text-sm font-medium">{opt.label}</div>
+													<div className="text-xs text-muted-foreground">
+														{isExisting ? "Add more files to existing lecture notes" : opt.description}
+													</div>
+												</div>
+											</button>
+										);
+									})}
+								</div>
+							</>
+						)}
 
-			{/* Resource name */}
-			{!isAddingToExisting && (
-				<input
-					type="text"
-					value={resourceName}
-					onChange={(e) => setResourceName(e.target.value)}
-					placeholder="Resource name (optional — defaults to filename)"
-					className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-				/>
-			)}
+						{/* Step 2: Upload details */}
+						{step === "details" && resourceType && (
+							<>
+								<h2 className="mb-4 text-lg font-semibold">
+									{isAddingToExisting
+										? "Add to Lecture Notes"
+										: `New ${TYPE_OPTIONS.find((o) => o.value === resourceType)?.label}`}
+								</h2>
 
-			{/* Secondary file for past paper / problem sheet */}
-			{needsSecondary && (
-				<div className="rounded-md border border-dashed border-border p-3">
-					{secondaryFile ? (
-						<div className="flex items-center justify-between text-sm">
-							<span>{secondaryLabel}: {secondaryFile.name}</span>
-							<button
-								onClick={() => setSecondaryFile(null)}
-								className="text-muted-foreground hover:text-destructive"
-							>
-								Remove
-							</button>
-						</div>
-					) : (
-						<label className="block cursor-pointer text-center text-sm text-muted-foreground">
-							{`Attach ${secondaryLabel} (optional)`}
-							<input
-								type="file"
-								className="hidden"
-								onChange={(e) => {
-									if (e.target.files?.[0]) setSecondaryFile(e.target.files[0]);
-								}}
-							/>
-						</label>
-					)}
+								<div className="space-y-4">
+									{/* Resource name */}
+									{!isAddingToExisting && (
+										<div>
+											<label className="mb-1 block text-sm font-medium">
+												Name <span className="font-normal text-muted-foreground">(optional)</span>
+											</label>
+											<input
+												type="text"
+												value={resourceName}
+												onChange={(e) => setResourceName(e.target.value)}
+												placeholder="Defaults to filename"
+												className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+											/>
+										</div>
+									)}
+
+									{/* Tickbox: includes mark scheme */}
+									{resourceType === "PAST_PAPER" && (
+										<label className="flex items-center gap-2 text-sm">
+											<input
+												type="checkbox"
+												checked={hasMarkScheme}
+												onChange={(e) => setHasMarkScheme(e.target.checked)}
+												className="h-4 w-4 rounded border-input"
+											/>
+											PDF includes mark scheme
+										</label>
+									)}
+
+									{/* Tickbox: includes solutions */}
+									{resourceType === "PROBLEM_SHEET" && (
+										<label className="flex items-center gap-2 text-sm">
+											<input
+												type="checkbox"
+												checked={hasSolutions}
+												onChange={(e) => setHasSolutions(e.target.checked)}
+												className="h-4 w-4 rounded border-input"
+											/>
+											PDF includes solutions
+										</label>
+									)}
+
+									{/* Split mode tickbox */}
+									<label className="flex items-center gap-2 text-sm">
+										<input
+											type="checkbox"
+											checked={splitMode === "split"}
+											onChange={(e) => setSplitMode(e.target.checked ? "split" : "auto")}
+											className="h-4 w-4 rounded border-input"
+										/>
+										Split into chunks for indexing
+									</label>
+
+									{/* File upload */}
+									<div>
+										<label className="mb-1 block text-sm font-medium">
+											{allowMultipleFiles ? "Files" : "File"}
+										</label>
+
+										{files.length > 0 && (
+											<div className="mb-2 space-y-1">
+												{files.map((file, i) => (
+													<div
+														key={`${file.name}-${i}`}
+														className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm"
+													>
+														<span className="truncate">{file.name}</span>
+														<button
+															onClick={() => removeFile(i)}
+															className="ml-2 text-muted-foreground hover:text-destructive"
+														>
+															<X className="h-3.5 w-3.5" />
+														</button>
+													</div>
+												))}
+											</div>
+										)}
+
+										{(allowMultipleFiles || files.length === 0) && (
+											<button
+												onClick={() => fileInputRef.current?.click()}
+												className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-6 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+											>
+												<Upload className="h-4 w-4" />
+												{files.length > 0 ? "Add more files" : "Choose file"}
+											</button>
+										)}
+
+										<input
+											ref={fileInputRef}
+											type="file"
+											accept=".pdf"
+											multiple={allowMultipleFiles}
+											onChange={handleFileChange}
+											className="hidden"
+										/>
+									</div>
+
+									{/* Actions */}
+									<div className="flex items-center justify-between pt-2">
+										<button
+											onClick={() => {
+												setStep("type");
+												setFiles([]);
+											}}
+											className="text-sm text-muted-foreground hover:text-foreground"
+										>
+											Back
+										</button>
+										<button
+											onClick={handleSubmit}
+											disabled={files.length === 0 || uploading}
+											className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+										>
+											{uploading ? "Uploading..." : "Upload"}
+										</button>
+									</div>
+								</div>
+							</>
+						)}
+					</div>
 				</div>
 			)}
-
-			{/* Main file dropzone */}
-			<div
-				onDragOver={(e) => {
-					e.preventDefault();
-					setIsDragging(true);
-				}}
-				onDragLeave={() => setIsDragging(false)}
-				onDrop={(e) => {
-					e.preventDefault();
-					setIsDragging(false);
-					if (e.dataTransfer.files.length) {
-						handleFiles(e.dataTransfer.files);
-					}
-				}}
-				className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
-					isDragging ? "border-primary bg-primary/5" : "border-border text-muted-foreground"
-				}`}
-			>
-				{uploading ? (
-					<p className="text-sm">Uploading...</p>
-				) : (
-					<>
-						<p className="text-sm">
-							{resourceType === "LECTURE_NOTES"
-								? "Drag & drop lecture note files here, or"
-								: "Drag & drop files here, or"}
-						</p>
-						<label className="mt-2 inline-block cursor-pointer rounded-md bg-secondary px-3 py-1 text-sm font-medium text-secondary-foreground hover:opacity-80">
-							Browse
-							<input
-								type="file"
-								multiple={resourceType === "LECTURE_NOTES"}
-								className="hidden"
-								onChange={(e) => {
-									if (e.target.files?.length) handleFiles(e.target.files);
-								}}
-							/>
-						</label>
-					</>
-				)}
-			</div>
-		</div>
+		</>
 	);
 }

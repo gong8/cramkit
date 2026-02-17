@@ -92,7 +92,6 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 	});
 
 	// Process files from form data
-	// Primary file(s)
 	const primaryFiles = formData.getAll("files") as File[];
 	const singleFile = formData.get("file") as File | null;
 	const allPrimaryFiles = singleFile ? [singleFile, ...primaryFiles] : primaryFiles;
@@ -106,36 +105,6 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 				role: "PRIMARY",
 				rawPath,
 				fileSize: f.size,
-			},
-		});
-	}
-
-	// Mark scheme file (for past papers)
-	const markSchemeFile = formData.get("markScheme") as File | null;
-	if (markSchemeFile) {
-		const rawPath = await saveResourceRawFile(sessionId, resource.id, markSchemeFile.name, Buffer.from(await markSchemeFile.arrayBuffer()));
-		await db.file.create({
-			data: {
-				resourceId: resource.id,
-				filename: markSchemeFile.name,
-				role: "MARK_SCHEME",
-				rawPath,
-				fileSize: markSchemeFile.size,
-			},
-		});
-	}
-
-	// Solutions file (for problem sheets)
-	const solutionsFile = formData.get("solutions") as File | null;
-	if (solutionsFile) {
-		const rawPath = await saveResourceRawFile(sessionId, resource.id, solutionsFile.name, Buffer.from(await solutionsFile.arrayBuffer()));
-		await db.file.create({
-			data: {
-				resourceId: resource.id,
-				filename: solutionsFile.name,
-				role: "SOLUTIONS",
-				rawPath,
-				fileSize: solutionsFile.size,
 			},
 		});
 	}
@@ -380,7 +349,8 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 	const remainingFiles = await db.file.count({ where: { resourceId } });
 	if (remainingFiles === 0) {
 		// Delete the entire resource if no files left
-		await deleteResourceDir(file.resource?.sessionId || (await db.resource.findUnique({ where: { id: resourceId } }))!.sessionId, resourceId);
+		const parentResource = (await db.resource.findUnique({ where: { id: resourceId } }))!;
+		await deleteResourceDir(parentResource.sessionId, resourceId);
 		await db.resource.delete({ where: { id: resourceId } });
 		log.info(`DELETE /resources/${resourceId}/files/${fileId} — last file removed, resource deleted`);
 		return c.json({ ok: true, resourceDeleted: true });
