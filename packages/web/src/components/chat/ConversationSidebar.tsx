@@ -80,7 +80,7 @@ export function ConversationSidebar({
 	const groups = groupByDate(conversations);
 
 	return (
-		<div className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-muted/30">
+		<div className="flex h-full w-64 min-w-64 flex-col border-r border-border bg-muted/30">
 			<div className="p-3">
 				<button
 					type="button"

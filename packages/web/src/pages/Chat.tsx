@@ -5,7 +5,7 @@ import { ChatThread } from "@/components/chat/ChatThread.js";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar.js";
 import { EmptyState } from "@/components/chat/EmptyState.js";
 import { useConversationCleanup } from "@/hooks/useConversationCleanup.js";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -70,6 +70,7 @@ export function Chat() {
 		queryClient,
 	);
 
+	const [sidebarOpen, setSidebarOpen] = useState(true);
 	const [threadReloadKey, setThreadReloadKey] = useState(0);
 	const handleStreamReconnected = useCallback(() => {
 		setThreadReloadKey((k) => k + 1);
@@ -99,18 +100,34 @@ export function Chat() {
 				>
 					<ArrowLeft className="h-5 w-5" />
 				</Link>
-				<div>
+				<div className="flex-1">
 					<h1 className="text-sm font-semibold">{session?.name || "Chat"}</h1>
 					{session?.module && <p className="text-xs text-muted-foreground">{session.module}</p>}
 				</div>
+				<button
+					type="button"
+					onClick={() => setSidebarOpen((o) => !o)}
+					className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+					title={sidebarOpen ? "Hide chat history" : "Show chat history"}
+				>
+					{sidebarOpen ? (
+						<PanelLeftClose className="h-5 w-5" />
+					) : (
+						<PanelLeftOpen className="h-5 w-5" />
+					)}
+				</button>
 			</div>
 
 			<div className="flex min-h-0 flex-1 overflow-hidden">
-				<ConversationSidebar
-					sessionId={sessionId}
-					activeId={activeConversationId}
-					onSelect={handleSelectConversation}
-				/>
+				<div
+					className={`shrink-0 overflow-hidden transition-[width] duration-200 ${sidebarOpen ? "w-64" : "w-0"}`}
+				>
+					<ConversationSidebar
+						sessionId={sessionId}
+						activeId={activeConversationId}
+						onSelect={handleSelectConversation}
+					/>
+				</div>
 
 				<div className="min-h-0 flex-1 overflow-hidden">
 					{activeConversationId ? (
