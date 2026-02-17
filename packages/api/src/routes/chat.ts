@@ -333,22 +333,24 @@ chatRoutes.post("/stream", async (c) => {
 		}
 	}
 
-	// Resolve image paths for any attachments on the last user message
-	let imagePaths: string[] = [];
-	if (!rewindToMessageId && attachmentIds && attachmentIds.length > 0) {
-		const attachments = await db.chatAttachment.findMany({
-			where: { id: { in: attachmentIds } },
-			select: { diskPath: true },
-		});
-		imagePaths = attachments.map((a) => a.diskPath);
-	}
-
-	// Load full message history from DB
+	// Load full message history from DB (include attachments for image paths)
 	const history = await db.message.findMany({
 		where: { conversationId },
 		orderBy: { createdAt: "asc" },
-		select: { role: true, content: true },
+		select: {
+			role: true,
+			content: true,
+			attachments: { select: { diskPath: true } },
+		},
 	});
+
+	// Collect image paths from all messages in the conversation
+	const imagePaths: string[] = [];
+	for (const msg of history) {
+		for (const att of msg.attachments) {
+			if (att.diskPath) imagePaths.push(att.diskPath);
+		}
+	}
 
 	// Auto-title on first user message
 	if (history.length === 1) {

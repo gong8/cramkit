@@ -87,24 +87,17 @@ export function createCramKitChatAdapter(
 					.map((part) => part.text)
 					.join("") || "";
 
-			// Extract attachment IDs from image parts in content
-			const contentImageIds =
-				lastMessage?.content
-					.filter((part): part is { type: "image"; image: string } => part.type === "image")
-					.map((part) => {
-						// URL format: /api/chat/attachments/{id}
-						const match = part.image.match(/\/attachments\/([^/]+)$/);
-						return match?.[1];
-					})
-					.filter((id): id is string => !!id) ?? [];
-
-			// Also check the attachments property (assistant-ui may not merge into content)
-			const msgAttachments = (lastMessage as Record<string, unknown>)?.attachments as
-				| Array<{ id: string }>
-				| undefined;
-			const attachmentPropIds = msgAttachments?.map((a) => a.id).filter(Boolean) ?? [];
-
-			const attachmentIds = [...new Set([...contentImageIds, ...attachmentPropIds])];
+			// Extract attachment IDs from the message's attachments array.
+			// assistant-ui puts images in message.attachments (not message.content),
+			// each with an `id` matching our upload response ID.
+			const attachmentIds: string[] = [];
+			if (lastMessage && "attachments" in lastMessage && Array.isArray(lastMessage.attachments)) {
+				for (const att of lastMessage.attachments) {
+					if (att && typeof att === "object" && "id" in att && typeof att.id === "string" && att.id) {
+						attachmentIds.push(att.id);
+					}
+				}
+			}
 
 			// Detect retry: check if the last user message has an existing ID (from history)
 			const lastUserMsg = lastMessage;
