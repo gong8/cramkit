@@ -319,7 +319,7 @@ function AssistantMessage() {
 	return (
 		<MessagePrimitive.Root className="group flex px-4 py-2">
 			<div className="flex flex-col gap-1 max-w-full">
-				<div className="prose prose-sm rounded-2xl bg-muted px-4 py-2">
+				<div className="prose prose-sm max-w-none rounded-2xl bg-muted px-4 py-2">
 					<MessagePrimitive.Content
 						components={{
 							Text: MarkdownText,
@@ -659,7 +659,7 @@ function ReconnectStreamView({ stream }: { stream: ReconnectStream }) {
 	return (
 		<div className="group flex px-4 py-2">
 			<div className="flex flex-col gap-1 max-w-full">
-				<div className="prose prose-sm rounded-2xl bg-muted px-4 py-2">
+				<div className="prose prose-sm max-w-none rounded-2xl bg-muted px-4 py-2">
 					{stream.thinkingText && <ReasoningDisplay type="reasoning" text={stream.thinkingText} />}
 					{Array.from(stream.toolCalls.values()).map((tc) => {
 						const hasResult = tc.result !== undefined;
