@@ -20,7 +20,9 @@ import {
 	useAttachmentRuntime,
 	useComposerRuntime,
 	useLocalRuntime,
+	useMessage,
 	useMessagePartImage,
+	useMessageRuntime,
 	useThreadRuntime,
 } from "@assistant-ui/react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
@@ -41,14 +43,15 @@ import {
 	Pencil,
 	Plus,
 	RefreshCw,
+	RotateCcw,
 	Send,
 	Square,
 	Trash2,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -71,6 +74,16 @@ const TOOL_LABELS: Record<string, (args: Record<string, unknown>) => string> = {
 	mcp__cramkit__list_past_papers: () => "Listed past papers",
 	mcp__cramkit__list_problem_sheets: () => "Listed problem sheets",
 	mcp__cramkit__get_past_paper: () => "Read past paper",
+	Read: (a) => {
+		const path = typeof a.file_path === "string" ? a.file_path : "";
+		const name = path.split("/").pop() || path;
+		return name ? `Read file: ${name}` : "Read file";
+	},
+	mcp__images__view_image: (a) => {
+		const path = typeof a.file_path === "string" ? a.file_path : "";
+		const name = path.split("/").pop() || "image";
+		return `Viewing ${name}`;
+	},
 };
 
 function getToolLabel(toolName: string, args: Record<string, unknown>): string {
@@ -270,16 +283,18 @@ function UserMessage() {
 				<div className="rounded-2xl bg-primary px-4 py-2 text-primary-foreground">
 					<MessagePrimitive.Content components={{ Image: UserImagePart }} />
 				</div>
-				<div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-					<ActionBarPrimitive.Root className="flex items-center gap-0.5">
-						<ActionBarPrimitive.Edit className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-							<Pencil className="h-3 w-3" />
+				<div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+					<MessageTimestamp />
+					<ActionBarPrimitive.Root className="flex items-center gap-1">
+						<RetryButton />
+						<ActionBarPrimitive.Edit className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+							<Pencil className="h-4 w-4" />
 						</ActionBarPrimitive.Edit>
 						<ActionBarPrimitive.Copy
 							copiedDuration={2000}
-							className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+							className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
 						>
-							<ClipboardCopy className="h-3 w-3" />
+							<ClipboardCopy className="h-4 w-4" />
 						</ActionBarPrimitive.Copy>
 					</ActionBarPrimitive.Root>
 				</div>
@@ -315,16 +330,17 @@ function AssistantMessage() {
 						}}
 					/>
 				</div>
-				<div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-					<ActionBarPrimitive.Root className="flex items-center gap-0.5">
+				<div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+					<MessageTimestamp />
+					<ActionBarPrimitive.Root className="flex items-center gap-1">
 						<ActionBarPrimitive.Copy
 							copiedDuration={2000}
-							className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+							className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
 						>
-							<ClipboardCopy className="h-3 w-3" />
+							<ClipboardCopy className="h-4 w-4" />
 						</ActionBarPrimitive.Copy>
-						<ActionBarPrimitive.Reload className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-							<RefreshCw className="h-3 w-3" />
+						<ActionBarPrimitive.Reload className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+							<RefreshCw className="h-4 w-4" />
 						</ActionBarPrimitive.Reload>
 					</ActionBarPrimitive.Root>
 				</div>
@@ -346,6 +362,108 @@ function EditComposer() {
 				</ComposerPrimitive.Send>
 			</div>
 		</ComposerPrimitive.Root>
+	);
+}
+
+// ─── Message Timestamp ───
+
+function formatTimestamp(date: Date): string {
+	return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function MessageTimestamp() {
+	const createdAt = useMessage((m) => m.createdAt);
+	if (!createdAt) return null;
+	return (
+		<span className="text-xs text-muted-foreground/60 select-none">
+			{formatTimestamp(createdAt)}
+		</span>
+	);
+}
+
+// ─── Retry with Confirmation ───
+
+function RewindConfirmDialog({
+	open,
+	onConfirm,
+	onCancel,
+}: {
+	open: boolean;
+	onConfirm: () => void;
+	onCancel: () => void;
+}) {
+	// Close on Escape
+	useEffect(() => {
+		if (!open) return;
+		const handleKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") onCancel();
+		};
+		document.addEventListener("keydown", handleKey);
+		return () => document.removeEventListener("keydown", handleKey);
+	}, [open, onCancel]);
+
+	if (!open) return null;
+
+	return (
+		<div
+			className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+			onClick={onCancel}
+			onKeyDown={(e) => e.key === "Escape" && onCancel()}
+		>
+			<div
+				className="rounded-xl border border-border bg-background p-6 shadow-lg max-w-sm mx-4"
+				onClick={(e) => e.stopPropagation()}
+				onKeyDown={(e) => e.stopPropagation()}
+			>
+				<h3 className="font-semibold text-sm mb-2">Retry from here?</h3>
+				<p className="text-sm text-muted-foreground mb-4">
+					This will delete all messages after this point and regenerate the response. This cannot be
+					undone.
+				</p>
+				<div className="flex justify-end gap-2">
+					<button
+						type="button"
+						onClick={onCancel}
+						className="rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						onClick={onConfirm}
+						className="rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90 transition-colors"
+					>
+						Retry
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function RetryButton() {
+	const [showConfirm, setShowConfirm] = useState(false);
+	const messageRuntime = useMessageRuntime();
+
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => setShowConfirm(true)}
+				className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+				title="Retry from here"
+			>
+				<RotateCcw className="h-4 w-4" />
+			</button>
+			<RewindConfirmDialog
+				open={showConfirm}
+				onConfirm={() => {
+					setShowConfirm(false);
+					messageRuntime.reload();
+				}}
+				onCancel={() => setShowConfirm(false)}
+			/>
+		</>
 	);
 }
 
@@ -542,9 +660,7 @@ function ReconnectStreamView({ stream }: { stream: ReconnectStream }) {
 		<div className="group flex px-4 py-2">
 			<div className="flex flex-col gap-1 max-w-full">
 				<div className="prose prose-sm rounded-2xl bg-muted px-4 py-2">
-					{stream.thinkingText && (
-						<ReasoningDisplay type="reasoning" text={stream.thinkingText} />
-					)}
+					{stream.thinkingText && <ReasoningDisplay type="reasoning" text={stream.thinkingText} />}
 					{Array.from(stream.toolCalls.values()).map((tc) => {
 						const hasResult = tc.result !== undefined;
 						const label = getToolLabel(tc.toolName, tc.args ?? {});
@@ -571,10 +687,7 @@ function ReconnectStreamView({ stream }: { stream: ReconnectStream }) {
 						);
 					})}
 					{cleanContent && (
-						<ReactMarkdown
-							remarkPlugins={[remarkGfm, remarkMath]}
-							rehypePlugins={[rehypeKatex]}
-						>
+						<ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
 							{cleanContent}
 						</ReactMarkdown>
 					)}
@@ -599,8 +712,27 @@ function ChatThread({
 }) {
 	const queryClient = useQueryClient();
 
+	const adapterStreamingRef = useRef(false);
 	const adapter = useMemo(
-		() => createCramKitChatAdapter(sessionId, conversationId),
+		() => {
+			const base = createCramKitChatAdapter(sessionId, conversationId);
+			return {
+				...base,
+				async *run(options: Parameters<typeof base.run>[0]) {
+					adapterStreamingRef.current = true;
+					try {
+						const result = base.run(options);
+						if (Symbol.asyncIterator in result) {
+							yield* result;
+						} else {
+							yield await result;
+						}
+					} finally {
+						adapterStreamingRef.current = false;
+					}
+				},
+			};
+		},
 		[sessionId, conversationId],
 	);
 
@@ -735,6 +867,10 @@ function ChatThread({
 	const wasStreamingRef = useRef(false);
 
 	const doReconnect = useCallback(async () => {
+		// Skip reconnect if the adapter is actively streaming — it already
+		// consumes the SSE response. Reconnecting would show a duplicate message.
+		if (adapterStreamingRef.current) return;
+
 		// Abort any previous reconnect attempt
 		reconnectAbortRef.current?.abort();
 		const abort = new AbortController();
@@ -742,7 +878,7 @@ function ChatThread({
 
 		try {
 			const status = await fetchStreamStatus(conversationId);
-			if (abort.signal.aborted) return;
+			if (abort.signal.aborted || adapterStreamingRef.current) return;
 
 			if (!status.active || status.status !== "streaming") {
 				// No active stream — if we were previously streaming (tab was backgrounded
@@ -757,10 +893,10 @@ function ChatThread({
 			}
 
 			// Active background stream — reconnect via dedicated endpoint
-			const response = await fetch(
-				`/api/chat/conversations/${conversationId}/stream-reconnect`,
-				{ method: "POST", signal: abort.signal },
-			);
+			const response = await fetch(`/api/chat/conversations/${conversationId}/stream-reconnect`, {
+				method: "POST",
+				signal: abort.signal,
+			});
 
 			if (!response.ok || abort.signal.aborted) return;
 
@@ -926,7 +1062,10 @@ function ChatThread({
 				</div>
 
 				<ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-					<ThreadPrimitive.Viewport ref={reconnectViewportRef} className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
+					<ThreadPrimitive.Viewport
+						ref={reconnectViewportRef}
+						className="min-h-0 flex-1 overflow-y-auto scroll-smooth"
+					>
 						<ThreadPrimitive.Empty>
 							<div className="flex h-full items-center justify-center">
 								<p className="text-muted-foreground">
@@ -941,9 +1080,7 @@ function ChatThread({
 								EditComposer,
 							}}
 						/>
-						{reconnectStream && (
-							<ReconnectStreamView stream={reconnectStream} />
-						)}
+						{reconnectStream && <ReconnectStreamView stream={reconnectStream} />}
 					</ThreadPrimitive.Viewport>
 
 					<ThreadPrimitive.ScrollToBottom className="absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background p-2 shadow-md text-muted-foreground hover:text-foreground hover:bg-accent transition-all z-10 disabled:pointer-events-none disabled:opacity-0">

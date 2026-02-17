@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import sharp from "sharp";
 import { createLogger } from "@cramkit/shared";
 
 const log = createLogger("api");
@@ -51,11 +52,38 @@ function getCliModel(model: string): string {
 	return "sonnet";
 }
 
+/** Max image dimension for CLI consumption — keeps images under the Read tool's 25k token limit */
+const CLI_IMAGE_MAX_DIM = 768;
+const CLI_IMAGE_QUALITY = 70;
+
 /** Create a per-invocation temp directory so concurrent streams never share files */
 function createInvocationDir(): string {
 	const dir = join(BASE_TEMP_DIR, randomUUID().slice(0, 12));
 	mkdirSync(dir, { recursive: true });
 	return dir;
+}
+
+/**
+ * Resize images so the CLI's Read tool can process them (25k token limit).
+ * Returns paths to resized copies in the invocation temp directory.
+ */
+async function resizeImagesForCli(images: string[], dir: string): Promise<string[]> {
+	const resized: string[] = [];
+	for (let i = 0; i < images.length; i++) {
+		const outPath = join(dir, `image_${i}.jpg`);
+		try {
+			await sharp(images[i])
+				.resize(CLI_IMAGE_MAX_DIM, CLI_IMAGE_MAX_DIM, { fit: "inside", withoutEnlargement: true })
+				.jpeg({ quality: CLI_IMAGE_QUALITY })
+				.toFile(outPath);
+			resized.push(outPath);
+		} catch (err) {
+			log.warn(`Failed to resize image ${images[i]}: ${err}`);
+			// Fall back to original — the CLI may still error, but at least we tried
+			resized.push(images[i]);
+		}
+	}
+	return resized;
 }
 
 function writeTempFile(dir: string, filename: string, content: string): string {
@@ -64,12 +92,98 @@ function writeTempFile(dir: string, filename: string, content: string): string {
 	return filePath;
 }
 
-function writeMcpConfig(dir: string): string {
-	return writeTempFile(
-		dir,
-		"mcp-config.json",
-		JSON.stringify({ mcpServers: { cramkit: { type: "http", url: MCP_URL } } }),
-	);
+/**
+ * Generate a minimal MCP stdio server script that serves image files.
+ * Only allows reading files whose paths are in the provided allowlist.
+ * This is used instead of unblocking the Read tool, which the agent abuses
+ * to read arbitrary files (including CLI overflow dumps).
+ */
+function writeImageViewerMcp(dir: string, allowedPaths: string[]): string {
+	const allowedJson = JSON.stringify(allowedPaths);
+	const script = `#!/usr/bin/env node
+const readline = require("readline");
+const fs = require("fs");
+const path = require("path");
+
+const ALLOWED = new Set(${allowedJson});
+
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+
+rl.on("line", (line) => {
+  let req;
+  try { req = JSON.parse(line); } catch { return; }
+  const id = req.id;
+  switch (req.method) {
+    case "initialize":
+      send({ jsonrpc: "2.0", id, result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "image-viewer", version: "1.0.0" },
+      }});
+      break;
+    case "notifications/initialized":
+      break;
+    case "tools/list":
+      send({ jsonrpc: "2.0", id, result: { tools: [{
+        name: "view_image",
+        description: "View an attached image file. Returns the image for visual analysis.",
+        inputSchema: {
+          type: "object",
+          properties: { file_path: { type: "string", description: "Absolute path to the image file" } },
+          required: ["file_path"],
+        },
+      }]}});
+      break;
+    case "tools/call": {
+      const filePath = req.params?.arguments?.file_path;
+      if (!filePath || !ALLOWED.has(path.resolve(filePath))) {
+        send({ jsonrpc: "2.0", id, result: {
+          content: [{ type: "text", text: "Access denied: only attached images can be viewed." }],
+          isError: true,
+        }});
+        break;
+      }
+      try {
+        const data = fs.readFileSync(filePath);
+        const ext = path.extname(filePath).toLowerCase();
+        const mime = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : "image/jpeg";
+        send({ jsonrpc: "2.0", id, result: {
+          content: [{ type: "image", data: data.toString("base64"), mimeType: mime }],
+        }});
+      } catch (err) {
+        send({ jsonrpc: "2.0", id, result: {
+          content: [{ type: "text", text: "Error: " + err.message }],
+          isError: true,
+        }});
+      }
+      break;
+    }
+    default:
+      if (id !== undefined) {
+        send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+      }
+  }
+});
+`;
+	return writeTempFile(dir, "image-viewer-mcp.js", script);
+}
+
+function writeMcpConfig(dir: string, imagePaths?: string[]): string {
+	const servers: Record<string, unknown> = {
+		cramkit: { type: "http", url: MCP_URL },
+	};
+
+	if (imagePaths && imagePaths.length > 0) {
+		const scriptPath = writeImageViewerMcp(dir, imagePaths);
+		servers.images = {
+			type: "stdio",
+			command: "node",
+			args: [scriptPath],
+		};
+	}
+
+	return writeTempFile(dir, "mcp-config.json", JSON.stringify({ mcpServers: servers }));
 }
 
 function writeSystemPrompt(dir: string, content: string): string {
@@ -113,11 +227,16 @@ function buildPrompt(messages: CliMessage[], images?: string[]): string {
 		}
 	}
 
-	// When images are attached, instruct the model to read them using the Read tool
+	// When images are attached, instruct the model to view them using the MCP image viewer
 	if (images && images.length > 0) {
 		const imageList = images.map((p) => `  - ${p}`).join("\n");
 		parts.push(
-			`<attached_images>\nThe user has attached images to this conversation. Use the Read tool to view each image file:\n${imageList}\n</attached_images>`,
+			[
+				"<attached_images>",
+				"The user has attached images to this conversation. Use the mcp__images__view_image tool to view each image:",
+				imageList,
+				"</attached_images>",
+			].join("\n"),
 		);
 	}
 
@@ -309,31 +428,31 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
  */
 export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Array> {
 	const invocationDir = createInvocationDir();
-	const mcpConfigPath = writeMcpConfig(invocationDir);
 	const systemPromptPath = writeSystemPrompt(invocationDir, options.systemPrompt);
 	const model = getCliModel(options.model ?? LLM_MODEL);
 	const hasImages = options.images && options.images.length > 0;
-	const prompt = buildPrompt(options.messages, options.images) || (hasImages ? "Describe this image." : "");
-
-	// When images are attached, unblock the Read tool so the model can view them
-	const disallowedTools = hasImages
-		? BLOCKED_BUILTIN_TOOLS.filter((t) => t !== "Read")
-		: BLOCKED_BUILTIN_TOOLS;
-
-	const args = buildCliArgs(
-		model,
-		mcpConfigPath,
-		systemPromptPath,
-		disallowedTools,
-		prompt,
-	);
-
-	const startMs = performance.now();
-	log.info(`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${prompt.length} chars`);
 
 	return new ReadableStream({
-		start(controller) {
+		async start(controller) {
 			const encoder = new TextEncoder();
+
+			// Resize images for CLI consumption (must happen before building prompt)
+			let cliImagePaths = options.images;
+			if (hasImages) {
+				cliImagePaths = await resizeImagesForCli(options.images!, invocationDir);
+			}
+
+			// Write MCP config — includes image viewer MCP server when images are attached
+			const mcpConfigPath = writeMcpConfig(invocationDir, cliImagePaths);
+
+			const prompt =
+				buildPrompt(options.messages, cliImagePaths) || (hasImages ? "Describe this image." : "");
+
+			// All builtin tools stay blocked — images are served via MCP, not Read
+			const args = buildCliArgs(model, mcpConfigPath, systemPromptPath, BLOCKED_BUILTIN_TOOLS, prompt);
+
+			const startMs = performance.now();
+			log.info(`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${prompt.length} chars`);
 
 			function emitSSE(event: string, data: string): void {
 				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
