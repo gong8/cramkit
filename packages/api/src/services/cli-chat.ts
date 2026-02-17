@@ -52,9 +52,9 @@ function getCliModel(model: string): string {
 	return "sonnet";
 }
 
-/** Max image dimension for CLI consumption — keeps images under the Read tool's 25k token limit */
-const CLI_IMAGE_MAX_DIM = 768;
-const CLI_IMAGE_QUALITY = 70;
+/** Max image dimension for vision — balances quality vs token cost */
+const CLI_IMAGE_MAX_DIM = 1536;
+const CLI_IMAGE_QUALITY = 80;
 
 /** Create a per-invocation temp directory so concurrent streams never share files */
 function createInvocationDir(): string {
