@@ -307,7 +307,7 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 	const mcpConfigPath = writeMcpConfig(invocationDir);
 	const systemPromptPath = writeSystemPrompt(invocationDir, options.systemPrompt);
 	const model = getCliModel(options.model ?? LLM_MODEL);
-	const prompt = buildPrompt(options.messages);
+	const prompt = buildPrompt(options.messages) || (options.images?.length ? "Describe this image." : "");
 	const args = buildCliArgs(
 		model,
 		mcpConfigPath,

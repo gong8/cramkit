@@ -87,15 +87,24 @@ export function createCramKitChatAdapter(
 					.map((part) => part.text)
 					.join("") || "";
 
-			// Extract attachment IDs from image parts
-			const attachmentIds = lastMessage?.content
-				.filter((part): part is { type: "image"; image: string } => part.type === "image")
-				.map((part) => {
-					// URL format: /api/chat/attachments/{id}
-					const match = part.image.match(/\/attachments\/([^/]+)$/);
-					return match?.[1];
-				})
-				.filter((id): id is string => !!id);
+			// Extract attachment IDs from image parts in content
+			const contentImageIds =
+				lastMessage?.content
+					.filter((part): part is { type: "image"; image: string } => part.type === "image")
+					.map((part) => {
+						// URL format: /api/chat/attachments/{id}
+						const match = part.image.match(/\/attachments\/([^/]+)$/);
+						return match?.[1];
+					})
+					.filter((id): id is string => !!id) ?? [];
+
+			// Also check the attachments property (assistant-ui may not merge into content)
+			const msgAttachments = (lastMessage as Record<string, unknown>)?.attachments as
+				| Array<{ id: string }>
+				| undefined;
+			const attachmentPropIds = msgAttachments?.map((a) => a.id).filter(Boolean) ?? [];
+
+			const attachmentIds = [...new Set([...contentImageIds, ...attachmentPropIds])];
 
 			// Detect retry: check if the last user message has an existing ID (from history)
 			const lastUserMsg = lastMessage;
@@ -116,7 +125,7 @@ export function createCramKitChatAdapter(
 					sessionId,
 					conversationId,
 					message: userText,
-					attachmentIds: attachmentIds?.length ? attachmentIds : undefined,
+					attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
 					rewindToMessageId,
 				}),
 				signal: abortSignal,

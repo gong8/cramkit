@@ -352,7 +352,8 @@ chatRoutes.post("/stream", async (c) => {
 
 	// Auto-title on first user message
 	if (history.length === 1) {
-		const title = message.length > 50 ? `${message.slice(0, 50)}…` : message;
+		const titleSource = message || "Image";
+		const title = titleSource.length > 50 ? `${titleSource.slice(0, 50)}…` : titleSource;
 		await db.conversation.update({
 			where: { id: conversationId },
 			data: { title },
