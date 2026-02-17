@@ -378,6 +378,18 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 						continue;
 					}
 
+					// Debug: log all non-delta CLI messages to understand event format
+					{
+						const evtType = (msg as { event?: { type?: string } }).event?.type;
+						if (evtType !== "content_block_delta" && msg.type !== "stream_event") {
+							log.info(`cli-chat EVENT [${msg.type}]: ${JSON.stringify(msg).slice(0, 400)}`);
+						} else if (evtType && evtType !== "content_block_delta") {
+							log.info(
+								`cli-chat EVENT [stream_event/${evtType}]: ${JSON.stringify(msg).slice(0, 400)}`,
+							);
+						}
+					}
+
 					parser.process(msg);
 
 					if (msg.type === "result") {

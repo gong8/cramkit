@@ -2,6 +2,7 @@ import { IndexTab } from "@/components/IndexTab";
 import { MaterialsTab } from "@/components/MaterialsTab";
 import {
 	type IndexStatus,
+	type Session,
 	cancelIndexing,
 	clearSessionGraph,
 	exportSession,
@@ -96,8 +97,12 @@ export function SessionDetail() {
 
 		const timer = setTimeout(() => {
 			updateSession(sessionId, patch)
-				.then(() => {
+				.then((updated) => {
 					savedValues.current = { scope, notes, examDate };
+					queryClient.setQueryData(
+						["session", sessionId],
+						(old: Session | undefined) => (old ? { ...old, ...updated } : old),
+					);
 				})
 				.catch((err) => {
 					log.error("Auto-save failed", err);

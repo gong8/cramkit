@@ -265,8 +265,12 @@ chatRoutes.post("/stream", async (c) => {
 		return c.json({ error: "Conversation not found" }, 404);
 	}
 
-	// Check for active stream — reconnection case
-	if (getStream(conversationId)) {
+	// Check for active stream — reconnection case.
+	// Only reconnect if the stream is still actively streaming.
+	// Completed streams linger in the map for the cleanup delay; treating them
+	// as "active" would replay old events and silently drop the new user message.
+	const existingStream = getStream(conversationId);
+	if (existingStream && existingStream.status === "streaming") {
 		log.info(`POST /chat/stream — reconnecting to active stream for ${conversationId}`);
 		return streamSSE(c, async (sseStream) => {
 			const handle = subscribe(conversationId, async (event, data) => {

@@ -8,7 +8,7 @@
 		"lint:fix": "biome check --write .",
 		"db:generate": "prisma generate",
 		"db:push": "prisma db push",
-		"kill": "lsof -ti :8787,:5173 | xargs kill -9 2>/dev/null; echo 'Killed ports 8787, 5173'",
+		"kill": "for p in 8787 5173 3001; do lsof -ti :$p | xargs kill -9 2>/dev/null; done; echo 'Killed ports 8787, 5173, 3001'",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",

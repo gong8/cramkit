@@ -65,17 +65,26 @@ async function main() {
 		return;
 	}
 
-	const transport = new StreamableHTTPServerTransport({
-		sessionIdGenerator: undefined, // stateless mode
-	});
-	await server.connect(transport);
-
-	const httpServer = createServer((req, res) => {
+	const httpServer = createServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://localhost:${MCP_PORT}`);
 
 		if (url.pathname === "/mcp") {
 			log.debug(`HTTP ${req.method} /mcp`);
-			transport.handleRequest(req, res);
+			try {
+				// Stateless mode: close previous transport and create a new one per request
+				await server.close();
+				const transport = new StreamableHTTPServerTransport({
+					sessionIdGenerator: undefined,
+				});
+				await server.connect(transport);
+				await transport.handleRequest(req, res);
+			} catch (err) {
+				log.error("MCP request failed", err);
+				if (!res.headersSent) {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Internal server error" }));
+				}
+			}
 			return;
 		}
 
