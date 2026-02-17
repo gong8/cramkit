@@ -536,12 +536,24 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 				return;
 			}
 
-			const parser = createStreamParser(emitSSE);
+			let controllerClosed = false;
+			const safeEmitSSE: SSEEmitter = (event, data) => {
+				if (controllerClosed) return;
+				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+			};
 
-			proc.on("close", () => controller.close());
-			proc.on("error", () => controller.close());
+			const closeController = () => {
+				if (controllerClosed) return;
+				controllerClosed = true;
+				controller.close();
+			};
 
-			wireProcessLifecycle(proc, emitSSE, parser, startMs, invocationDir, options.signal);
+			const parser = createStreamParser(safeEmitSSE);
+
+			proc.on("close", closeController);
+			proc.on("error", closeController);
+
+			wireProcessLifecycle(proc, safeEmitSSE, parser, startMs, invocationDir, options.signal);
 		},
 	});
 }
