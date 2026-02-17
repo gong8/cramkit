@@ -1,13 +1,13 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@cramkit/shared";
 
 const log = createLogger("api");
 
-const TEMP_DIR = join(tmpdir(), `cramkit-cli-${randomUUID().slice(0, 8)}`);
+const BASE_TEMP_DIR = join(tmpdir(), "cramkit-cli");
 const MCP_URL = process.env.CRAMKIT_MCP_URL || "http://127.0.0.1:3001/mcp";
 const LLM_MODEL = process.env.LLM_MODEL || "claude-opus-4-6";
 
@@ -51,22 +51,29 @@ function getCliModel(model: string): string {
 	return "sonnet";
 }
 
-function writeTempFile(filename: string, content: string): string {
-	mkdirSync(TEMP_DIR, { recursive: true });
-	const filePath = join(TEMP_DIR, filename);
+/** Create a per-invocation temp directory so concurrent streams never share files */
+function createInvocationDir(): string {
+	const dir = join(BASE_TEMP_DIR, randomUUID().slice(0, 12));
+	mkdirSync(dir, { recursive: true });
+	return dir;
+}
+
+function writeTempFile(dir: string, filename: string, content: string): string {
+	const filePath = join(dir, filename);
 	writeFileSync(filePath, content);
 	return filePath;
 }
 
-function writeMcpConfig(): string {
+function writeMcpConfig(dir: string): string {
 	return writeTempFile(
+		dir,
 		"mcp-config.json",
 		JSON.stringify({ mcpServers: { cramkit: { type: "http", url: MCP_URL } } }),
 	);
 }
 
-function writeSystemPrompt(content: string): string {
-	return writeTempFile("system-prompt.txt", content + SYSTEM_PROMPT_SUFFIX);
+function writeSystemPrompt(dir: string, content: string): string {
+	return writeTempFile(dir, "system-prompt.txt", content + SYSTEM_PROMPT_SUFFIX);
 }
 
 interface CliMessage {
@@ -288,8 +295,9 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
  * Emits structured SSE events for text, tool calls, thinking, and results.
  */
 export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Array> {
-	const mcpConfigPath = writeMcpConfig();
-	const systemPromptPath = writeSystemPrompt(options.systemPrompt);
+	const invocationDir = createInvocationDir();
+	const mcpConfigPath = writeMcpConfig(invocationDir);
+	const systemPromptPath = writeSystemPrompt(invocationDir, options.systemPrompt);
 	const model = getCliModel(options.model ?? LLM_MODEL);
 	const prompt = buildPrompt(options.messages);
 	const args = buildCliArgs(
@@ -315,7 +323,7 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 			let proc: ChildProcessWithoutNullStreams;
 			try {
 				proc = spawn("claude", args, {
-					cwd: TEMP_DIR,
+					cwd: invocationDir,
 					env: {
 						PATH: process.env.PATH,
 						HOME: process.env.HOME,
@@ -385,16 +393,26 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 				if (text) log.warn(`cli-chat stderr: ${text.slice(0, 300)}`);
 			});
 
+			function cleanupTempDir() {
+				try {
+					rmSync(invocationDir, { recursive: true, force: true });
+				} catch {
+					// best-effort cleanup
+				}
+			}
+
 			proc.on("close", (code) => {
 				const elapsed = (performance.now() - startMs).toFixed(0);
 				log.info(`cli-chat process exited code=${code} elapsed=${elapsed}ms`);
 				tryClose();
+				cleanupTempDir();
 			});
 
 			proc.on("error", (err) => {
 				log.error(`cli-chat process error: ${err.message}`);
 				emitSSE("error", JSON.stringify({ error: err.message }));
 				tryClose();
+				cleanupTempDir();
 			});
 		},
 	});

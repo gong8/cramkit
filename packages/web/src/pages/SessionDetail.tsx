@@ -10,6 +10,7 @@ import {
 	indexAllResources,
 	indexResource,
 	reindexAllResources,
+	retryFailedIndexing,
 	updateSession,
 } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
@@ -58,10 +59,12 @@ export function SessionDetail() {
 	// Collapsible details
 	const [detailsOpen, setDetailsOpen] = useState(false);
 
-	// Scope / notes with auto-save
+	// Scope / notes / examDate with auto-save
 	const [scope, setScope] = useState("");
 	const [notes, setNotes] = useState("");
+	const [examDate, setExamDate] = useState("");
 	const initialized = useRef(false);
+	const savedValues = useRef({ scope: "", notes: "", examDate: "" });
 
 	// Index All state
 	const [isIndexingAll, setIsIndexingAll] = useState(false);
@@ -70,19 +73,38 @@ export function SessionDetail() {
 
 	useEffect(() => {
 		if (session && !initialized.current) {
-			setScope(session.scope ?? "");
-			setNotes(session.notes ?? "");
+			const s = session.scope ?? "";
+			const n = session.notes ?? "";
+			const d = session.examDate
+				? new Date(session.examDate).toISOString().split("T")[0]
+				: "";
+			setScope(s);
+			setNotes(n);
+			setExamDate(d);
+			savedValues.current = { scope: s, notes: n, examDate: d };
 			initialized.current = true;
 		}
 	}, [session]);
 
 	useEffect(() => {
 		if (!initialized.current) return;
+		const patch: Record<string, string | null> = {};
+		if (scope !== savedValues.current.scope) patch.scope = scope || null;
+		if (notes !== savedValues.current.notes) patch.notes = notes || null;
+		if (examDate !== savedValues.current.examDate) patch.examDate = examDate || null;
+		if (Object.keys(patch).length === 0) return;
+
 		const timer = setTimeout(() => {
-			updateSession(sessionId, { scope: scope || null, notes: notes || null });
+			updateSession(sessionId, patch)
+				.then(() => {
+					savedValues.current = { scope, notes, examDate };
+				})
+				.catch((err) => {
+					log.error("Auto-save failed", err);
+				});
 		}, 800);
 		return () => clearTimeout(timer);
-	}, [scope, notes, sessionId]);
+	}, [scope, notes, examDate, sessionId]);
 
 	// Cleanup polling on unmount
 	useEffect(() => {
@@ -101,7 +123,8 @@ export function SessionDetail() {
 
 				const batch = status.batch;
 				const isDone = batch
-					? batch.batchCompleted >= batch.batchTotal || batch.cancelled
+					? batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal ||
+						batch.cancelled
 					: status.inProgress === 0 && status.indexed === status.total;
 
 				if (isDone) {
@@ -124,7 +147,11 @@ export function SessionDetail() {
 			.then((status) => {
 				if (cancelled) return;
 				const batch = status.batch;
-				if (batch && !batch.cancelled && batch.batchCompleted < batch.batchTotal) {
+				if (
+					batch &&
+					!batch.cancelled &&
+					batch.batchCompleted + (batch.batchFailed ?? 0) < batch.batchTotal
+				) {
 					setIndexStatus(status);
 					setIsIndexingAll(true);
 					startPolling();
@@ -211,6 +238,19 @@ export function SessionDetail() {
 		refetchSession();
 	}, [sessionId, refetchSession]);
 
+	const handleRetryFailed = useCallback(async () => {
+		log.info(`handleRetryFailed — session ${sessionId}`);
+		setIsIndexingAll(true);
+		setIndexStatus(null);
+		try {
+			await retryFailedIndexing(sessionId);
+			startPolling();
+		} catch (err) {
+			log.error("handleRetryFailed — failed", err);
+			setIsIndexingAll(false);
+		}
+	}, [sessionId, startPolling]);
+
 	const [isExporting, setIsExporting] = useState(false);
 
 	const handleExport = useCallback(async () => {
@@ -230,8 +270,8 @@ export function SessionDetail() {
 	if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
 	if (!session) return <p className="text-muted-foreground">Session not found.</p>;
 
-	const examDateFormatted = session.examDate
-		? new Date(session.examDate).toLocaleDateString("en-GB", {
+	const examDateFormatted = examDate
+		? new Date(`${examDate}T00:00:00`).toLocaleDateString("en-GB", {
 				day: "numeric",
 				month: "short",
 			})
@@ -334,6 +374,21 @@ export function SessionDetail() {
 						</div>
 						<div>
 							<label
+								htmlFor="examDate"
+								className="mb-1 block text-xs font-semibold uppercase text-muted-foreground"
+							>
+								Exam Date
+							</label>
+							<input
+								id="examDate"
+								type="date"
+								value={examDate}
+								onChange={(e) => setExamDate(e.target.value)}
+								className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+							/>
+						</div>
+						<div>
+							<label
 								htmlFor="notes"
 								className="mb-1 block text-xs font-semibold uppercase text-muted-foreground"
 							>
@@ -399,6 +454,7 @@ export function SessionDetail() {
 					onReindexAll={handleReindexAll}
 					onCancel={handleCancel}
 					onClearGraph={handleClearGraph}
+					onRetryFailed={handleRetryFailed}
 				/>
 			)}
 		</div>

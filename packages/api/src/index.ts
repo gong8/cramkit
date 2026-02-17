@@ -11,7 +11,10 @@ import { resourcesRoutes } from "./routes/resources.js";
 import { searchRoutes } from "./routes/search.js";
 import { sessionsRoutes } from "./routes/sessions.js";
 
+import { resumeInterruptedBatches } from "./lib/queue.js";
+
 await initDb();
+await resumeInterruptedBatches();
 
 const app = new Hono();
 

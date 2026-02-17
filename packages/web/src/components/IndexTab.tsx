@@ -40,7 +40,7 @@ function computeEta(status: IndexStatus): string | null {
 	const batch = status.batch;
 	if (!batch || batch.batchCompleted === 0) return null;
 
-	const remaining = batch.batchTotal - batch.batchCompleted;
+	const remaining = batch.batchTotal - batch.batchCompleted - (batch.batchFailed ?? 0);
 	if (remaining <= 0) return null;
 
 	if (status.avgDurationMs) {
@@ -63,6 +63,7 @@ interface IndexTabProps {
 	onReindexAll: () => void;
 	onCancel: () => void;
 	onClearGraph: () => Promise<void>;
+	onRetryFailed: () => void;
 }
 
 export function IndexTab({
@@ -74,6 +75,7 @@ export function IndexTab({
 	onReindexAll,
 	onCancel,
 	onClearGraph,
+	onRetryFailed,
 }: IndexTabProps) {
 	const [showClearGraphModal, setShowClearGraphModal] = useState(false);
 	const [isClearingGraph, setIsClearingGraph] = useState(false);
@@ -86,8 +88,12 @@ export function IndexTab({
 	const hasIndexedResources = resources.some((r) => r.isIndexed);
 
 	const batch = indexStatus?.batch;
+	const batchFailed = batch?.batchFailed ?? 0;
+	const batchHasFailures = batchFailed > 0;
 	const progressPercent =
-		batch && batch.batchTotal > 0 ? Math.round((batch.batchCompleted / batch.batchTotal) * 100) : 0;
+		batch && batch.batchTotal > 0
+			? Math.round(((batch.batchCompleted + batchFailed) / batch.batchTotal) * 100)
+			: 0;
 	const etaText = indexStatus ? computeEta(indexStatus) : null;
 
 	const handleClearGraph = async () => {
@@ -171,6 +177,16 @@ export function IndexTab({
 						Reindex All
 					</button>
 				)}
+				{!isIndexingAll && batchHasFailures && (
+					<button
+						type="button"
+						onClick={onRetryFailed}
+						className="flex items-center gap-1.5 rounded-md bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/20"
+					>
+						<RefreshCw className="h-4 w-4" />
+						Retry Failed ({batchFailed})
+					</button>
+				)}
 			</div>
 
 			{/* Progress section */}
@@ -210,7 +226,15 @@ export function IndexTab({
 									{r.status === "cancelled" && (
 										<X className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40" />
 									)}
+									{r.status === "failed" && (
+										<AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+									)}
 									<span className="min-w-0 flex-1 truncate">{r.name}</span>
+									{r.status === "failed" && r.errorMessage && (
+										<span className="max-w-[200px] truncate text-xs text-destructive">
+											{r.errorMessage}
+										</span>
+									)}
 									<span
 										className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
 											QUEUE_TYPE_COLORS[r.type] || QUEUE_TYPE_COLORS.OTHER
@@ -229,6 +253,30 @@ export function IndexTab({
 							))}
 						</div>
 					)}
+				</div>
+			)}
+
+			{/* Batch failures shown when not actively indexing */}
+			{!isIndexingAll && batch?.resources && batchHasFailures && (
+				<div className="space-y-2">
+					<p className="text-sm font-medium text-destructive">
+						{batchFailed} resource{batchFailed > 1 ? "s" : ""} failed
+					</p>
+					<div className="rounded-md border border-destructive/30 bg-destructive/5">
+						{batch.resources
+							.filter((r) => r.status === "failed")
+							.map((r: BatchResource) => (
+								<div key={r.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+									<AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+									<span className="min-w-0 flex-1 truncate">{r.name}</span>
+									{r.errorMessage && (
+										<span className="max-w-[250px] truncate text-xs text-destructive">
+											{r.errorMessage}
+										</span>
+									)}
+								</div>
+							))}
+					</div>
 				</div>
 			)}
 

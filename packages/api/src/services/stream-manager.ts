@@ -45,6 +45,13 @@ export function startStream(
 	cliStream: ReadableStream<Uint8Array>,
 	db: PrismaClient,
 ): ActiveStream {
+	// Guard: return existing stream if one is already running for this conversation
+	const existing = activeStreams.get(conversationId);
+	if (existing && existing.status === "streaming") {
+		log.warn(`stream-manager — stream already active for ${conversationId}, returning existing`);
+		return existing;
+	}
+
 	const stream: ActiveStream = {
 		conversationId,
 		events: [],

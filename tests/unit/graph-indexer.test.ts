@@ -233,7 +233,7 @@ describe("indexResourceGraph", () => {
 			},
 		});
 
-		await indexResourceGraph(unindexedResource.id);
+		await expect(indexResourceGraph(unindexedResource.id)).rejects.toThrow("Not content-indexed yet");
 
 		expect(chatCompletion).not.toHaveBeenCalled();
 		const resource = await db.resource.findUnique({ where: { id: unindexedResource.id } });
@@ -241,7 +241,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("skips resource not found", async () => {
-		await indexResourceGraph("nonexistent-id");
+		await expect(indexResourceGraph("nonexistent-id")).rejects.toThrow("Resource not found");
 		expect(chatCompletion).not.toHaveBeenCalled();
 	});
 
@@ -262,8 +262,8 @@ describe("indexResourceGraph", () => {
 		vi.mocked(chatCompletion).mockResolvedValue("This is not JSON at all {{{");
 		const { resources } = await seedPdeSession(db);
 
-		// Should not throw
-		await indexResourceGraph(resources[0].id);
+		// Should throw a GraphIndexError after exhausting retries
+		await expect(indexResourceGraph(resources[0].id)).rejects.toThrow(/Giving up/);
 
 		const resource = await db.resource.findUnique({ where: { id: resources[0].id } });
 		expect(resource?.isGraphIndexed).toBe(false);

@@ -69,6 +69,8 @@ export async function seedPdeSession(db: PrismaClient) {
 
 /** Delete all rows from all tables (in FK-safe order) */
 export async function cleanDb(db: PrismaClient) {
+	await db.indexJob.deleteMany();
+	await db.indexBatch.deleteMany();
 	await db.relationship.deleteMany();
 	await db.concept.deleteMany();
 	await db.chunk.deleteMany();

@@ -3,6 +3,17 @@ import { chatCompletion } from "./llm-client.js";
 
 const log = createLogger("api");
 
+export class GraphIndexError extends Error {
+	constructor(
+		message: string,
+		public readonly errorType: "llm_error" | "parse_error" | "db_error" | "unknown",
+		public readonly resourceId: string,
+	) {
+		super(message);
+		this.name = "GraphIndexError";
+	}
+}
+
 interface ExtractedConcept {
 	name: string;
 	description?: string;
@@ -242,13 +253,11 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 	});
 
 	if (!resource) {
-		log.error(`indexResourceGraph — resource ${resourceId} not found`);
-		return;
+		throw new GraphIndexError("Resource not found", "unknown", resourceId);
 	}
 
 	if (!resource.isIndexed) {
-		log.warn(`indexResourceGraph — resource ${resourceId} not content-indexed yet, skipping`);
-		return;
+		throw new GraphIndexError("Not content-indexed yet", "unknown", resourceId);
 	}
 
 	log.info(`indexResourceGraph — starting "${resource.name}" (${resourceId})`);
@@ -289,10 +298,12 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 				);
 			}
 			if (isLastAttempt) {
-				log.error(
-					`indexResourceGraph — giving up on "${resource.name}" after ${maxAttempts} attempts`,
+				const msg = `Giving up on "${resource.name}" after ${maxAttempts} attempts`;
+				throw new GraphIndexError(
+					msg,
+					error instanceof SyntaxError ? "parse_error" : "llm_error",
+					resourceId,
 				);
-				return;
 			}
 			log.info(
 				`indexResourceGraph — retrying "${resource.name}" (attempt ${attempt + 1}/${maxAttempts})...`,
@@ -301,6 +312,7 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 	}
 
 	// All DB writes happen atomically in a single transaction
+	try {
 	await db.$transaction(
 		async (tx) => {
 			// Delete existing system-created relationships for this resource before re-indexing
@@ -460,6 +472,14 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 		},
 		{ timeout: 30000 },
 	);
+	} catch (error) {
+		if (error instanceof GraphIndexError) throw error;
+		throw new GraphIndexError(
+			error instanceof Error ? error.message : String(error),
+			"db_error",
+			resourceId,
+		);
+	}
 
 	log.info(
 		`indexResourceGraph — completed "${resource.name}": ${result.concepts.length} concepts, ${result.file_concept_links.length + result.concept_concept_links.length + result.question_concept_links.length} relationships`,

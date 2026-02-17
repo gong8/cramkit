@@ -235,8 +235,11 @@ chatRoutes.post("/conversations/:id/stream-reconnect", async (c) => {
 			return;
 		}
 
-		// Wait for all events to be delivered (replay + live)
-		await handle.delivered;
+		try {
+			await handle.delivered;
+		} finally {
+			handle.unsubscribe();
+		}
 	});
 });
 
@@ -279,8 +282,11 @@ chatRoutes.post("/stream", async (c) => {
 				return;
 			}
 
-			// Wait for all events to be delivered (replay + live)
-			await handle.delivered;
+			try {
+				await handle.delivered;
+			} finally {
+				handle.unsubscribe();
+			}
 		});
 	}
 
@@ -484,7 +490,10 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 			return;
 		}
 
-		// Wait for all events to be delivered (replay + live)
-		await handle.delivered;
+		try {
+			await handle.delivered;
+		} finally {
+			handle.unsubscribe();
+		}
 	});
 });

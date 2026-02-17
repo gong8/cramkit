@@ -1,6 +1,13 @@
 import { createLogger, getDb, indexResourceRequestSchema } from "@cramkit/shared";
 import { Hono } from "hono";
-import { cancelSessionIndexing, enqueueGraphIndexing, enqueueSessionGraphIndexing, getIndexingQueueSize, getSessionBatchStatus } from "../lib/queue.js";
+import {
+	cancelSessionIndexing,
+	enqueueGraphIndexing,
+	enqueueSessionGraphIndexing,
+	getIndexingQueueSize,
+	getSessionBatchStatus,
+	retryFailedJobs,
+} from "../lib/queue.js";
 
 const log = createLogger("api");
 
@@ -106,11 +113,14 @@ graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 	const parsed = indexResourceRequestSchema.safeParse(body);
 
 	if (!parsed.success) {
-		log.warn(`POST /graph/sessions/${sessionId}/index-resource — validation failed`, parsed.error.flatten());
+		log.warn(
+			`POST /graph/sessions/${sessionId}/index-resource — validation failed`,
+			parsed.error.flatten(),
+		);
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
-	enqueueSessionGraphIndexing(sessionId, [parsed.data.resourceId]);
+	await enqueueSessionGraphIndexing(sessionId, [parsed.data.resourceId]);
 	log.info(`POST /graph/sessions/${sessionId}/index-resource — queued ${parsed.data.resourceId}`);
 	return c.json({ ok: true, resourceId: parsed.data.resourceId });
 });
@@ -150,18 +160,27 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 		resourceIds = resources.map((r) => r.id);
 	}
 
-	enqueueSessionGraphIndexing(sessionId, resourceIds);
+	await enqueueSessionGraphIndexing(sessionId, resourceIds);
 
-	log.info(`POST /graph/sessions/${sessionId}/index-all — queued ${resourceIds.length} resources (reindex=${reindex})`);
+	log.info(
+		`POST /graph/sessions/${sessionId}/index-all — queued ${resourceIds.length} resources (reindex=${reindex})`,
+	);
 	return c.json({ ok: true, queued: resourceIds.length });
 });
 
 // Cancel indexing for a session
 graphRoutes.post("/sessions/:sessionId/cancel-indexing", async (c) => {
 	const sessionId = c.req.param("sessionId");
-	const cancelled = cancelSessionIndexing(sessionId);
+	const cancelled = await cancelSessionIndexing(sessionId);
 	log.info(`POST /graph/sessions/${sessionId}/cancel-indexing — cancelled=${cancelled}`);
 	return c.json({ ok: true, cancelled });
+});
+
+// Retry failed indexing jobs for a session
+graphRoutes.post("/sessions/:sessionId/retry-failed", async (c) => {
+	const sessionId = c.req.param("sessionId");
+	const retried = await retryFailedJobs(sessionId);
+	return c.json({ ok: true, retried });
 });
 
 // Get full graph data (concepts + relationships) for a session
@@ -195,7 +214,7 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	]);
 
 	const inProgress = getIndexingQueueSize();
-	const batch = getSessionBatchStatus(sessionId);
+	const batch = await getSessionBatchStatus(sessionId);
 
 	// Calculate avg duration from historical data in this session
 	const durationStats = await db.resource.aggregate({
@@ -204,53 +223,14 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	});
 	const avgDurationMs = durationStats._avg.graphIndexDurationMs ?? null;
 
-	// Enrich batch with per-resource details
-	let batchPayload = null;
-	if (batch) {
-		const completedSet = new Set(batch.completedResourceIds);
-		const batchResources = await db.resource.findMany({
-			where: { id: { in: batch.resourceIds } },
-			select: { id: true, name: true, type: true, graphIndexDurationMs: true },
-		});
-		const resourceMap = new Map(batchResources.map((r) => [r.id, r]));
-
-		const resources = batch.resourceIds.map((id) => {
-			const r = resourceMap.get(id);
-			let status: "pending" | "indexing" | "completed" | "cancelled";
-			if (completedSet.has(id)) {
-				status = "completed";
-			} else if (batch.currentResourceId === id) {
-				status = "indexing";
-			} else if (batch.cancelled) {
-				status = "cancelled";
-			} else {
-				status = "pending";
-			}
-			return {
-				id,
-				name: r?.name ?? "Unknown",
-				type: r?.type ?? "OTHER",
-				status,
-				durationMs: completedSet.has(id) ? (r?.graphIndexDurationMs ?? null) : null,
-			};
-		});
-
-		batchPayload = {
-			batchTotal: batch.resourceIds.length,
-			batchCompleted: batch.completedResourceIds.length,
-			currentResourceId: batch.currentResourceId,
-			startedAt: batch.startedAt,
-			cancelled: batch.cancelled,
-			resources,
-		};
-	}
-
-	log.info(`GET /graph/sessions/${sessionId}/index-status — total=${total}, indexed=${indexed}, inProgress=${inProgress}`);
+	log.info(
+		`GET /graph/sessions/${sessionId}/index-status — total=${total}, indexed=${indexed}, inProgress=${inProgress}`,
+	);
 	return c.json({
 		total,
 		indexed,
 		inProgress,
 		avgDurationMs,
-		batch: batchPayload,
+		batch,
 	});
 });

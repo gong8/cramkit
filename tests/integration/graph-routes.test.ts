@@ -10,11 +10,13 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 
 vi.mock("../../packages/api/src/lib/queue.js", () => ({
 	enqueueGraphIndexing: vi.fn(),
-	enqueueSessionGraphIndexing: vi.fn(),
+	enqueueSessionGraphIndexing: vi.fn().mockResolvedValue("batch-id"),
 	enqueueProcessing: vi.fn(),
 	getIndexingQueueSize: vi.fn().mockReturnValue(0),
-	getSessionBatchStatus: vi.fn().mockReturnValue(null),
-	cancelSessionIndexing: vi.fn().mockReturnValue(false),
+	getSessionBatchStatus: vi.fn().mockResolvedValue(null),
+	cancelSessionIndexing: vi.fn().mockResolvedValue(false),
+	retryFailedJobs: vi.fn().mockResolvedValue(0),
+	resumeInterruptedBatches: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
@@ -159,7 +161,7 @@ describe("graph routes", () => {
 		const body = await res.json() as any;
 		expect(body.ok).toBe(true);
 		expect(body.resourceId).toBe(resources[0].id);
-		expect(enqueueGraphIndexing).toHaveBeenCalledWith(resources[0].id);
+		expect(enqueueSessionGraphIndexing).toHaveBeenCalledWith(session.id, [resources[0].id]);
 	});
 
 	it("POST /graph/sessions/:id/index-resource — invalid body → 400", async () => {

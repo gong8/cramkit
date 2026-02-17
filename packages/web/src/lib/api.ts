@@ -98,13 +98,17 @@ export interface BatchResource {
 	id: string;
 	name: string;
 	type: string;
-	status: "pending" | "indexing" | "completed" | "cancelled";
+	status: "pending" | "indexing" | "completed" | "cancelled" | "failed";
 	durationMs: number | null;
+	errorMessage: string | null;
+	errorType: string | null;
+	attempts: number;
 }
 
 export interface BatchStatus {
 	batchTotal: number;
 	batchCompleted: number;
+	batchFailed: number;
 	currentResourceId: string | null;
 	startedAt: number;
 	cancelled: boolean;
@@ -154,7 +158,13 @@ export async function createSession(data: {
 
 export function updateSession(
 	id: string,
-	data: { name?: string; module?: string | null; scope?: string | null; notes?: string | null },
+	data: {
+		name?: string;
+		module?: string | null;
+		scope?: string | null;
+		notes?: string | null;
+		examDate?: string | null;
+	},
 ): Promise<Session> {
 	log.info(`updateSession — ${id}`);
 	return request(`/sessions/${id}`, {
@@ -287,6 +297,11 @@ export function reindexAllResources(sessionId: string): Promise<void> {
 export function cancelIndexing(sessionId: string): Promise<void> {
 	log.info(`cancelIndexing — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/cancel-indexing`, { method: "POST" });
+}
+
+export function retryFailedIndexing(sessionId: string): Promise<void> {
+	log.info(`retryFailedIndexing — session=${sessionId}`);
+	return request(`/graph/sessions/${sessionId}/retry-failed`, { method: "POST" });
 }
 
 export function fetchIndexStatus(sessionId: string): Promise<IndexStatus> {

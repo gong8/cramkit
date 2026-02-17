@@ -1,7 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { getDb, initDb } from "@cramkit/shared";
+import { cleanDb } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/graph-indexer.js", () => ({
 	indexResourceGraph: vi.fn().mockResolvedValue(undefined),
+	GraphIndexError: class GraphIndexError extends Error {
+		constructor(
+			message: string,
+			public readonly errorType: string,
+			public readonly resourceId: string,
+		) {
+			super(message);
+			this.name = "GraphIndexError";
+		}
+	},
 }));
 
 vi.mock("../../packages/api/src/services/resource-processor.js", () => ({
@@ -15,12 +27,14 @@ import {
 	enqueueSessionGraphIndexing,
 	getIndexingQueueSize,
 	enqueueProcessing,
-	getQueueSize,
 } from "../../packages/api/src/lib/queue.js";
 
-beforeEach(() => {
+beforeEach(async () => {
 	vi.mocked(indexResourceGraph).mockReset().mockResolvedValue(undefined);
 	vi.mocked(processResource).mockReset().mockResolvedValue(undefined);
+	await initDb();
+	const db = getDb();
+	await cleanDb(db);
 });
 
 describe("queue", () => {
@@ -36,9 +50,24 @@ describe("queue", () => {
 	});
 
 	it("enqueueSessionGraphIndexing enqueues all resources", async () => {
-		const resourceIds = ["r1", "r2", "r3", "r4", "r5"];
+		const db = getDb();
 
-		enqueueSessionGraphIndexing("session-1", resourceIds);
+		// Create session + resources so DB operations succeed
+		const session = await db.session.create({ data: { name: "Test" } });
+		const resourceIds: string[] = [];
+		for (let i = 0; i < 5; i++) {
+			const r = await db.resource.create({
+				data: {
+					sessionId: session.id,
+					name: `Resource ${i}`,
+					type: "LECTURE_NOTES",
+					isIndexed: true,
+				},
+			});
+			resourceIds.push(r.id);
+		}
+
+		await enqueueSessionGraphIndexing(session.id, resourceIds);
 
 		await vi.waitFor(() => {
 			expect(indexResourceGraph).toHaveBeenCalledTimes(5);
