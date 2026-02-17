@@ -1,13 +1,10 @@
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock child_process.spawn
 const mockSpawn = vi.fn();
 vi.mock("child_process", () => ({
 	spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
-// Mock fs and os
 vi.mock("fs", () => ({
 	writeFileSync: vi.fn(),
 	mkdirSync: vi.fn(),
@@ -36,7 +33,6 @@ function setupMockProcess(stdout: string, exitCode = 0) {
 		proc.pid = 12345;
 		proc.kill = vi.fn();
 
-		// Schedule events after listeners are attached
 		process.nextTick(() => {
 			if (stdout) proc.stdout.emit("data", Buffer.from(stdout));
 			proc.emit("close", exitCode);
@@ -146,7 +142,6 @@ describe("chatCompletion", () => {
 
 		const args = mockSpawn.mock.calls[0][1] as string[];
 		expect(args).toContain("--append-system-prompt-file");
-		// The user prompt should be the last argument
 		expect(args[args.length - 1]).toBe("Hi");
 	});
 

@@ -49,15 +49,10 @@ function inferNodeType(title: string, depth: number): string {
 }
 
 /** Extract page number from MarkItDown page markers like <!-- Page 3 --> */
-function extractPageNumber(text: string): number | undefined {
+function extractPageNumber(text: string, mode: "first" | "last" = "last"): number | undefined {
 	const matches = [...text.matchAll(/<!--\s*Page\s+(\d+)\s*-->/gi)];
 	if (matches.length === 0) return undefined;
-	return Number.parseInt(matches[matches.length - 1][1], 10);
-}
-
-function extractStartPage(text: string): number | undefined {
-	const match = text.match(/<!--\s*Page\s+(\d+)\s*-->/i);
-	if (!match) return undefined;
+	const match = mode === "first" ? matches[0] : matches[matches.length - 1];
 	return Number.parseInt(match[1], 10);
 }
 
@@ -180,7 +175,7 @@ export function parseMarkdownTree(markdown: string, filename: string): TreeNode 
 		order: 0,
 		nodeType: "section",
 		children: [],
-		startPage: extractStartPage(processed),
+		startPage: extractPageNumber(processed, "first"),
 		endPage: extractPageNumber(processed),
 	};
 
@@ -233,7 +228,7 @@ function segmentToNode(seg: Segment): TreeNode {
 		order: 0,
 		nodeType: inferNodeType(seg.title, seg.level),
 		children: [],
-		startPage: extractStartPage(body),
+		startPage: extractPageNumber(body, "first"),
 		endPage: extractPageNumber(body),
 	};
 }
@@ -255,19 +250,27 @@ function buildTreeFromSegments(root: TreeNode, segments: Segment[]): void {
 	}
 }
 
+function isShortLeaf(node: TreeNode): boolean {
+	return node.children.length === 0 && node.content.length < 50;
+}
+
+function formatMergedLeaf(node: TreeNode): string {
+	return node.content ? `**${node.title}**: ${node.content}` : `**${node.title}**`;
+}
+
+function appendContent(existing: string, addition: string): string {
+	return existing ? `${existing}\n\n${addition}` : addition;
+}
+
 function mergeShortLeaves(node: TreeNode): void {
-	// Process children first (bottom-up)
 	for (const child of node.children) {
 		mergeShortLeaves(child);
 	}
 
-	// Merge short leaf children into parent
 	const kept: TreeNode[] = [];
 	for (const child of node.children) {
-		if (child.children.length === 0 && child.content.length < 50) {
-			// Merge into parent: append content with title as header
-			const merged = child.content ? `**${child.title}**: ${child.content}` : `**${child.title}**`;
-			node.content = node.content ? `${node.content}\n\n${merged}` : merged;
+		if (isShortLeaf(child)) {
+			node.content = appendContent(node.content, formatMergedLeaf(child));
 		} else {
 			child.order = kept.length;
 			kept.push(child);
@@ -277,13 +280,12 @@ function mergeShortLeaves(node: TreeNode): void {
 }
 
 /** Check if a markdown document contains headings (including PDF section numbers) */
+function isHeadingLine(line: string): boolean {
+	if (HEADING_REGEX.test(line)) return true;
+	const trimmed = normalizeTabs(line);
+	return SECTION_NUMBER_REGEX.test(trimmed) || CHAPTER_LINE_REGEX.test(trimmed);
+}
+
 export function hasHeadings(markdown: string): boolean {
-	return markdown.split("\n").some((line) => {
-		if (HEADING_REGEX.test(line)) return true;
-		// Also detect PDF section number patterns
-		const trimmed = line.replace(/\t/g, " ").trim();
-		if (SECTION_NUMBER_REGEX.test(trimmed)) return true;
-		if (CHAPTER_LINE_REGEX.test(trimmed)) return true;
-		return false;
-	});
+	return markdown.split("\n").some(isHeadingLine);
 }

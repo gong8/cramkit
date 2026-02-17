@@ -9,11 +9,13 @@ import {
 	retryFailedIndexing,
 } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const log = createLogger("web");
 
-export function useIndexing(sessionId: string, refetchSession: () => void) {
+export function useIndexing(sessionId: string) {
+	const queryClient = useQueryClient();
 	const [isIndexingAll, setIsIndexingAll] = useState(false);
 	const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
 	const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -40,13 +42,13 @@ export function useIndexing(sessionId: string, refetchSession: () => void) {
 					pollRef.current = null;
 					setIsIndexingAll(false);
 					setIndexStatus(null);
-					refetchSession();
+					queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
 				}
 			} catch (err) {
 				log.error("polling index status failed", err);
 			}
 		}, 2000);
-	}, [sessionId, refetchSession]);
+	}, [sessionId, queryClient]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -115,8 +117,8 @@ export function useIndexing(sessionId: string, refetchSession: () => void) {
 
 	const handleClearGraph = useCallback(async () => {
 		await clearSessionGraph(sessionId);
-		refetchSession();
-	}, [sessionId, refetchSession]);
+		queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+	}, [sessionId, queryClient]);
 
 	return {
 		isIndexingAll,

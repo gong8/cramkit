@@ -292,10 +292,37 @@ function buildRelationshipData(
 ): RelData[] {
 	const relationships: RelData[] = [];
 
+	const resolveConcept = (name: string) => {
+		const titleCased = toTitleCase(name);
+		const id = conceptMap.get(titleCased);
+		return id ? { id, name: titleCased } : null;
+	};
+
+	const push = (
+		sourceType: string,
+		sourceId: string,
+		sourceLabel: string,
+		target: { id: string; name: string },
+		relationship: string,
+		confidence: number,
+	) => {
+		relationships.push({
+			sessionId,
+			sourceType,
+			sourceId,
+			sourceLabel,
+			targetType: "concept",
+			targetId: target.id,
+			targetLabel: target.name,
+			relationship,
+			confidence,
+			createdBy: "system",
+		});
+	};
+
 	for (const link of result.file_concept_links) {
-		const conceptName = toTitleCase(link.conceptName);
-		const conceptId = conceptMap.get(conceptName);
-		if (!conceptId) continue;
+		const target = resolveConcept(link.conceptName);
+		if (!target) continue;
 
 		let sourceType = "resource";
 		let sourceId = resourceId;
@@ -310,58 +337,30 @@ function buildRelationshipData(
 			}
 		}
 
-		relationships.push({
-			sessionId,
-			sourceType,
-			sourceId,
-			sourceLabel,
-			targetType: "concept",
-			targetId: conceptId,
-			targetLabel: conceptName,
-			relationship: link.relationship,
-			confidence: link.confidence ?? 0.8,
-			createdBy: "system",
-		});
+		push(sourceType, sourceId, sourceLabel, target, link.relationship, link.confidence ?? 0.8);
 	}
 
 	for (const link of result.concept_concept_links) {
-		const sourceId = conceptMap.get(toTitleCase(link.sourceConcept));
-		const targetId = conceptMap.get(toTitleCase(link.targetConcept));
-		if (!sourceId || !targetId) continue;
+		const source = resolveConcept(link.sourceConcept);
+		const target = resolveConcept(link.targetConcept);
+		if (!source || !target) continue;
 
-		relationships.push({
-			sessionId,
-			sourceType: "concept",
-			sourceId,
-			sourceLabel: toTitleCase(link.sourceConcept),
-			targetType: "concept",
-			targetId,
-			targetLabel: toTitleCase(link.targetConcept),
-			relationship: link.relationship,
-			confidence: link.confidence ?? 0.7,
-			createdBy: "system",
-		});
+		push("concept", source.id, source.name, target, link.relationship, link.confidence ?? 0.7);
 	}
 
 	for (const link of result.question_concept_links) {
-		const conceptName = toTitleCase(link.conceptName);
-		const conceptId = conceptMap.get(conceptName);
-		if (!conceptId) continue;
+		const target = resolveConcept(link.conceptName);
+		if (!target) continue;
 
 		const matchingChunk = findChunkByLabel(chunks, link.questionLabel);
-
-		relationships.push({
-			sessionId,
-			sourceType: matchingChunk ? "chunk" : "resource",
-			sourceId: matchingChunk?.id || resourceId,
-			sourceLabel: link.questionLabel,
-			targetType: "concept",
-			targetId: conceptId,
-			targetLabel: conceptName,
-			relationship: link.relationship,
-			confidence: link.confidence ?? 0.8,
-			createdBy: "system",
-		});
+		push(
+			matchingChunk ? "chunk" : "resource",
+			matchingChunk?.id || resourceId,
+			link.questionLabel,
+			target,
+			link.relationship,
+			link.confidence ?? 0.8,
+		);
 	}
 
 	return relationships;
@@ -375,6 +374,67 @@ function deduplicateRelationships(relationships: RelData[]): RelData[] {
 		seen.add(key);
 		return true;
 	});
+}
+
+async function clearOldRelationships(
+	tx: Prisma.TransactionClient,
+	sessionId: string,
+	resourceId: string,
+	chunks: ChunkInfo[],
+): Promise<void> {
+	const sourceIds = [resourceId, ...chunks.map((c) => c.id)];
+	await tx.relationship.deleteMany({
+		where: {
+			sessionId,
+			createdBy: "system",
+			OR: [{ sourceId: { in: sourceIds } }, { sourceType: "resource", sourceId: resourceId }],
+		},
+	});
+}
+
+async function upsertConcepts(
+	tx: Prisma.TransactionClient,
+	sessionId: string,
+	concepts: ExtractedConcept[],
+): Promise<void> {
+	for (const concept of concepts) {
+		const name = toTitleCase(concept.name);
+		await tx.concept.upsert({
+			where: { sessionId_name: { sessionId, name } },
+			update: {
+				description: concept.description || undefined,
+				aliases: concept.aliases || undefined,
+			},
+			create: {
+				sessionId,
+				name,
+				description: concept.description || null,
+				aliases: concept.aliases || null,
+				createdBy: "system",
+			},
+		});
+	}
+}
+
+async function loadConceptMap(
+	tx: Prisma.TransactionClient,
+	sessionId: string,
+): Promise<Map<string, string>> {
+	const allConcepts = await tx.concept.findMany({
+		where: { sessionId },
+		select: { id: true, name: true },
+	});
+	return new Map(allConcepts.map((c) => [c.name, c.id]));
+}
+
+function buildChunkTitleMap(chunks: ChunkInfo[]): Map<string, string> {
+	const map = new Map<string, string>();
+	for (const chunk of chunks) {
+		if (chunk.title) {
+			map.set(chunk.title.toLowerCase(), chunk.id);
+		}
+	}
+	return map;
 }
 
 export async function indexResourceGraph(resourceId: string): Promise<void> {
@@ -430,48 +490,11 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 	try {
 		await db.$transaction(
 			async (tx) => {
-				const chunkIds = resource.chunks.map((c) => c.id);
-				const sourceIds = [resourceId, ...chunkIds];
-				await tx.relationship.deleteMany({
-					where: {
-						sessionId: resource.sessionId,
-						createdBy: "system",
-						OR: [{ sourceId: { in: sourceIds } }, { sourceType: "resource", sourceId: resourceId }],
-					},
-				});
+				await clearOldRelationships(tx, resource.sessionId, resourceId, resource.chunks);
+				await upsertConcepts(tx, resource.sessionId, result.concepts);
 
-				for (const concept of result.concepts) {
-					const name = toTitleCase(concept.name);
-					await tx.concept.upsert({
-						where: {
-							sessionId_name: { sessionId: resource.sessionId, name },
-						},
-						update: {
-							description: concept.description || undefined,
-							aliases: concept.aliases || undefined,
-						},
-						create: {
-							sessionId: resource.sessionId,
-							name,
-							description: concept.description || null,
-							aliases: concept.aliases || null,
-							createdBy: "system",
-						},
-					});
-				}
-
-				const allConcepts = await tx.concept.findMany({
-					where: { sessionId: resource.sessionId },
-					select: { id: true, name: true },
-				});
-				const conceptMap = new Map(allConcepts.map((c) => [c.name, c.id]));
-
-				const chunkByTitle = new Map<string, string>();
-				for (const chunk of resource.chunks) {
-					if (chunk.title) {
-						chunkByTitle.set(chunk.title.toLowerCase(), chunk.id);
-					}
-				}
+				const conceptMap = await loadConceptMap(tx, resource.sessionId);
+				const chunkByTitle = buildChunkTitleMap(resource.chunks);
 
 				const relationships = deduplicateRelationships(
 					buildRelationshipData(
@@ -489,10 +512,9 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 					await tx.relationship.createMany({ data: relationships });
 				}
 
-				const graphIndexDurationMs = Date.now() - startTime;
 				await tx.resource.update({
 					where: { id: resourceId },
-					data: { isGraphIndexed: true, graphIndexDurationMs },
+					data: { isGraphIndexed: true, graphIndexDurationMs: Date.now() - startTime },
 				});
 			},
 			{ timeout: 30000 },
@@ -506,7 +528,11 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 		);
 	}
 
+	const totalRels =
+		result.file_concept_links.length +
+		result.concept_concept_links.length +
+		result.question_concept_links.length;
 	log.info(
-		`indexResourceGraph — completed "${resource.name}": ${result.concepts.length} concepts, ${result.file_concept_links.length + result.concept_concept_links.length + result.question_concept_links.length} relationships`,
+		`indexResourceGraph — completed "${resource.name}": ${result.concepts.length} concepts, ${totalRels} relationships`,
 	);
 }

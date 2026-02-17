@@ -1,26 +1,8 @@
 import { getDb } from "@cramkit/shared";
-import { beforeEach, describe, expect, it } from "vitest";
 import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
-import { cleanDb, seedSessionWithChunks } from "../fixtures/helpers.js";
+import { cleanDb, seedSessionWithChunks, seedSessionWithConcept } from "../fixtures/helpers.js";
 
 const db = getDb();
-
-async function seedForAmortiser() {
-	const { session, resource, chunks } = await seedSessionWithChunks(db, {
-		name: "Amortiser Test Session",
-	});
-
-	const concept = await db.concept.create({
-		data: {
-			sessionId: session.id,
-			name: "Heat Equation",
-			description: "Parabolic PDE modelling diffusion",
-			aliases: "diffusion equation",
-		},
-	});
-
-	return { session, resource, chunks, concept };
-}
 
 beforeEach(async () => {
 	await cleanDb(db);
@@ -28,7 +10,9 @@ beforeEach(async () => {
 
 describe("amortiseSearchResults", () => {
 	it("creates chunk-concept relationships", async () => {
-		const { session, resource, chunks, concept } = await seedForAmortiser();
+		const { session, resource, chunks, concept } = await seedSessionWithConcept(db, {
+			name: "Amortiser Test Session",
+		});
 
 		const contentResults = chunks.slice(0, 2).map((c) => ({
 			chunkId: c.id,
@@ -50,7 +34,7 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("createdBy is 'amortised', confidence is 0.6", async () => {
-		const { session, resource, chunks } = await seedForAmortiser();
+		const { session, resource, chunks } = await seedSessionWithConcept(db);
 
 		await amortiseSearchResults(session.id, "Heat Equation", [
 			{ chunkId: chunks[0].id, resourceId: resource.id },
@@ -66,7 +50,7 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("skips existing relationships", async () => {
-		const { session, resource, chunks } = await seedForAmortiser();
+		const { session, resource, chunks } = await seedSessionWithConcept(db);
 
 		const contentResults = [{ chunkId: chunks[0].id, resourceId: resource.id }];
 
@@ -108,7 +92,7 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("does nothing when no concepts match query", async () => {
-		const { session, resource, chunks } = await seedForAmortiser();
+		const { session, resource, chunks } = await seedSessionWithConcept(db);
 
 		await amortiseSearchResults(session.id, "quantum mechanics", [
 			{ chunkId: chunks[0].id, resourceId: resource.id },
@@ -122,7 +106,7 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("does nothing when no content results", async () => {
-		const { session } = await seedForAmortiser();
+		const { session } = await seedSessionWithConcept(db);
 
 		await amortiseSearchResults(session.id, "Heat Equation", []);
 

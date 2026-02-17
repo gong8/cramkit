@@ -1,6 +1,5 @@
 import { getDb } from "@cramkit/shared";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
@@ -17,7 +16,6 @@ function getApp() {
 	return app;
 }
 
-/** Seed a session with content + graph data for search testing */
 async function seedSearchData() {
 	const session = await db.session.create({ data: { name: "Search Test" } });
 
@@ -30,7 +28,6 @@ async function seedSearchData() {
 		},
 	});
 
-	// Create chunks with searchable content
 	const chunkWithContent = await db.chunk.create({
 		data: {
 			resourceId: resource.id,
@@ -60,7 +57,6 @@ async function seedSearchData() {
 		},
 	});
 
-	// Create concepts
 	const heatConcept = await db.concept.create({
 		data: {
 			sessionId: session.id,
@@ -77,7 +73,6 @@ async function seedSearchData() {
 		},
 	});
 
-	// Link graph-only chunk to concept (not found via content search)
 	await db.relationship.create({
 		data: {
 			sessionId: session.id,
@@ -91,7 +86,6 @@ async function seedSearchData() {
 		},
 	});
 
-	// Link chunkBoth to wave concept (also findable via content search)
 	await db.relationship.create({
 		data: {
 			sessionId: session.id,
@@ -105,19 +99,10 @@ async function seedSearchData() {
 		},
 	});
 
-	return {
-		session,
-		resource,
-		chunkWithContent,
-		chunkGraphOnly,
-		chunkBoth,
-		heatConcept,
-		waveConcept,
-	};
+	return { session, resource, chunkWithContent, chunkGraphOnly, chunkBoth };
 }
 
 beforeEach(async () => {
-	// Allow any lingering async amortisation from previous test to settle
 	await new Promise((r) => setTimeout(r, 50));
 	await cleanDb(db);
 });
@@ -127,15 +112,12 @@ describe("search routes", () => {
 		const { session } = await seedSearchData();
 		const app = getApp();
 
-		// Search for "diffusion" — matches chunkWithContent via content but no direct concept match
 		const res = await app.request(`/search/sessions/${session.id}/search?q=diffusion`);
 
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeGreaterThan(0);
 
-		// The content-matched result should have source "content" or "both"
-		// (it might be "both" if the concept alias "diffusion" matches in graph too)
 		const sources = body.map((r) => r.source);
 		expect(sources.some((s: string) => s === "content" || s === "both")).toBe(true);
 	});
@@ -144,17 +126,12 @@ describe("search routes", () => {
 		const { session, chunkGraphOnly } = await seedSearchData();
 		const app = getApp();
 
-		// "Heat Equation" matches the concept, which links to chunkGraphOnly
-		// chunkGraphOnly content is "advanced mathematical techniques" — doesn't contain "Heat Equation"
-		// But chunkWithContent DOES contain "heat equation" in its content
-		// So we test with a term that only matches via graph
 		const res = await app.request(`/search/sessions/${session.id}/search?q=Heat Equation`);
 
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeGreaterThan(0);
 
-		// chunkGraphOnly should appear (via graph path)
 		const graphOnlyResult = body.find((r) => r.chunkId === chunkGraphOnly.id);
 		expect(graphOnlyResult).toBeDefined();
 	});
@@ -163,7 +140,6 @@ describe("search routes", () => {
 		const { session, chunkBoth } = await seedSearchData();
 		const app = getApp();
 
-		// "Wave Equation" matches both: chunk content AND concept
 		const res = await app.request(`/search/sessions/${session.id}/search?q=Wave Equation`);
 
 		expect(res.status).toBe(200);
@@ -185,7 +161,6 @@ describe("search routes", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, unknown>[];
 
-		// chunkBoth should appear only once despite matching content + graph
 		const matches = body.filter((r) => r.chunkId === chunkBoth.id);
 		expect(matches.length).toBe(1);
 	});
@@ -196,14 +171,12 @@ describe("search routes", () => {
 
 		await app.request(`/search/sessions/${session.id}/search?q=Heat Equation`);
 
-		// Wait a bit for async amortisation
 		await new Promise((resolve) => setTimeout(resolve, 200));
 
 		const amortisedRels = await db.relationship.findMany({
 			where: { sessionId: session.id, createdBy: "amortised" },
 		});
 
-		// Should have created amortised relationships
 		expect(amortisedRels.length).toBeGreaterThan(0);
 	});
 
@@ -218,7 +191,6 @@ describe("search routes", () => {
 			},
 		});
 
-		// Create 10 chunks with "PDE" in content
 		for (let i = 0; i < 10; i++) {
 			await db.chunk.create({
 				data: {

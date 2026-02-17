@@ -60,60 +60,31 @@ function buildMappingLookup(mappings: DiskMapping[]): Map<TreeNode, DiskMapping>
 	return lookup;
 }
 
-async function createChunkRecords(
+async function createChunkTree(
 	tx: Prisma.TransactionClient,
 	resourceId: string,
 	sourceFileId: string | null,
 	parentId: string | null,
-	nodes: TreeNode[],
-	mappingLookup: Map<TreeNode, DiskMapping>,
-	counter: { value: number },
-): Promise<void> {
-	for (const node of nodes) {
-		const chunk = await tx.chunk.create({
-			data: nodeToChunkData(
-				resourceId,
-				sourceFileId,
-				parentId,
-				counter.value++,
-				node,
-				mappingLookup.get(node),
-			),
-		});
-
-		if (node.children.length > 0) {
-			await createChunkRecords(
-				tx,
-				resourceId,
-				sourceFileId,
-				chunk.id,
-				node.children,
-				mappingLookup,
-				counter,
-			);
-		}
-	}
-}
-
-async function createRootChunk(
-	tx: Prisma.TransactionClient,
-	resourceId: string,
-	sourceFileId: string | null,
-	tree: TreeNode,
+	node: TreeNode,
 	mappingLookup: Map<TreeNode, DiskMapping>,
 	counter: { value: number },
 ): Promise<string> {
-	const rootChunk = await tx.chunk.create({
+	const chunk = await tx.chunk.create({
 		data: nodeToChunkData(
 			resourceId,
 			sourceFileId,
-			null,
+			parentId,
 			counter.value++,
-			tree,
-			mappingLookup.get(tree),
+			node,
+			mappingLookup.get(node),
 		),
 	});
-	return rootChunk.id;
+
+	for (const child of node.children) {
+		await createChunkTree(tx, resourceId, sourceFileId, chunk.id, child, mappingLookup, counter);
+	}
+
+	return chunk.id;
 }
 
 interface FileTree {
@@ -130,7 +101,7 @@ type ChunkPlan =
 			mappingLookup: Map<TreeNode, DiskMapping>;
 	  }
 	| {
-			type: "single-chunk";
+			type: "flat";
 			fileId: string;
 			title: string;
 			content: string;
@@ -140,12 +111,6 @@ type ChunkPlan =
 			combinedRoot: TreeNode;
 			fileTrees: Array<{ fileId: string; tree: TreeNode }>;
 			mappingLookup: Map<TreeNode, DiskMapping>;
-	  }
-	| {
-			type: "concat-multi";
-			fileId: string;
-			title: string;
-			content: string;
 	  };
 
 async function convertFileToMarkdown(rawPath: string, filename: string): Promise<string> {
@@ -202,6 +167,32 @@ function shouldSplit(splitMode: string, resourceType: string, rawContent?: strin
 	);
 }
 
+function buildCombinedRoot(
+	name: string,
+	fileTrees: FileTree[],
+	roles: Array<{ role: string }>,
+): TreeNode {
+	const combinedRoot: TreeNode = {
+		title: name,
+		content: "",
+		depth: 0,
+		order: 0,
+		nodeType: "section",
+		children: [],
+	};
+
+	for (let i = 0; i < fileTrees.length; i++) {
+		const { tree } = fileTrees[i];
+		tree.order = i;
+		if (tree.depth === 0) tree.depth = 1;
+		const prefix = ROLE_PREFIXES[roles[i].role];
+		if (prefix) tree.title = `${prefix}: ${tree.title}`;
+		combinedRoot.children.push(tree);
+	}
+
+	return combinedRoot;
+}
+
 async function buildChunkPlan(
 	fileTrees: FileTree[],
 	resource: {
@@ -227,28 +218,11 @@ async function buildChunkPlan(
 			);
 			return { type: "split-single", fileId, tree, mappingLookup: buildMappingLookup(mappings) };
 		}
-		return { type: "single-chunk", fileId, title: resource.name, content: rawContent };
+		return { type: "flat", fileId, title: resource.name, content: rawContent };
 	}
 
 	if (shouldSplit(splitMode, resource.type)) {
-		const combinedRoot: TreeNode = {
-			title: resource.name,
-			content: "",
-			depth: 0,
-			order: 0,
-			nodeType: "section",
-			children: [],
-		};
-
-		for (let i = 0; i < fileTrees.length; i++) {
-			const { tree } = fileTrees[i];
-			tree.order = i;
-			if (tree.depth === 0) tree.depth = 1;
-			const prefix = ROLE_PREFIXES[resource.files[i].role];
-			if (prefix) tree.title = `${prefix}: ${tree.title}`;
-			combinedRoot.children.push(tree);
-		}
-
+		const combinedRoot = buildCombinedRoot(resource.name, fileTrees, resource.files);
 		const mappings = await writeResourceTreeToDisk(
 			resource.sessionId,
 			resourceId,
@@ -264,7 +238,7 @@ async function buildChunkPlan(
 	}
 
 	return {
-		type: "concat-multi",
+		type: "flat",
 		fileId: fileTrees[0].fileId,
 		title: resource.name,
 		content: fileTrees.map((ft) => ft.rawContent).join("\n\n---\n\n"),
@@ -281,28 +255,19 @@ async function executeChunkPlan(
 
 	switch (plan.type) {
 		case "split-single": {
-			const rootId = await createRootChunk(
+			await createChunkTree(
 				tx,
 				resourceId,
 				plan.fileId,
+				null,
 				plan.tree,
-				plan.mappingLookup,
-				counter,
-			);
-			await createChunkRecords(
-				tx,
-				resourceId,
-				plan.fileId,
-				rootId,
-				plan.tree.children,
 				plan.mappingLookup,
 				counter,
 			);
 			break;
 		}
 
-		case "single-chunk":
-		case "concat-multi": {
+		case "flat": {
 			await tx.chunk.create({
 				data: {
 					resourceId,
@@ -317,41 +282,28 @@ async function executeChunkPlan(
 		}
 
 		case "split-multi": {
-			const rootId = await createRootChunk(
-				tx,
-				resourceId,
-				null,
-				plan.combinedRoot,
-				plan.mappingLookup,
-				counter,
-			);
+			const rootChunk = await tx.chunk.create({
+				data: nodeToChunkData(
+					resourceId,
+					null,
+					null,
+					counter.value++,
+					plan.combinedRoot,
+					plan.mappingLookup.get(plan.combinedRoot),
+				),
+			});
 
-			for (let i = 0; i < plan.combinedRoot.children.length; i++) {
-				const childTree = plan.combinedRoot.children[i];
-				const { fileId } = plan.fileTrees[i];
-
-				const childChunk = await tx.chunk.create({
-					data: nodeToChunkData(
-						resourceId,
-						fileId,
-						rootId,
-						counter.value++,
-						childTree,
-						plan.mappingLookup.get(childTree),
-					),
-				});
-
-				if (childTree.children.length > 0) {
-					await createChunkRecords(
-						tx,
-						resourceId,
-						fileId,
-						childChunk.id,
-						childTree.children,
-						plan.mappingLookup,
-						counter,
-					);
-				}
+			for (let i = 0; i < plan.fileTrees.length; i++) {
+				const { fileId, tree } = plan.fileTrees[i];
+				await createChunkTree(
+					tx,
+					resourceId,
+					fileId,
+					rootChunk.id,
+					tree,
+					plan.mappingLookup,
+					counter,
+				);
 			}
 			break;
 		}

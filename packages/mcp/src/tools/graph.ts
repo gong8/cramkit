@@ -27,20 +27,8 @@ export const graphTools = {
 				.optional()
 				.describe("Confidence score 0-1 (default 1.0)"),
 		}),
-		execute: async (params: {
-			sessionId: string;
-			sourceType: string;
-			sourceId: string;
-			sourceLabel?: string;
-			targetType: string;
-			targetId: string;
-			targetLabel?: string;
-			relationship: string;
-			confidence?: number;
-		}) => {
-			const { sessionId, ...rest } = params;
-			return apiClient.createRelationship(sessionId, { ...rest, createdBy: "claude" });
-		},
+		execute: async ({ sessionId, ...rest }: { sessionId: string; [k: string]: unknown }) =>
+			apiClient.createRelationship(sessionId, { ...rest, createdBy: "claude" }),
 	},
 
 	get_related: {
@@ -51,8 +39,12 @@ export const graphTools = {
 			id: z.string().describe("Entity ID"),
 			relationshipType: z.string().optional().describe("Filter by relationship type"),
 		}),
-		execute: async (params: { type: string; id: string; relationshipType?: string }) =>
-			apiClient.getRelated(params.type, params.id, params.relationshipType),
+		execute: async ({
+			type,
+			id,
+			relationshipType,
+		}: { type: string; id: string; relationshipType?: string }) =>
+			apiClient.getRelated(type, id, relationshipType),
 	},
 
 	list_concepts: {

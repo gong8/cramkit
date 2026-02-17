@@ -1,85 +1,8 @@
 import { getDb } from "@cramkit/shared";
-import { beforeEach, describe, expect, it } from "vitest";
 import { searchGraph } from "../../packages/api/src/services/graph-search.js";
-import { cleanDb, seedSessionWithChunks } from "../fixtures/helpers.js";
+import { cleanDb, seedGraphData } from "../fixtures/helpers.js";
 
 const db = getDb();
-
-async function seedGraphData() {
-	const { session, resource, chunks } = await seedSessionWithChunks(db, {
-		name: "PDE Test Session",
-	});
-
-	const heatEq = await db.concept.create({
-		data: {
-			sessionId: session.id,
-			name: "Heat Equation",
-			description: "Parabolic PDE modelling diffusion",
-			aliases: "diffusion equation",
-		},
-	});
-
-	const waveEq = await db.concept.create({
-		data: {
-			sessionId: session.id,
-			name: "Wave Equation",
-			description: "Hyperbolic PDE for wave propagation",
-		},
-	});
-
-	const sepVars = await db.concept.create({
-		data: {
-			sessionId: session.id,
-			name: "Separation Of Variables",
-			description: "Technique decomposing PDE into ODEs",
-		},
-	});
-
-	// resource -> concept
-	await db.relationship.create({
-		data: {
-			sessionId: session.id,
-			sourceType: "resource",
-			sourceId: resource.id,
-			sourceLabel: resource.name,
-			targetType: "concept",
-			targetId: heatEq.id,
-			targetLabel: "Heat Equation",
-			relationship: "covers",
-			createdBy: "system",
-		},
-	});
-
-	// chunk -> concept
-	await db.relationship.create({
-		data: {
-			sessionId: session.id,
-			sourceType: "chunk",
-			sourceId: chunks[0].id,
-			targetType: "concept",
-			targetId: waveEq.id,
-			targetLabel: "Wave Equation",
-			relationship: "covers",
-			createdBy: "system",
-		},
-	});
-
-	// chunk -> concept for separation of variables
-	await db.relationship.create({
-		data: {
-			sessionId: session.id,
-			sourceType: "chunk",
-			sourceId: chunks[1].id,
-			targetType: "concept",
-			targetId: sepVars.id,
-			targetLabel: "Separation Of Variables",
-			relationship: "introduces",
-			createdBy: "system",
-		},
-	});
-
-	return { session, resource, chunks, concepts: { heatEq, waveEq, sepVars } };
-}
 
 beforeEach(async () => {
 	await cleanDb(db);
@@ -87,7 +10,7 @@ beforeEach(async () => {
 
 describe("searchGraph", () => {
 	it("finds chunks via concept name match", async () => {
-		const { session } = await seedGraphData();
+		const { session } = await seedGraphData(db);
 
 		const results = await searchGraph(session.id, "Wave Equation", 10);
 
@@ -96,27 +19,24 @@ describe("searchGraph", () => {
 	});
 
 	it("finds chunks via concept alias match", async () => {
-		const { session } = await seedGraphData();
+		const { session } = await seedGraphData(db);
 
-		// "diffusion equation" is an alias for Heat Equation
 		const results = await searchGraph(session.id, "diffusion equation", 10);
 
 		expect(results.length).toBeGreaterThan(0);
 	});
 
 	it("finds chunks via concept description match", async () => {
-		const { session } = await seedGraphData();
+		const { session } = await seedGraphData(db);
 
-		// "wave propagation" appears in Wave Equation's description
 		const results = await searchGraph(session.id, "wave propagation", 10);
 
 		expect(results.length).toBeGreaterThan(0);
 	});
 
 	it("follows resource-concept → resource-chunks path", async () => {
-		const { session, resource } = await seedGraphData();
+		const { session, resource } = await seedGraphData(db);
 
-		// Heat Equation is linked to the resource, so its chunks should be returned
 		const results = await searchGraph(session.id, "Heat Equation", 10);
 
 		expect(results.length).toBeGreaterThan(0);
@@ -125,7 +45,7 @@ describe("searchGraph", () => {
 	});
 
 	it("returns relatedConcepts annotation", async () => {
-		const { session } = await seedGraphData();
+		const { session } = await seedGraphData(db);
 
 		const results = await searchGraph(session.id, "Wave Equation", 10);
 
@@ -137,7 +57,7 @@ describe("searchGraph", () => {
 	});
 
 	it("returns empty for no matches", async () => {
-		const { session } = await seedGraphData();
+		const { session } = await seedGraphData(db);
 
 		const results = await searchGraph(session.id, "quantum mechanics", 10);
 
@@ -145,9 +65,8 @@ describe("searchGraph", () => {
 	});
 
 	it("respects limit parameter", async () => {
-		const { session, resource, concepts } = await seedGraphData();
+		const { session, resource, concepts } = await seedGraphData(db);
 
-		// Add many more chunks linked to the same concept
 		for (let i = 5; i < 25; i++) {
 			const chunk = await db.chunk.create({
 				data: {
@@ -177,9 +96,8 @@ describe("searchGraph", () => {
 	});
 
 	it("full PDE graph: search 'Separation Of Variables'", async () => {
-		const { session, concepts } = await seedGraphData();
+		const { session, concepts } = await seedGraphData(db);
 
-		// Add a problem sheet resource with chunk linked to separation of variables
 		const sheetResource = await db.resource.create({
 			data: {
 				sessionId: session.id,

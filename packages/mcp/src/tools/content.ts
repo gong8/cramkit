@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { apiClient } from "../lib/api-client.js";
 
-interface RelationshipRow {
+interface RelRow {
 	sourceType: string;
 	sourceId: string;
 	sourceLabel?: string | null;
@@ -12,39 +12,31 @@ interface RelationshipRow {
 	confidence: number | null;
 }
 
-function extractConceptLinks(entityType: string, entityId: string, rows: RelationshipRow[]) {
+function extractConceptLinks(type: string, id: string, rows: RelRow[]) {
 	return rows
-		.filter(
-			(r) =>
-				(r.sourceType === "concept" && r.targetType === entityType && r.targetId === entityId) ||
-				(r.targetType === "concept" && r.sourceType === entityType && r.sourceId === entityId),
-		)
+		.filter((r) => {
+			if (r.sourceType === "concept") return r.targetType === type && r.targetId === id;
+			if (r.targetType === "concept") return r.sourceType === type && r.sourceId === id;
+			return false;
+		})
 		.map((r) => {
-			const isConceptSource = r.sourceType === "concept";
+			const fromSource = r.sourceType === "concept";
 			return {
-				conceptId: isConceptSource ? r.sourceId : r.targetId,
-				conceptName: isConceptSource ? r.sourceLabel || r.sourceId : r.targetLabel || r.targetId,
+				conceptId: fromSource ? r.sourceId : r.targetId,
+				conceptName:
+					(fromSource ? r.sourceLabel : r.targetLabel) || (fromSource ? r.sourceId : r.targetId),
 				relationship: r.relationship,
 				confidence: r.confidence ?? 1,
 			};
 		});
 }
 
-async function fetchWithConcepts(
-	entityType: string,
-	entityId: string,
-	fetcher: () => Promise<unknown>,
-) {
-	const [entity, relationships] = await Promise.all([
-		fetcher(),
-		apiClient.getRelated(entityType, entityId),
-	]);
-	const relatedConcepts = extractConceptLinks(
-		entityType,
-		entityId,
-		relationships as RelationshipRow[],
-	);
-	return { ...(entity as object), relatedConcepts };
+async function fetchWithConcepts(type: string, id: string, fetcher: () => Promise<unknown>) {
+	const [entity, rels] = await Promise.all([fetcher(), apiClient.getRelated(type, id)]);
+	return {
+		...(entity as object),
+		relatedConcepts: extractConceptLinks(type, id, rels as RelRow[]),
+	};
 }
 
 export const contentTools = {

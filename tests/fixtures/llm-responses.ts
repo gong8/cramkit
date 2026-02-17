@@ -1,9 +1,3 @@
-/**
- * Canned LLM JSON responses for each file type.
- * These are what chatCompletion would return for PDE materials.
- */
-
-/** Lecture notes — lots of concepts, file-concept and concept-concept links */
 export const lectureNotesResponse = {
 	concepts: [
 		{
@@ -70,7 +64,6 @@ export const lectureNotesResponse = {
 	question_concept_links: [],
 };
 
-/** Past paper — heavy on question-concept links */
 export const pastPaperResponse = {
 	concepts: [
 		{ name: "Method Of Characteristics", description: "Technique for solving first-order PDEs" },
@@ -109,7 +102,6 @@ export const pastPaperResponse = {
 	],
 };
 
-/** Problem sheet — mix of both */
 export const problemSheetResponse = {
 	concepts: [
 		{ name: "Method Of Characteristics", description: "Technique for solving first-order PDEs" },
@@ -145,7 +137,6 @@ export const problemSheetResponse = {
 	],
 };
 
-/** Response with unknown concept names in links — for error handling test */
 export const responseWithUnknownConcepts = {
 	concepts: [{ name: "Heat Equation", description: "Parabolic PDE" }],
 	file_concept_links: [

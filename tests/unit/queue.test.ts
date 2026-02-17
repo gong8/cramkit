@@ -1,5 +1,4 @@
 import { getDb, initDb } from "@cramkit/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/graph-indexer.js", () => ({
@@ -39,11 +38,8 @@ beforeEach(async () => {
 
 describe("queue", () => {
 	it("enqueueGraphIndexing calls indexResourceGraph", async () => {
-		vi.mocked(indexResourceGraph).mockResolvedValue(undefined);
-
 		enqueueGraphIndexing("resource-1");
 
-		// Wait for the queue to process
 		await vi.waitFor(() => {
 			expect(indexResourceGraph).toHaveBeenCalledWith("resource-1");
 		});
@@ -52,7 +48,6 @@ describe("queue", () => {
 	it("enqueueSessionGraphIndexing enqueues all resources", async () => {
 		const db = getDb();
 
-		// Create session + resources so DB operations succeed
 		const session = await db.session.create({ data: { name: "Test" } });
 		const resourceIds: string[] = [];
 		for (let i = 0; i < 5; i++) {
@@ -79,7 +74,6 @@ describe("queue", () => {
 	});
 
 	it("getIndexingQueueSize returns pending + active", () => {
-		// Create long-running tasks to observe queue size
 		vi.mocked(indexResourceGraph).mockImplementation(
 			() => new Promise((resolve) => setTimeout(resolve, 100)),
 		);
@@ -88,7 +82,6 @@ describe("queue", () => {
 		enqueueGraphIndexing("r2");
 		enqueueGraphIndexing("r3");
 
-		// Immediately after enqueuing, some should be pending
 		const size = getIndexingQueueSize();
 		expect(size).toBeGreaterThanOrEqual(1);
 	});
@@ -118,7 +111,6 @@ describe("queue", () => {
 			{ timeout: 5000 },
 		);
 
-		// Concurrency reduced to 1 to prevent SQLite write contention
 		expect(maxConcurrent).toBe(1);
 	});
 
@@ -148,7 +140,6 @@ describe("queue", () => {
 			{ timeout: 2000 },
 		);
 
-		// Indexing should have run while processing was still running (independent queues)
 		expect(indexingRanWhileProcessing).toBe(true);
 	});
 });

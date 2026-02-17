@@ -41,31 +41,47 @@ async function writeMarkdownFile(filePath: string, node: TreeNode): Promise<void
 	await writeFile(filePath, content, "utf-8");
 }
 
+interface NodeLayout {
+	dirPath: string;
+	relDir: string;
+	fileName: string;
+	slug: string;
+	needsDir: boolean;
+}
+
+function computeNodeLayout(baseDir: string, relativeBase: string, node: TreeNode): NodeLayout {
+	const isRoot = node.order === 0 && node.depth === 0;
+	const isLeaf = node.children.length === 0;
+	const nodeSlug = isRoot ? "" : `${zeroPad(node.order)}-${slugify(node.title)}`;
+
+	const isBranch = !isRoot && !isLeaf;
+	const dirPath = isBranch ? join(baseDir, nodeSlug) : baseDir;
+	const relDir = isBranch ? join(relativeBase, nodeSlug) : relativeBase;
+	const fileName = isLeaf && !isRoot ? `${nodeSlug}.md` : "_index.md";
+	const slug = isRoot ? "_index" : nodeSlug;
+
+	return { dirPath, relDir, fileName, slug, needsDir: !isLeaf || isRoot };
+}
+
 async function writeNodeToDisk(
 	baseDir: string,
 	relativeBase: string,
 	node: TreeNode,
 	mappings: DiskMapping[],
 ): Promise<void> {
-	const isRoot = node.order === 0 && node.depth === 0;
-	const slug = isRoot ? "" : `${zeroPad(node.order)}-${slugify(node.title)}`;
-	const isLeaf = node.children.length === 0;
+	const layout = computeNodeLayout(baseDir, relativeBase, node);
 
-	const dirPath = isRoot || isLeaf ? baseDir : join(baseDir, slug);
-	const relDir = isRoot || isLeaf ? relativeBase : join(relativeBase, slug);
-	const fileName = isLeaf && !isRoot ? `${slug}.md` : "_index.md";
-
-	if (!isLeaf || isRoot) {
-		await mkdir(dirPath, { recursive: true });
+	if (layout.needsDir) {
+		await mkdir(layout.dirPath, { recursive: true });
 	}
 
-	const filePath = join(dirPath, fileName);
-	const diskPath = join(relDir, fileName);
+	const filePath = join(layout.dirPath, layout.fileName);
+	const diskPath = join(layout.relDir, layout.fileName);
 	await writeMarkdownFile(filePath, node);
-	mappings.push({ node, diskPath, slug: isLeaf && !isRoot ? slug : isRoot ? "_index" : slug });
+	mappings.push({ node, diskPath, slug: layout.slug });
 
 	for (const child of node.children) {
-		await writeNodeToDisk(dirPath, relDir, child, mappings);
+		await writeNodeToDisk(layout.dirPath, layout.relDir, child, mappings);
 	}
 }
 

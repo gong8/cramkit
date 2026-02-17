@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
 	hasHeadings,
 	parseMarkdownTree,
@@ -32,7 +31,6 @@ describe("preprocessPdfMarkdown", () => {
 		expect(headings).toContain("### 1.2.1 Definition");
 		expect(headings).toContain("### 1.2.2 Basic properties");
 
-		// Page separator should be stripped
 		expect(result).not.toContain("-- 1 of 24 --");
 	});
 
@@ -50,10 +48,10 @@ describe("preprocessPdfMarkdown", () => {
 });
 
 describe("parseMarkdownTree with PDF section numbers", () => {
+	const filler =
+		"This is enough content to avoid being merged into the parent node by the short-leaf merger.";
+
 	it("builds deep tree from section numbers", () => {
-		// Content must be >50 chars per section or mergeShortLeaves collapses them
-		const filler =
-			"This is enough content to avoid being merged into the parent node by the short-leaf merger.";
 		const input = [
 			"Chapter \t1",
 			"Introduction",
@@ -73,30 +71,24 @@ describe("parseMarkdownTree with PDF section numbers", () => {
 
 		const tree = parseMarkdownTree(input, "Chapter_1.pdf");
 
-		// Should have Chapter 1 as child of root
 		const chapter = tree.children[0];
 		expect(chapter.title).toContain("Chapter 1");
 		expect(chapter.depth).toBe(1);
 
-		// Chapter should have 3 sections: 1.1, 1.2, 1.3
 		expect(chapter.children.length).toBe(3);
 
-		// Section 1.2 should have subsections 1.2.1, 1.2.2
 		const section12 = chapter.children[1];
 		expect(section12.title).toContain("1.2");
 		expect(section12.children.length).toBe(2);
 		expect(section12.children[0].title).toContain("1.2.1");
 		expect(section12.children[1].title).toContain("1.2.2");
 
-		// Section 1.3 should have subsection 1.3.1
 		const section13 = chapter.children[2];
 		expect(section13.title).toContain("1.3");
 		expect(section13.children.length).toBe(1);
 	});
 
 	it("infers chapter node type", () => {
-		const filler =
-			"This is enough content to avoid being merged into the parent node by the short-leaf merger.";
 		const input = [
 			"Chapter \t2",
 			"Methods",
@@ -110,7 +102,6 @@ describe("parseMarkdownTree with PDF section numbers", () => {
 		const chapter = tree.children[0];
 		expect(chapter.nodeType).toBe("chapter");
 		expect(chapter.children.length).toBe(2);
-		// Sections with number prefix are typed as "section" (number prefix blocks pattern match)
 		expect(chapter.children[0].nodeType).toBe("section");
 	});
 });

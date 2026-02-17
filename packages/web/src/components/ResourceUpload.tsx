@@ -121,11 +121,10 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files) {
 			const newFiles = Array.from(e.target.files);
-			if (allowMultipleFiles) {
-				dispatch({ type: "addFiles", files: newFiles });
-			} else {
-				dispatch({ type: "addFiles", files: newFiles.slice(0, 1) });
-			}
+			dispatch({
+				type: "addFiles",
+				files: allowMultipleFiles ? newFiles : newFiles.slice(0, 1),
+			});
 		}
 		if (fileInputRef.current) fileInputRef.current.value = "";
 	};
@@ -214,24 +213,23 @@ function TypeStep({
 		<>
 			<h2 className="mb-4 text-lg font-semibold">What are you uploading?</h2>
 			<div className="space-y-2">
-				{TYPE_OPTIONS.map((opt) => {
-					const isExisting = opt.value === "LECTURE_NOTES" && existingLectureNotes;
-					return (
-						<button
-							type="button"
-							key={opt.value}
-							onClick={() => onSelect(opt.value)}
-							className="flex w-full items-center justify-between rounded-md border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-primary/5"
-						>
-							<div>
-								<div className="text-sm font-medium">{opt.label}</div>
-								<div className="text-xs text-muted-foreground">
-									{isExisting ? "Add more files to existing lecture notes" : opt.description}
-								</div>
+				{TYPE_OPTIONS.map((opt) => (
+					<button
+						type="button"
+						key={opt.value}
+						onClick={() => onSelect(opt.value)}
+						className="flex w-full items-center justify-between rounded-md border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-primary/5"
+					>
+						<div>
+							<div className="text-sm font-medium">{opt.label}</div>
+							<div className="text-xs text-muted-foreground">
+								{opt.value === "LECTURE_NOTES" && existingLectureNotes
+									? "Add more files to existing lecture notes"
+									: opt.description}
 							</div>
-						</button>
-					);
-				})}
+						</div>
+					</button>
+				))}
 			</div>
 		</>
 	);
@@ -256,6 +254,10 @@ function DetailsStep({
 	onSubmit: () => void;
 	uploading: boolean;
 }) {
+	const showMarkScheme = form.resourceType === "PAST_PAPER";
+	const showSolutions = form.resourceType === "PROBLEM_SHEET";
+	const showSplitMode = form.resourceType === "LECTURE_NOTES";
+
 	return (
 		<>
 			<h2 className="mb-4 text-lg font-semibold">
@@ -281,7 +283,7 @@ function DetailsStep({
 					</div>
 				)}
 
-				{form.resourceType === "PAST_PAPER" && (
+				{showMarkScheme && (
 					<label className="flex items-center gap-2 text-sm">
 						<input
 							type="checkbox"
@@ -293,7 +295,7 @@ function DetailsStep({
 					</label>
 				)}
 
-				{form.resourceType === "PROBLEM_SHEET" && (
+				{showSolutions && (
 					<label className="flex items-center gap-2 text-sm">
 						<input
 							type="checkbox"
@@ -305,7 +307,7 @@ function DetailsStep({
 					</label>
 				)}
 
-				{form.resourceType === "LECTURE_NOTES" && (
+				{showSplitMode && (
 					<label className="flex items-center gap-2 text-sm">
 						<input
 							type="checkbox"
@@ -322,46 +324,15 @@ function DetailsStep({
 					</label>
 				)}
 
-				<div>
-					<label htmlFor="resource-file" className="mb-1 block text-sm font-medium">
-						{allowMultipleFiles ? "Files" : "File"}
-					</label>
+				<FilePicker
+					files={form.files}
+					allowMultiple={allowMultipleFiles}
+					fileInputRef={fileInputRef}
+					onFileChange={onFileChange}
+					onRemoveFile={(i) => dispatch({ type: "removeFile", index: i })}
+				/>
 
-					{form.files.length > 0 && (
-						<div className="mb-2 space-y-1">
-							{form.files.map((file, i) => (
-								<FileChip
-									key={`${file.name}-${i}`}
-									name={file.name}
-									onRemove={() => dispatch({ type: "removeFile", index: i })}
-								/>
-							))}
-						</div>
-					)}
-
-					{(allowMultipleFiles || form.files.length === 0) && (
-						<button
-							type="button"
-							onClick={() => fileInputRef.current?.click()}
-							className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-6 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-						>
-							<Upload className="h-4 w-4" />
-							{form.files.length > 0 ? "Add more files" : "Choose file"}
-						</button>
-					)}
-
-					<input
-						id="resource-file"
-						ref={fileInputRef}
-						type="file"
-						accept=".pdf"
-						multiple={allowMultipleFiles}
-						onChange={onFileChange}
-						className="hidden"
-					/>
-				</div>
-
-				{form.resourceType === "PAST_PAPER" && !form.hasMarkScheme && (
+				{showMarkScheme && !form.hasMarkScheme && (
 					<SecondaryFilePicker
 						id="mark-scheme-file"
 						label="Mark Scheme"
@@ -372,7 +343,7 @@ function DetailsStep({
 					/>
 				)}
 
-				{form.resourceType === "PROBLEM_SHEET" && !form.hasSolutions && (
+				{showSolutions && !form.hasSolutions && (
 					<SecondaryFilePicker
 						id="solutions-file"
 						label="Solutions"
@@ -402,5 +373,56 @@ function DetailsStep({
 				</div>
 			</div>
 		</>
+	);
+}
+
+function FilePicker({
+	files,
+	allowMultiple,
+	fileInputRef,
+	onFileChange,
+	onRemoveFile,
+}: {
+	files: File[];
+	allowMultiple: boolean;
+	fileInputRef: React.RefObject<HTMLInputElement | null>;
+	onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+	onRemoveFile: (index: number) => void;
+}) {
+	return (
+		<div>
+			<label htmlFor="resource-file" className="mb-1 block text-sm font-medium">
+				{allowMultiple ? "Files" : "File"}
+			</label>
+
+			{files.length > 0 && (
+				<div className="mb-2 space-y-1">
+					{files.map((file, i) => (
+						<FileChip key={`${file.name}-${i}`} name={file.name} onRemove={() => onRemoveFile(i)} />
+					))}
+				</div>
+			)}
+
+			{(allowMultiple || files.length === 0) && (
+				<button
+					type="button"
+					onClick={() => fileInputRef.current?.click()}
+					className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-6 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+				>
+					<Upload className="h-4 w-4" />
+					{files.length > 0 ? "Add more files" : "Choose file"}
+				</button>
+			)}
+
+			<input
+				id="resource-file"
+				ref={fileInputRef}
+				type="file"
+				accept=".pdf"
+				multiple={allowMultiple}
+				onChange={onFileChange}
+				className="hidden"
+			/>
+		</div>
 	);
 }

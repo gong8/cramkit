@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const nopt = <T extends z.ZodTypeAny>(schema: T) => schema.nullable().optional();
+
 export const ResourceTypeEnum = z.enum([
 	"LECTURE_NOTES",
 	"PAST_PAPER",
@@ -22,10 +24,10 @@ export const createSessionSchema = z.object({
 
 export const updateSessionSchema = z.object({
 	name: z.string().min(1).optional(),
-	module: z.string().nullable().optional(),
-	examDate: z.string().date().nullable().optional(),
-	scope: z.string().nullable().optional(),
-	notes: z.string().nullable().optional(),
+	module: nopt(z.string()),
+	examDate: nopt(z.string().date()),
+	scope: nopt(z.string()),
+	notes: nopt(z.string()),
 });
 
 export const createResourceSchema = z.object({
@@ -37,7 +39,7 @@ export const createResourceSchema = z.object({
 
 export const updateResourceSchema = z.object({
 	name: z.string().min(1).optional(),
-	label: z.string().nullable().optional(),
+	label: nopt(z.string()),
 });
 
 export const createRelationshipSchema = z.object({
@@ -90,32 +92,32 @@ export const fileExportSchema = z.object({
 	filename: z.string(),
 	role: FileRoleEnum,
 	rawPath: z.string(),
-	processedPath: z.string().nullable().optional(),
-	pageCount: z.number().int().nullable().optional(),
-	fileSize: z.number().int().nullable().optional(),
+	processedPath: nopt(z.string()),
+	pageCount: nopt(z.number().int()),
+	fileSize: nopt(z.number().int()),
 });
 
 export const chunkExportSchema = z.object({
 	id: z.string(),
-	sourceFileId: z.string().nullable().optional(),
-	parentId: z.string().nullable().optional(),
+	sourceFileId: nopt(z.string()),
+	parentId: nopt(z.string()),
 	index: z.number().int(),
 	depth: z.number().int(),
 	nodeType: z.string(),
-	slug: z.string().nullable().optional(),
-	diskPath: z.string().nullable().optional(),
-	title: z.string().nullable().optional(),
+	slug: nopt(z.string()),
+	diskPath: nopt(z.string()),
+	title: nopt(z.string()),
 	content: z.string(),
-	startPage: z.number().int().nullable().optional(),
-	endPage: z.number().int().nullable().optional(),
-	keywords: z.string().nullable().optional(),
+	startPage: nopt(z.number().int()),
+	endPage: nopt(z.number().int()),
+	keywords: nopt(z.string()),
 });
 
 export const resourceExportSchema = z.object({
 	id: z.string(),
 	name: z.string(),
 	type: ResourceTypeEnum,
-	label: z.string().nullable().optional(),
+	label: nopt(z.string()),
 	splitMode: z.string(),
 	isIndexed: z.boolean(),
 	isGraphIndexed: z.boolean(),
@@ -126,8 +128,8 @@ export const resourceExportSchema = z.object({
 export const conceptExportSchema = z.object({
 	id: z.string(),
 	name: z.string(),
-	description: z.string().nullable().optional(),
-	aliases: z.string().nullable().optional(),
+	description: nopt(z.string()),
+	aliases: nopt(z.string()),
 	createdBy: z.string(),
 });
 
@@ -135,10 +137,10 @@ export const relationshipExportSchema = z.object({
 	id: z.string(),
 	sourceType: z.string(),
 	sourceId: z.string(),
-	sourceLabel: z.string().nullable().optional(),
+	sourceLabel: nopt(z.string()),
 	targetType: z.string(),
 	targetId: z.string(),
-	targetLabel: z.string().nullable().optional(),
+	targetLabel: nopt(z.string()),
 	relationship: z.string(),
 	confidence: z.number().min(0).max(1),
 	createdBy: z.string(),
@@ -148,7 +150,7 @@ export const messageExportSchema = z.object({
 	id: z.string(),
 	role: z.string(),
 	content: z.string(),
-	toolCalls: z.string().nullable().optional(),
+	toolCalls: nopt(z.string()),
 	attachments: z
 		.array(
 			z.object({
@@ -172,10 +174,10 @@ export const exportManifestSchema = z.object({
 	exportedAt: z.string(),
 	session: z.object({
 		name: z.string(),
-		module: z.string().nullable().optional(),
-		examDate: z.string().nullable().optional(),
-		scope: z.string().nullable().optional(),
-		notes: z.string().nullable().optional(),
+		module: nopt(z.string()),
+		examDate: nopt(z.string()),
+		scope: nopt(z.string()),
+		notes: nopt(z.string()),
 	}),
 	resourceIds: z.array(z.string()),
 	conversationIds: z.array(z.string()),

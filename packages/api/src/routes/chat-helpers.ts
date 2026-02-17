@@ -201,3 +201,56 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 - Occasionally (not every message) suggest relevant next steps when clearly useful: mentioning a related past paper question, flagging a prerequisite they should review, or offering to quiz them on what you just covered. Keep suggestions natural, not formulaic.
 </teaching>`;
 }
+
+const SESSION_INCLUDE = {
+	resources: {
+		select: {
+			id: true,
+			name: true,
+			type: true,
+			label: true,
+			isIndexed: true,
+			isGraphIndexed: true,
+			files: { select: { filename: true, role: true } },
+		},
+	},
+} as const;
+
+export async function loadSessionWithPrompt(
+	db: PrismaClient,
+	sessionId: string,
+): Promise<{ systemPrompt: string } | { error: string }> {
+	const session = await db.session.findUnique({
+		where: { id: sessionId },
+		include: SESSION_INCLUDE,
+	});
+	if (!session) return { error: "Session not found" };
+	return { systemPrompt: buildSystemPrompt(session, sessionId) };
+}
+
+export async function loadConversationHistory(db: PrismaClient, conversationId: string) {
+	return db.message.findMany({
+		where: { conversationId },
+		orderBy: { createdAt: "asc" },
+		select: {
+			role: true,
+			content: true,
+			attachments: { select: { diskPath: true } },
+		},
+	});
+}
+
+export async function autoTitleConversation(
+	db: PrismaClient,
+	conversationId: string,
+	historyLength: number,
+	message: string,
+) {
+	if (historyLength !== 1) return;
+	const titleSource = message || "Image";
+	const title = titleSource.length > 50 ? `${titleSource.slice(0, 50)}…` : titleSource;
+	await db.conversation.update({
+		where: { id: conversationId },
+		data: { title },
+	});
+}

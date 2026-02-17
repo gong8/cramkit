@@ -22,34 +22,30 @@ function conceptRelationshipWhere(sessionId: string, conceptId: string) {
 	};
 }
 
+async function findConcept(id: string) {
+	return getDb().concept.findUnique({ where: { id } });
+}
+
 // List concepts for session
 graphRoutes.get("/sessions/:sessionId/concepts", async (c) => {
-	const db = getDb();
 	const sessionId = c.req.param("sessionId");
-
-	const concepts = await db.concept.findMany({
+	const concepts = await getDb().concept.findMany({
 		where: { sessionId },
 		orderBy: { name: "asc" },
 	});
-
 	log.info(`GET /graph/sessions/${sessionId}/concepts — found ${concepts.length}`);
 	return c.json(concepts);
 });
 
 // Get concept detail with relationships
 graphRoutes.get("/concepts/:id", async (c) => {
-	const db = getDb();
 	const id = c.req.param("id");
+	const concept = await findConcept(id);
+	if (!concept) return c.json({ error: "Concept not found" }, 404);
 
-	const concept = await db.concept.findUnique({ where: { id } });
-	if (!concept) {
-		return c.json({ error: "Concept not found" }, 404);
-	}
-
-	const relationships = await db.relationship.findMany({
+	const relationships = await getDb().relationship.findMany({
 		where: conceptRelationshipWhere(concept.sessionId, id),
 	});
-
 	log.info(`GET /graph/concepts/${id} — "${concept.name}", ${relationships.length} relationships`);
 	return c.json({ ...concept, relationships });
 });
@@ -58,46 +54,33 @@ graphRoutes.get("/concepts/:id", async (c) => {
 graphRoutes.delete("/concepts/:id", async (c) => {
 	const db = getDb();
 	const id = c.req.param("id");
-
-	const concept = await db.concept.findUnique({ where: { id } });
-	if (!concept) {
-		return c.json({ error: "Concept not found" }, 404);
-	}
+	const concept = await findConcept(id);
+	if (!concept) return c.json({ error: "Concept not found" }, 404);
 
 	await db.relationship.deleteMany({
 		where: conceptRelationshipWhere(concept.sessionId, id),
 	});
-
 	await db.concept.delete({ where: { id } });
-
 	log.info(`DELETE /graph/concepts/${id} — deleted "${concept.name}"`);
 	return c.json({ ok: true });
 });
 
 // Get related items for an entity
 graphRoutes.get("/related", async (c) => {
-	const db = getDb();
 	const type = c.req.query("type");
 	const id = c.req.query("id");
+	if (!type || !id) return c.json({ error: "type and id query params required" }, 400);
+
 	const relationship = c.req.query("relationship");
-
-	if (!type || !id) {
-		return c.json({ error: "type and id query params required" }, 400);
-	}
-
 	const where: Record<string, unknown> = {
 		OR: [
 			{ sourceType: type, sourceId: id },
 			{ targetType: type, targetId: id },
 		],
 	};
+	if (relationship) where.relationship = relationship;
 
-	if (relationship) {
-		where.relationship = relationship;
-	}
-
-	const relationships = await db.relationship.findMany({ where });
-
+	const relationships = await getDb().relationship.findMany({ where });
 	log.info(`GET /graph/related — type=${type}, id=${id}, found ${relationships.length}`);
 	return c.json(relationships);
 });
@@ -107,7 +90,6 @@ graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 	const sessionId = c.req.param("sessionId");
 	const body = await c.req.json();
 	const parsed = indexResourceRequestSchema.safeParse(body);
-
 	if (!parsed.success) {
 		log.warn(
 			`POST /graph/sessions/${sessionId}/index-resource — validation failed`,
@@ -152,7 +134,6 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 	}
 
 	await enqueueSessionGraphIndexing(sessionId, resourceIds);
-
 	log.info(
 		`POST /graph/sessions/${sessionId}/index-all — queued ${resourceIds.length} resources (reindex=${reindex})`,
 	);
@@ -207,7 +188,6 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	const inProgress = getIndexingQueueSize();
 	const batch = await getSessionBatchStatus(sessionId);
 
-	// Calculate avg duration from historical data in this session
 	const durationStats = await db.resource.aggregate({
 		where: { sessionId, graphIndexDurationMs: { not: null } },
 		_avg: { graphIndexDurationMs: true },
@@ -217,11 +197,5 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	log.info(
 		`GET /graph/sessions/${sessionId}/index-status — total=${total}, indexed=${indexed}, inProgress=${inProgress}`,
 	);
-	return c.json({
-		total,
-		indexed,
-		inProgress,
-		avgDurationMs,
-		batch,
-	});
+	return c.json({ total, indexed, inProgress, avgDurationMs, batch });
 });

@@ -1,5 +1,4 @@
 import { getDb } from "@cramkit/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
@@ -20,69 +19,52 @@ beforeEach(async () => {
 
 describe("full indexing flow", () => {
 	it("complete PDE lifecycle: upload → index → search → amortise → re-index → delete", async () => {
-		// Step 1: Create session + seed 11 resources with chunks
 		const { session, resources } = await seedPdeSession(db);
 
-		// Verify initial state
 		for (const resource of resources) {
 			const r = await db.resource.findUnique({ where: { id: resource.id } });
 			expect(r?.isIndexed).toBe(true);
 			expect(r?.isGraphIndexed).toBe(false);
 		}
 
-		// Setup LLM mock per resource type
 		vi.mocked(chatCompletion).mockImplementation(async (messages) =>
 			mockLlmByResourceType(messages),
 		);
 
-		// Step 2: Index all resources
 		for (const resource of resources) {
 			await indexResourceGraph(resource.id);
 		}
 
-		// Verify all resources marked as graph-indexed
 		const indexedResources = await db.resource.findMany({
 			where: { sessionId: session.id, isGraphIndexed: true },
 		});
 		expect(indexedResources.length).toBe(11);
 
-		// Step 3: Verify concept deduplication
 		const concepts = await db.concept.findMany({ where: { sessionId: session.id } });
 		const conceptNames = concepts.map((c) => c.name);
 
-		// "Heat Equation" should appear only once despite being in lectures, papers, and sheets
-		const heatEquationCount = conceptNames.filter((n) => n === "Heat Equation").length;
-		expect(heatEquationCount).toBe(1);
+		expect(conceptNames.filter((n) => n === "Heat Equation").length).toBe(1);
+		expect(conceptNames.filter((n) => n === "Method Of Characteristics").length).toBe(1);
 
-		// "Method Of Characteristics" also appears in multiple resource type responses
-		const mocCount = conceptNames.filter((n) => n === "Method Of Characteristics").length;
-		expect(mocCount).toBe(1);
-
-		// Step 4: Verify cross-resource relationships
 		const allRels = await db.relationship.findMany({ where: { sessionId: session.id } });
 		expect(allRels.length).toBeGreaterThan(0);
 
-		// Find resource-concept rels from different resource types pointing to same concept
 		const heatEquation = concepts.find((c) => c.name === "Heat Equation");
 		expect(heatEquation).toBeDefined();
 		const heatRels = allRels.filter(
 			(r) => r.targetType === "concept" && r.targetId === heatEquation?.id,
 		);
-		// Should have relationships from lecture notes AND past papers AND problem sheets
 		const sourceResourceIds = [
 			...new Set(heatRels.filter((r) => r.sourceType === "resource").map((r) => r.sourceId)),
 		];
 		expect(sourceResourceIds.length).toBeGreaterThan(1);
 
-		// Step 5: Search "Method of Characteristics"
 		const searchResults = await searchGraph(session.id, "Method Of Characteristics", 20);
 		expect(searchResults.length).toBeGreaterThan(0);
 
-		// Should return results from multiple resource types
 		const resourceTypes = [...new Set(searchResults.map((r) => r.resourceType))];
 		expect(resourceTypes.length).toBeGreaterThan(1);
 
-		// Step 6: Verify amortisation
 		const contentResults = searchResults.map((r) => ({
 			chunkId: r.chunkId,
 			resourceId: r.resourceId,
@@ -94,12 +76,10 @@ describe("full indexing flow", () => {
 		});
 		expect(amortisedRels.length).toBeGreaterThan(0);
 
-		// Step 7: Re-search — results should be at least as rich
 		const reSearchResults = await searchGraph(session.id, "Method Of Characteristics", 20);
 		expect(reSearchResults.length).toBeGreaterThanOrEqual(searchResults.length);
 
-		// Step 8: Re-index a single resource
-		const resourceToReindex = resources[0]; // Lecture notes Part 1
+		const resourceToReindex = resources[0];
 		const amortisedBefore = await db.relationship.count({
 			where: { sessionId: session.id, createdBy: "amortised" },
 		});
@@ -117,23 +97,19 @@ describe("full indexing flow", () => {
 
 		await indexResourceGraph(resourceToReindex.id);
 
-		// System rels for this resource should be replaced
 		const systemRelsForResource = await db.relationship.findMany({
 			where: { sessionId: session.id, sourceId: resourceToReindex.id, createdBy: "system" },
 		});
 		expect(systemRelsForResource.length).toBe(1);
 		expect(systemRelsForResource[0].targetLabel).toBe("Heat Equation");
 
-		// Amortised rels should be preserved
 		const amortisedAfter = await db.relationship.count({
 			where: { sessionId: session.id, createdBy: "amortised" },
 		});
 		expect(amortisedAfter).toBe(amortisedBefore);
 
-		// Step 9: Delete a concept
 		const conceptToDelete = concepts.find((c) => c.name === "Wave Equation");
 		if (conceptToDelete) {
-			// Delete relationships first
 			await db.relationship.deleteMany({
 				where: {
 					sessionId: session.id,
@@ -145,13 +121,8 @@ describe("full indexing flow", () => {
 			});
 			await db.concept.delete({ where: { id: conceptToDelete.id } });
 
-			// Verify it's gone
-			const deletedConcept = await db.concept.findUnique({
-				where: { id: conceptToDelete.id },
-			});
-			expect(deletedConcept).toBeNull();
+			expect(await db.concept.findUnique({ where: { id: conceptToDelete.id } })).toBeNull();
 
-			// Relationships involving Wave Equation should be gone
 			const waveRels = await db.relationship.findMany({
 				where: {
 					sessionId: session.id,
@@ -163,9 +134,7 @@ describe("full indexing flow", () => {
 			});
 			expect(waveRels.length).toBe(0);
 
-			// Search should no longer find Wave Equation via graph
 			const waveSearch = await searchGraph(session.id, "Wave Equation", 10);
-			// If there are results, they should not reference Wave Equation concept
 			for (const result of waveSearch) {
 				const hasWaveEq = result.relatedConcepts.some((c) => c.name === "Wave Equation");
 				expect(hasWaveEq).toBe(false);

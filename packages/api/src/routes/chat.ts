@@ -7,8 +7,10 @@ import { Hono } from "hono";
 import { streamCliChat } from "../services/cli-chat.js";
 import { getStream, startStream } from "../services/stream-manager.js";
 import {
-	buildSystemPrompt,
+	autoTitleConversation,
 	collectImagePaths,
+	loadConversationHistory,
+	loadSessionWithPrompt,
 	persistUserMessage,
 	pipeStreamToSSE,
 } from "./chat-helpers.js";
@@ -242,99 +244,49 @@ chatRoutes.post("/stream", async (c) => {
 	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId } = parsed.data;
 	const db = getDb();
 
-	// Verify conversation exists and belongs to session
 	const conversation = await db.conversation.findUnique({
 		where: { id: conversationId },
 	});
-
 	if (!conversation || conversation.sessionId !== sessionId) {
 		return c.json({ error: "Conversation not found" }, 404);
 	}
 
-	// Check for active stream — reconnection case.
-	// Only reconnect if the stream is still actively streaming.
-	// Completed streams linger in the map for the cleanup delay; treating them
-	// as "active" would replay old events and silently drop the new user message.
+	// Reconnect to an actively-streaming conversation (completed streams are skipped)
 	const existingStream = getStream(conversationId);
 	if (existingStream && existingStream.status === "streaming") {
 		log.info(`POST /chat/stream — reconnecting to active stream for ${conversationId}`);
 		return pipeStreamToSSE(c, conversationId);
 	}
 
-	// Handle rewind (retry/edit) or save new user message
-	const result = await persistUserMessage(db, {
+	const persistResult = await persistUserMessage(db, {
 		conversationId,
 		message,
 		attachmentIds,
 		rewindToMessageId,
 	});
-	if (result.error) {
-		return c.json({ error: result.error }, 404);
+	if (persistResult.error) {
+		return c.json({ error: persistResult.error }, 404);
 	}
 
-	// Load full message history from DB (include attachments for image paths)
-	const history = await db.message.findMany({
-		where: { conversationId },
-		orderBy: { createdAt: "asc" },
-		select: {
-			role: true,
-			content: true,
-			attachments: { select: { diskPath: true } },
-		},
-	});
-
+	const history = await loadConversationHistory(db, conversationId);
 	const imagePaths = collectImagePaths(history);
+	await autoTitleConversation(db, conversationId, history.length, message);
 
-	// Auto-title on first user message
-	if (history.length === 1) {
-		const titleSource = message || "Image";
-		const title = titleSource.length > 50 ? `${titleSource.slice(0, 50)}…` : titleSource;
-		await db.conversation.update({
-			where: { id: conversationId },
-			data: { title },
-		});
+	const sessionResult = await loadSessionWithPrompt(db, sessionId);
+	if ("error" in sessionResult) {
+		return c.json({ error: sessionResult.error }, 404);
 	}
-
-	// Build system prompt from session context
-	const session = await db.session.findUnique({
-		where: { id: sessionId },
-		include: {
-			resources: {
-				select: {
-					id: true,
-					name: true,
-					type: true,
-					label: true,
-					isIndexed: true,
-					isGraphIndexed: true,
-					files: {
-						select: { filename: true, role: true },
-					},
-				},
-			},
-		},
-	});
-
-	if (!session) {
-		return c.json({ error: "Session not found" }, 404);
-	}
-
-	const systemPrompt = buildSystemPrompt(session, sessionId);
 
 	log.info(
 		`POST /chat/stream — session=${sessionId}, conversation=${conversationId}, history=${history.length} messages`,
 	);
 
-	// Spawn CLI without HTTP signal — stream runs independently of client connection
 	const cliStream = streamCliChat({
 		messages: history as Array<{ role: "system" | "user" | "assistant"; content: string }>,
-		systemPrompt,
+		systemPrompt: sessionResult.systemPrompt,
 		images: imagePaths.length > 0 ? imagePaths : undefined,
 	});
-
-	// Register with stream manager — background consumer handles persistence
 	startStream(conversationId, cliStream, db);
 
-	// Subscribe this SSE connection to the stream
 	return pipeStreamToSSE(c, conversationId);
 });

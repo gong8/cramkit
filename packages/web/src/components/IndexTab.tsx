@@ -1,5 +1,5 @@
-import { ConfirmModal } from "@/components/ConfirmModal";
-import { BatchFailuresSection, IndexProgressSection } from "@/components/IndexTabParts";
+import { ConfirmModal } from "@/components/ConfirmModal.js";
+import { BatchFailuresSection, IndexProgressSection } from "@/components/IndexTabParts.js";
 import type { IndexStatus, Resource } from "@/lib/api";
 import { BrainCircuit, Network, RefreshCw, Trash2, X } from "lucide-react";
 import { useState } from "react";
@@ -31,16 +31,49 @@ export function IndexTab({
 	const [showClearGraphModal, setShowClearGraphModal] = useState(false);
 	const [isClearingGraph, setIsClearingGraph] = useState(false);
 
-	const graphIndexedCount = resources.filter((r) => r.isGraphIndexed).length;
 	const indexedCount = resources.filter((r) => r.isIndexed).length;
-	const hasUnindexedResources = resources.some((r) => r.isIndexed && !r.isGraphIndexed);
-	const allGraphIndexed =
-		resources.length > 0 && resources.every((r) => !r.isIndexed || r.isGraphIndexed);
-	const hasIndexedResources = resources.some((r) => r.isIndexed);
+	const graphIndexedCount = resources.filter((r) => r.isGraphIndexed).length;
+	const hasUnindexed = resources.some((r) => r.isIndexed && !r.isGraphIndexed);
+	const allGraphIndexed = indexedCount > 0 && !hasUnindexed;
+	const hasIndexed = indexedCount > 0;
 
 	const batch = indexStatus?.batch;
 	const batchFailed = batch?.batchFailed ?? 0;
-	const batchHasFailures = batchFailed > 0;
+	const hasBatchFailures = batchFailed > 0;
+
+	const actionButtons: ActionButtonProps[] = [];
+	if (isIndexingAll) {
+		actionButtons.push({
+			onClick: onCancel,
+			className: "bg-destructive/10 text-destructive hover:bg-destructive/20",
+			icon: <X className="h-4 w-4" />,
+			label: "Cancel",
+		});
+	} else {
+		if (hasUnindexed) {
+			actionButtons.push({
+				onClick: onIndexAll,
+				className: "bg-primary text-primary-foreground hover:bg-primary/90",
+				icon: <BrainCircuit className="h-4 w-4" />,
+				label: "Index All",
+			});
+		} else if (allGraphIndexed && hasIndexed) {
+			actionButtons.push({
+				onClick: onReindexAll,
+				className: "bg-violet-500/10 text-violet-600 hover:bg-violet-500/20",
+				icon: <RefreshCw className="h-4 w-4" />,
+				label: "Reindex All",
+			});
+		}
+		if (hasBatchFailures) {
+			actionButtons.push({
+				onClick: onRetryFailed,
+				className: "bg-destructive/10 text-destructive hover:bg-destructive/20",
+				icon: <RefreshCw className="h-4 w-4" />,
+				label: `Retry Failed (${batchFailed})`,
+			});
+		}
+	}
 
 	const handleClearGraph = async () => {
 		setIsClearingGraph(true);
@@ -60,32 +93,44 @@ export function IndexTab({
 				allGraphIndexed={allGraphIndexed}
 			/>
 
-			<ActionButtons
-				isIndexingAll={isIndexingAll}
-				hasUnindexedResources={hasUnindexedResources}
-				allGraphIndexed={allGraphIndexed}
-				hasIndexedResources={hasIndexedResources}
-				batchHasFailures={batchHasFailures}
-				batchFailed={batchFailed}
-				onCancel={onCancel}
-				onIndexAll={onIndexAll}
-				onReindexAll={onReindexAll}
-				onRetryFailed={onRetryFailed}
-			/>
+			{actionButtons.length > 0 && (
+				<div className="flex flex-wrap gap-2">
+					{actionButtons.map((btn) => (
+						<ActionButton key={btn.label} {...btn} />
+					))}
+				</div>
+			)}
 
 			{isIndexingAll && (
 				<IndexProgressSection indexStatus={indexStatus} batchFailed={batchFailed} />
 			)}
 
-			{!isIndexingAll && batch?.resources && batchHasFailures && (
+			{!isIndexingAll && batch?.resources && hasBatchFailures && (
 				<BatchFailuresSection resources={batch.resources} failedCount={batchFailed} />
 			)}
 
-			<KnowledgeGraphSection
-				sessionId={sessionId}
-				hasIndexedResources={hasIndexedResources}
-				onClearGraph={() => setShowClearGraphModal(true)}
-			/>
+			<div className="space-y-3">
+				<h3 className="text-sm font-semibold uppercase text-muted-foreground">Knowledge Graph</h3>
+				<div className="flex gap-2">
+					<Link
+						to={`/session/${sessionId}/graph`}
+						className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent"
+					>
+						<Network className="h-4 w-4" />
+						View Knowledge Graph
+					</Link>
+					{hasIndexed && (
+						<button
+							type="button"
+							onClick={() => setShowClearGraphModal(true)}
+							className="flex items-center gap-2 rounded-md border border-destructive/30 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10"
+						>
+							<Trash2 className="h-4 w-4" />
+							Clear Graph
+						</button>
+					)}
+				</div>
+			</div>
 
 			{showClearGraphModal && (
 				<ConfirmModal
@@ -111,6 +156,8 @@ function StatusOverview({
 	indexedCount: number;
 	allGraphIndexed: boolean;
 }) {
+	const progressPct = indexedCount > 0 ? Math.round((graphIndexedCount / indexedCount) * 100) : 0;
+
 	return (
 		<div className="rounded-lg border border-border p-4">
 			<div className="flex items-center justify-between">
@@ -124,9 +171,7 @@ function StatusOverview({
 				</div>
 				{indexedCount > 0 && (
 					<div
-						className={`h-2.5 w-2.5 rounded-full ${
-							allGraphIndexed ? "bg-green-500" : "bg-amber-400"
-						}`}
+						className={`h-2.5 w-2.5 rounded-full ${allGraphIndexed ? "bg-green-500" : "bg-amber-400"}`}
 					/>
 				)}
 			</div>
@@ -134,9 +179,7 @@ function StatusOverview({
 				<div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
 					<div
 						className="h-full rounded-full bg-primary transition-all duration-300"
-						style={{
-							width: `${Math.round((graphIndexedCount / indexedCount) * 100)}%`,
-						}}
+						style={{ width: `${progressPct}%` }}
 					/>
 				</div>
 			)}
@@ -144,78 +187,14 @@ function StatusOverview({
 	);
 }
 
-function ActionButtons({
-	isIndexingAll,
-	hasUnindexedResources,
-	allGraphIndexed,
-	hasIndexedResources,
-	batchHasFailures,
-	batchFailed,
-	onCancel,
-	onIndexAll,
-	onReindexAll,
-	onRetryFailed,
-}: {
-	isIndexingAll: boolean;
-	hasUnindexedResources: boolean;
-	allGraphIndexed: boolean;
-	hasIndexedResources: boolean;
-	batchHasFailures: boolean;
-	batchFailed: number;
-	onCancel: () => void;
-	onIndexAll: () => void;
-	onReindexAll: () => void;
-	onRetryFailed: () => void;
-}) {
-	return (
-		<div className="flex flex-wrap gap-2">
-			{isIndexingAll && (
-				<ActionButton
-					onClick={onCancel}
-					className="bg-destructive/10 text-destructive hover:bg-destructive/20"
-					icon={<X className="h-4 w-4" />}
-					label="Cancel"
-				/>
-			)}
-			{!isIndexingAll && hasUnindexedResources && (
-				<ActionButton
-					onClick={onIndexAll}
-					className="bg-primary text-primary-foreground hover:bg-primary/90"
-					icon={<BrainCircuit className="h-4 w-4" />}
-					label="Index All"
-				/>
-			)}
-			{!isIndexingAll && !hasUnindexedResources && allGraphIndexed && hasIndexedResources && (
-				<ActionButton
-					onClick={onReindexAll}
-					className="bg-violet-500/10 text-violet-600 hover:bg-violet-500/20"
-					icon={<RefreshCw className="h-4 w-4" />}
-					label="Reindex All"
-				/>
-			)}
-			{!isIndexingAll && batchHasFailures && (
-				<ActionButton
-					onClick={onRetryFailed}
-					className="bg-destructive/10 text-destructive hover:bg-destructive/20"
-					icon={<RefreshCw className="h-4 w-4" />}
-					label={`Retry Failed (${batchFailed})`}
-				/>
-			)}
-		</div>
-	);
-}
-
-function ActionButton({
-	onClick,
-	className,
-	icon,
-	label,
-}: {
+interface ActionButtonProps {
 	onClick: () => void;
 	className: string;
 	icon: React.ReactNode;
 	label: string;
-}) {
+}
+
+function ActionButton({ onClick, className, icon, label }: ActionButtonProps) {
 	return (
 		<button
 			type="button"
@@ -225,40 +204,5 @@ function ActionButton({
 			{icon}
 			{label}
 		</button>
-	);
-}
-
-function KnowledgeGraphSection({
-	sessionId,
-	hasIndexedResources,
-	onClearGraph,
-}: {
-	sessionId: string;
-	hasIndexedResources: boolean;
-	onClearGraph: () => void;
-}) {
-	return (
-		<div className="space-y-3">
-			<h3 className="text-sm font-semibold uppercase text-muted-foreground">Knowledge Graph</h3>
-			<div className="flex gap-2">
-				<Link
-					to={`/session/${sessionId}/graph`}
-					className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent"
-				>
-					<Network className="h-4 w-4" />
-					View Knowledge Graph
-				</Link>
-				{hasIndexedResources && (
-					<button
-						type="button"
-						onClick={onClearGraph}
-						className="flex items-center gap-2 rounded-md border border-destructive/30 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10"
-					>
-						<Trash2 className="h-4 w-4" />
-						Clear Graph
-					</button>
-				)}
-			</div>
-		</div>
 	);
 }

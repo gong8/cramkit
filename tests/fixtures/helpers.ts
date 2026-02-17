@@ -1,13 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
-import type { Mock } from "vitest";
 import { lectureNotesResponse, pastPaperResponse, problemSheetResponse } from "./llm-responses.js";
 
-/** Cast a vi.fn() or vi.mocked() to its Mock type for type-safe assertions */
-export function asMock<T extends (...args: unknown[]) => unknown>(fn: T): Mock<T> {
-	return fn as unknown as Mock<T>;
-}
-
-/** Mock implementation that routes chatCompletion by resource type in the user message */
 export function mockLlmByResourceType(messages: { role: string; content: string }[]) {
 	const userMsg = messages.find((m) => m.role === "user")?.content || "";
 	if (userMsg.includes("LECTURE_NOTES")) return JSON.stringify(lectureNotesResponse);
@@ -15,7 +8,6 @@ export function mockLlmByResourceType(messages: { role: string; content: string 
 	return JSON.stringify(problemSheetResponse);
 }
 
-/** Seed a session with a single resource and N numbered chunks */
 export async function seedSessionWithChunks(
 	db: PrismaClient,
 	opts: { name?: string; chunkCount?: number; resourceType?: string } = {},
@@ -49,7 +41,24 @@ export async function seedSessionWithChunks(
 	return { session, resource, chunks };
 }
 
-/** Seed a full PDE midterm session with 11 resources (each with 1 file) and chunks. Returns DB IDs. */
+export async function seedSessionWithConcept(
+	db: PrismaClient,
+	opts: { name?: string; chunkCount?: number } = {},
+) {
+	const { session, resource, chunks } = await seedSessionWithChunks(db, opts);
+
+	const concept = await db.concept.create({
+		data: {
+			sessionId: session.id,
+			name: "Heat Equation",
+			description: "Parabolic PDE modelling diffusion",
+			aliases: "diffusion equation",
+		},
+	});
+
+	return { session, resource, chunks, concept };
+}
+
 export async function seedPdeSession(db: PrismaClient) {
 	const session = await db.session.create({
 		data: {
@@ -175,7 +184,79 @@ export async function seedPdeSession(db: PrismaClient) {
 	return { session, resources, chunks };
 }
 
-/** Delete all rows from all tables (in FK-safe order) */
+export async function seedGraphData(db: PrismaClient) {
+	const { session, resource, chunks } = await seedSessionWithChunks(db, {
+		name: "PDE Test Session",
+	});
+
+	const heatEq = await db.concept.create({
+		data: {
+			sessionId: session.id,
+			name: "Heat Equation",
+			description: "Parabolic PDE modelling diffusion",
+			aliases: "diffusion equation",
+		},
+	});
+
+	const waveEq = await db.concept.create({
+		data: {
+			sessionId: session.id,
+			name: "Wave Equation",
+			description: "Hyperbolic PDE for wave propagation",
+		},
+	});
+
+	const sepVars = await db.concept.create({
+		data: {
+			sessionId: session.id,
+			name: "Separation Of Variables",
+			description: "Technique decomposing PDE into ODEs",
+		},
+	});
+
+	await db.relationship.create({
+		data: {
+			sessionId: session.id,
+			sourceType: "resource",
+			sourceId: resource.id,
+			sourceLabel: resource.name,
+			targetType: "concept",
+			targetId: heatEq.id,
+			targetLabel: "Heat Equation",
+			relationship: "covers",
+			createdBy: "system",
+		},
+	});
+
+	await db.relationship.create({
+		data: {
+			sessionId: session.id,
+			sourceType: "chunk",
+			sourceId: chunks[0].id,
+			targetType: "concept",
+			targetId: waveEq.id,
+			targetLabel: "Wave Equation",
+			relationship: "covers",
+			createdBy: "system",
+		},
+	});
+
+	await db.relationship.create({
+		data: {
+			sessionId: session.id,
+			sourceType: "chunk",
+			sourceId: chunks[1].id,
+			targetType: "concept",
+			targetId: sepVars.id,
+			targetLabel: "Separation Of Variables",
+			relationship: "introduces",
+			createdBy: "system",
+		},
+	});
+
+	return { session, resource, chunks, concepts: { heatEq, waveEq, sepVars } };
+}
+
 export async function cleanDb(db: PrismaClient) {
 	await db.indexJob.deleteMany();
 	await db.indexBatch.deleteMany();

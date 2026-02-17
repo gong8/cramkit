@@ -1,18 +1,20 @@
-import { IndexTab } from "@/components/IndexTab";
-import { MaterialsTab } from "@/components/MaterialsTab";
-import { SessionDetailsPanel } from "@/components/session/SessionDetailsPanel";
-import { SessionHeader } from "@/components/session/SessionHeader";
-import { useAutoSaveDetails } from "@/components/session/useAutoSaveDetails";
-import { useIndexing } from "@/components/session/useIndexing";
-import { exportSession, fetchSession } from "@/lib/api";
-import { createLogger } from "@/lib/logger";
+import { IndexTab } from "@/components/IndexTab.js";
+import { MaterialsTab } from "@/components/MaterialsTab.js";
+import { SegmentedControl } from "@/components/SegmentedControl.js";
+import { SessionDetailsPanel } from "@/components/session/SessionDetailsPanel.js";
+import { SessionHeader } from "@/components/session/SessionHeader.js";
+import { useAutoSaveDetails } from "@/components/session/useAutoSaveDetails.js";
+import { useIndexing } from "@/components/session/useIndexing.js";
+import { exportSession, fetchSession } from "@/lib/api.js";
+import { createLogger } from "@/lib/logger.js";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 
 const log = createLogger("web");
 
-type Tab = "materials" | "index";
+const TABS = ["materials", "index"] as const;
+type Tab = (typeof TABS)[number];
 
 export function SessionDetail() {
 	const { id } = useParams<{ id: string }>();
@@ -26,11 +28,6 @@ export function SessionDetail() {
 		},
 		enabled: !!sessionId,
 	});
-
-	const refetchSession = useQuery({
-		queryKey: ["session", sessionId],
-		enabled: false,
-	}).refetch;
 
 	const resources = session?.resources ?? [];
 
@@ -50,7 +47,7 @@ export function SessionDetail() {
 		handleIndexResource,
 		handleCancel,
 		handleClearGraph,
-	} = useIndexing(sessionId, refetchSession);
+	} = useIndexing(sessionId);
 
 	const [isExporting, setIsExporting] = useState(false);
 	const handleExport = useCallback(async () => {
@@ -68,13 +65,6 @@ export function SessionDetail() {
 	if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
 	if (!session) return <p className="text-muted-foreground">Session not found.</p>;
 
-	const examDateFormatted = examDate
-		? new Date(`${examDate}T00:00:00`).toLocaleDateString("en-GB", {
-				day: "numeric",
-				month: "short",
-			})
-		: null;
-
 	const batch = indexStatus?.batch;
 
 	return (
@@ -82,7 +72,7 @@ export function SessionDetail() {
 			<SessionHeader
 				session={session}
 				sessionId={sessionId}
-				examDateFormatted={examDateFormatted}
+				examDate={examDate}
 				isExporting={isExporting}
 				onExport={handleExport}
 			/>
@@ -96,25 +86,7 @@ export function SessionDetail() {
 				onExamDateChange={setExamDate}
 			/>
 
-			{/* Segmented control */}
-			<div className="mb-6 flex justify-center">
-				<div className="inline-flex rounded-lg border border-border bg-muted/50 p-1">
-					{(["materials", "index"] as const).map((tab) => (
-						<button
-							key={tab}
-							type="button"
-							onClick={() => setActiveTab(tab)}
-							className={`rounded-md px-5 py-1.5 text-sm font-medium capitalize transition-colors ${
-								activeTab === tab
-									? "bg-background text-foreground shadow-sm"
-									: "text-muted-foreground hover:text-foreground"
-							}`}
-						>
-							{tab}
-						</button>
-					))}
-				</div>
-			</div>
+			<SegmentedControl tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
 			{activeTab === "materials" && (
 				<MaterialsTab

@@ -15,54 +15,6 @@ export interface GraphSearchResult {
 	relatedConcepts: Array<{ name: string; relationship: string }>;
 }
 
-interface ConceptRelEdge {
-	entityId: string;
-	entityType: string;
-	conceptName: string;
-	relationship: string;
-}
-
-function extractEdges(
-	relationships: Array<{
-		sourceType: string;
-		sourceId: string;
-		targetType: string;
-		targetId: string;
-		relationship: string;
-	}>,
-	conceptIds: string[],
-	conceptNames: Map<string, string>,
-): ConceptRelEdge[] {
-	const edges: ConceptRelEdge[] = [];
-	for (const rel of relationships) {
-		const isSourceConcept = rel.sourceType === "concept" && conceptIds.includes(rel.sourceId);
-		const isTargetConcept = rel.targetType === "concept" && conceptIds.includes(rel.targetId);
-		if (!isSourceConcept && !isTargetConcept) continue;
-
-		const conceptId = isSourceConcept ? rel.sourceId : rel.targetId;
-		const entityId = isSourceConcept ? rel.targetId : rel.sourceId;
-		const entityType = isSourceConcept ? rel.targetType : rel.sourceType;
-
-		edges.push({
-			entityId,
-			entityType,
-			conceptName: conceptNames.get(conceptId) || "",
-			relationship: rel.relationship,
-		});
-	}
-	return edges;
-}
-
-function appendConcept(
-	map: Map<string, Array<{ name: string; relationship: string }>>,
-	chunkId: string,
-	edge: { conceptName: string; relationship: string },
-) {
-	const list = map.get(chunkId) || [];
-	list.push({ name: edge.conceptName, relationship: edge.relationship });
-	map.set(chunkId, list);
-}
-
 export async function searchGraph(
 	sessionId: string,
 	query: string,
@@ -70,7 +22,6 @@ export async function searchGraph(
 ): Promise<GraphSearchResult[]> {
 	const db = getDb();
 
-	// Token-based fuzzy concept matching
 	const terms = query
 		.toLowerCase()
 		.split(/\s+/)
@@ -93,7 +44,6 @@ export async function searchGraph(
 	const conceptIds = concepts.map((c) => c.id);
 	const conceptNames = new Map(concepts.map((c) => [c.id, c.name]));
 
-	// Find relationships where matching concepts are source or target
 	const relationships = await db.relationship.findMany({
 		where: {
 			sessionId,
@@ -104,22 +54,31 @@ export async function searchGraph(
 		},
 	});
 
-	const edges = extractEdges(relationships, conceptIds, conceptNames);
-
 	const chunkIds = new Set<string>();
 	const resourceIds = new Set<string>();
 	const chunkConceptMap = new Map<string, Array<{ name: string; relationship: string }>>();
 
-	for (const edge of edges) {
-		if (edge.entityType === "chunk") {
-			chunkIds.add(edge.entityId);
-			appendConcept(chunkConceptMap, edge.entityId, edge);
-		} else if (edge.entityType === "resource") {
-			resourceIds.add(edge.entityId);
+	const addConcept = (chunkId: string, name: string, relationship: string) => {
+		const list = chunkConceptMap.get(chunkId);
+		if (list) list.push({ name, relationship });
+		else chunkConceptMap.set(chunkId, [{ name, relationship }]);
+	};
+
+	for (const rel of relationships) {
+		const isSource = rel.sourceType === "concept" && conceptIds.includes(rel.sourceId);
+		const conceptId = isSource ? rel.sourceId : rel.targetId;
+		const entityId = isSource ? rel.targetId : rel.sourceId;
+		const entityType = isSource ? rel.targetType : rel.sourceType;
+		const name = conceptNames.get(conceptId) || "";
+
+		if (entityType === "chunk") {
+			chunkIds.add(entityId);
+			addConcept(entityId, name, rel.relationship);
+		} else if (entityType === "resource") {
+			resourceIds.add(entityId);
 		}
 	}
 
-	// For resource-level relationships, get their chunks
 	if (resourceIds.size > 0) {
 		const resourceChunks = await db.chunk.findMany({
 			where: { resourceId: { in: Array.from(resourceIds) } },
@@ -127,9 +86,13 @@ export async function searchGraph(
 		});
 		for (const rc of resourceChunks) {
 			chunkIds.add(rc.id);
-			for (const edge of edges) {
-				if (edge.entityType === "resource" && edge.entityId === rc.resourceId) {
-					appendConcept(chunkConceptMap, rc.id, edge);
+			for (const rel of relationships) {
+				const isSource = rel.sourceType === "concept" && conceptIds.includes(rel.sourceId);
+				const entityId = isSource ? rel.targetId : rel.sourceId;
+				const entityType = isSource ? rel.targetType : rel.sourceType;
+				if (entityType === "resource" && entityId === rc.resourceId) {
+					const conceptId = isSource ? rel.sourceId : rel.targetId;
+					addConcept(rc.id, conceptNames.get(conceptId) || "", rel.relationship);
 				}
 			}
 		}
@@ -140,7 +103,6 @@ export async function searchGraph(
 		return [];
 	}
 
-	// Fetch chunks with resource metadata
 	const chunks = await db.chunk.findMany({
 		where: { id: { in: Array.from(chunkIds) } },
 		include: {

@@ -27,6 +27,18 @@ interface ScorableChunk {
 	nodeType: string;
 }
 
+function countOccurrences(haystack: string, needle: string, max: number): number {
+	let count = 0;
+	let pos = 0;
+	while (count < max) {
+		pos = haystack.indexOf(needle, pos);
+		if (pos === -1) break;
+		count++;
+		pos += needle.length;
+	}
+	return count;
+}
+
 function scoreChunk(
 	chunk: ScorableChunk,
 	queryTerms: string[],
@@ -38,11 +50,8 @@ function scoreChunk(
 	const lowerQuery = query.toLowerCase();
 	const lowerTitle = (chunk.title || "").toLowerCase();
 
-	if (lowerTitle === lowerQuery) {
-		score += 10;
-	} else if (lowerTitle.includes(lowerQuery)) {
-		score += 6;
-	}
+	if (lowerTitle === lowerQuery) score += 10;
+	else if (lowerTitle.includes(lowerQuery)) score += 6;
 
 	const lowerKeywords = (chunk.keywords || "").toLowerCase();
 	for (const term of queryTerms) {
@@ -53,16 +62,7 @@ function scoreChunk(
 		}
 	}
 
-	const lowerContent = chunk.content.toLowerCase();
-	let occurrences = 0;
-	let searchFrom = 0;
-	while (occurrences < 5) {
-		const idx = lowerContent.indexOf(lowerQuery, searchFrom);
-		if (idx === -1) break;
-		occurrences++;
-		searchFrom = idx + lowerQuery.length;
-	}
-	score += occurrences;
+	score += countOccurrences(chunk.content.toLowerCase(), lowerQuery, 5);
 
 	if (isGraphResult) score += 3;
 	if (chunk.nodeType === "definition" || chunk.nodeType === "theorem") score += 2;
@@ -84,13 +84,11 @@ function buildContentResults(
 	queryTerms: string[],
 	query: string,
 ): ContentResult[] {
-	const graphChunkIds = new Set(graphResults.map((g) => g.chunkId));
 	const graphByChunkId = new Map(graphResults.map((g) => [g.chunkId, g]));
 
 	const results: ContentResult[] = contentChunks.map((chunk) => {
-		const isGraphResult = graphChunkIds.has(chunk.id);
-		const { score, matchedKeywords } = scoreChunk(chunk, queryTerms, query, isGraphResult);
 		const graphMatch = graphByChunkId.get(chunk.id);
+		const { score, matchedKeywords } = scoreChunk(chunk, queryTerms, query, !!graphMatch);
 
 		return {
 			chunkId: chunk.id,
@@ -99,20 +97,19 @@ function buildContentResults(
 			resourceType: chunk.resource.type,
 			title: chunk.title,
 			content: chunk.content,
-			source: isGraphResult ? ("both" as const) : ("content" as const),
+			source: graphMatch ? ("both" as const) : ("content" as const),
 			score,
 			keywords: matchedKeywords,
 			relatedConcepts: graphMatch?.relatedConcepts,
 		};
 	});
 
-	// Add graph-only results
-	const seenChunkIds = new Set(results.map((r) => r.chunkId));
+	// Add graph-only results (not already in content results)
+	const contentChunkIds = new Set(contentChunks.map((c) => c.id));
 	for (const graphResult of graphResults) {
-		if (seenChunkIds.has(graphResult.chunkId)) continue;
+		if (contentChunkIds.has(graphResult.chunkId)) continue;
 		const { score, matchedKeywords } = scoreChunk(graphResult, queryTerms, query, true);
 		results.push({ ...graphResult, score, keywords: matchedKeywords });
-		seenChunkIds.add(graphResult.chunkId);
 	}
 
 	results.sort((a, b) => b.score - a.score);

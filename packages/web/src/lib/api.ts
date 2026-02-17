@@ -1,5 +1,40 @@
 import { createLogger } from "@/lib/logger.js";
 
+export type {
+	BatchResource,
+	BatchStatus,
+	ChatAttachment,
+	ChatMessage,
+	Concept,
+	ConversationSummary,
+	GraphResource,
+	ImportResult,
+	IndexStatus,
+	Relationship,
+	Resource,
+	ResourceContent,
+	ResourceFile,
+	Session,
+	SessionGraph,
+	SessionSummary,
+	StreamStatus,
+	ToolCallData,
+} from "./api-types.js";
+
+import type {
+	ChatMessage,
+	Concept,
+	ConversationSummary,
+	ImportResult,
+	IndexStatus,
+	Resource,
+	ResourceContent,
+	Session,
+	SessionGraph,
+	SessionSummary,
+	StreamStatus,
+} from "./api-types.js";
+
 const log = createLogger("web");
 const BASE_URL = "/api";
 
@@ -24,6 +59,24 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 	return response.json() as Promise<T>;
 }
 
+function post<T>(path: string, body?: unknown): Promise<T> {
+	return request(path, {
+		method: "POST",
+		body: body !== undefined ? JSON.stringify(body) : undefined,
+	});
+}
+
+function patch<T>(path: string, body: unknown): Promise<T> {
+	return request(path, {
+		method: "PATCH",
+		body: JSON.stringify(body),
+	});
+}
+
+function del<T = void>(path: string): Promise<T> {
+	return request(path, { method: "DELETE" });
+}
+
 async function uploadFormData<T>(path: string, formData: FormData): Promise<T> {
 	const response = await fetch(`${BASE_URL}${path}`, {
 		method: "POST",
@@ -36,6 +89,17 @@ async function uploadFormData<T>(path: string, formData: FormData): Promise<T> {
 	}
 
 	return response.json() as Promise<T>;
+}
+
+function buildFormData(fields: Record<string, string | undefined>, files?: File[]): FormData {
+	const fd = new FormData();
+	for (const [key, value] of Object.entries(fields)) {
+		if (value !== undefined) fd.append(key, value);
+	}
+	if (files) {
+		for (const file of files) fd.append("files", file);
+	}
+	return fd;
 }
 
 async function downloadFile(path: string, fallbackFilename: string): Promise<void> {
@@ -62,111 +126,7 @@ async function downloadFile(path: string, fallbackFilename: string): Promise<voi
 	log.info(`download triggered: ${filename}`);
 }
 
-export interface SessionSummary {
-	id: string;
-	name: string;
-	module: string | null;
-	examDate: string | null;
-	resourceCount: number;
-	scope: string | null;
-}
-
-export interface ResourceFile {
-	id: string;
-	filename: string;
-	role: string;
-	fileSize: number | null;
-}
-
-export interface Resource {
-	id: string;
-	name: string;
-	type: string;
-	label: string | null;
-	isIndexed: boolean;
-	isGraphIndexed: boolean;
-	graphIndexDurationMs: number | null;
-	files: ResourceFile[];
-}
-
-export interface Session {
-	id: string;
-	name: string;
-	module: string | null;
-	examDate: string | null;
-	scope: string | null;
-	notes: string | null;
-	resources: Resource[];
-}
-
-export interface Concept {
-	id: string;
-	name: string;
-	description: string | null;
-	aliases: string | null;
-	createdBy: string;
-}
-
-export interface Relationship {
-	id: string;
-	sourceType: string;
-	sourceId: string;
-	sourceLabel: string | null;
-	targetType: string;
-	targetId: string;
-	targetLabel: string | null;
-	relationship: string;
-	confidence: number;
-}
-
-export interface GraphResource {
-	id: string;
-	name: string;
-	type: string;
-	label: string | null;
-}
-
-export interface SessionGraph {
-	concepts: Concept[];
-	relationships: Relationship[];
-	resources: GraphResource[];
-}
-
-export interface BatchResource {
-	id: string;
-	name: string;
-	type: string;
-	status: "pending" | "indexing" | "completed" | "cancelled" | "failed";
-	durationMs: number | null;
-	errorMessage: string | null;
-	errorType: string | null;
-	attempts: number;
-}
-
-export interface BatchStatus {
-	batchTotal: number;
-	batchCompleted: number;
-	batchFailed: number;
-	currentResourceId: string | null;
-	startedAt: number;
-	cancelled: boolean;
-	resources: BatchResource[];
-}
-
-export interface IndexStatus {
-	total: number;
-	indexed: number;
-	inProgress: number;
-	avgDurationMs: number | null;
-	batch: BatchStatus | null;
-}
-
-export interface ResourceContent {
-	id: string;
-	name: string;
-	type: string;
-	content: string;
-}
+// Session operations
 
 export function fetchSessions(): Promise<SessionSummary[]> {
 	return request("/sessions");
@@ -181,10 +141,7 @@ export function createSession(data: {
 	module?: string;
 	examDate?: string;
 }): Promise<Session> {
-	return request("/sessions", {
-		method: "POST",
-		body: JSON.stringify(data),
-	});
+	return post("/sessions", data);
 }
 
 export function updateSession(
@@ -197,19 +154,18 @@ export function updateSession(
 		examDate?: string | null;
 	},
 ): Promise<Session> {
-	return request(`/sessions/${id}`, {
-		method: "PATCH",
-		body: JSON.stringify(data),
-	});
+	return patch(`/sessions/${id}`, data);
 }
 
 export function deleteSession(id: string): Promise<void> {
-	return request(`/sessions/${id}`, { method: "DELETE" });
+	return del(`/sessions/${id}`);
 }
 
 export function clearSessionGraph(sessionId: string): Promise<{ ok: boolean }> {
-	return request(`/sessions/${sessionId}/graph`, { method: "DELETE" });
+	return del(`/sessions/${sessionId}/graph`);
 }
+
+// Resource operations
 
 export function createResource(
 	sessionId: string,
@@ -223,16 +179,14 @@ export function createResource(
 		solutions?: File;
 	},
 ): Promise<Resource> {
-	const formData = new FormData();
-	formData.append("name", data.name);
-	formData.append("type", data.type);
-	if (data.label) formData.append("label", data.label);
-	if (data.splitMode) formData.append("splitMode", data.splitMode);
-	for (const file of data.files) formData.append("files", file);
-	if (data.markScheme) formData.append("markScheme", data.markScheme);
-	if (data.solutions) formData.append("solutions", data.solutions);
+	const fd = buildFormData(
+		{ name: data.name, type: data.type, label: data.label, splitMode: data.splitMode },
+		data.files,
+	);
+	if (data.markScheme) fd.append("markScheme", data.markScheme);
+	if (data.solutions) fd.append("solutions", data.solutions);
 
-	return uploadFormData(`/resources/sessions/${sessionId}/resources`, formData);
+	return uploadFormData(`/resources/sessions/${sessionId}/resources`, fd);
 }
 
 export function addFilesToResource(
@@ -240,59 +194,49 @@ export function addFilesToResource(
 	files: File[],
 	role?: string,
 ): Promise<Resource> {
-	const formData = new FormData();
-	if (role) formData.append("role", role);
-	for (const file of files) formData.append("files", file);
-
-	return uploadFormData(`/resources/${resourceId}/files`, formData);
+	const fd = buildFormData({ role }, files);
+	return uploadFormData(`/resources/${resourceId}/files`, fd);
 }
 
 export function removeFileFromResource(resourceId: string, fileId: string): Promise<void> {
-	return request(`/resources/${resourceId}/files/${fileId}`, { method: "DELETE" });
+	return del(`/resources/${resourceId}/files/${fileId}`);
 }
 
 export function updateResource(
 	resourceId: string,
 	data: { name?: string; label?: string | null },
 ): Promise<Resource> {
-	return request(`/resources/${resourceId}`, {
-		method: "PATCH",
-		body: JSON.stringify(data),
-	});
+	return patch(`/resources/${resourceId}`, data);
 }
 
 export function deleteResource(resourceId: string): Promise<void> {
-	return request(`/resources/${resourceId}`, { method: "DELETE" });
+	return del(`/resources/${resourceId}`);
 }
 
 export function fetchResourceContent(resourceId: string): Promise<ResourceContent> {
 	return request(`/resources/${resourceId}/content`);
 }
 
+// Graph / indexing operations
+
 export function indexResource(sessionId: string, resourceId: string): Promise<void> {
-	return request(`/graph/sessions/${sessionId}/index-resource`, {
-		method: "POST",
-		body: JSON.stringify({ resourceId }),
-	});
+	return post(`/graph/sessions/${sessionId}/index-resource`, { resourceId });
 }
 
 export function indexAllResources(sessionId: string): Promise<void> {
-	return request(`/graph/sessions/${sessionId}/index-all`, { method: "POST" });
+	return post(`/graph/sessions/${sessionId}/index-all`);
 }
 
 export function reindexAllResources(sessionId: string): Promise<void> {
-	return request(`/graph/sessions/${sessionId}/index-all`, {
-		method: "POST",
-		body: JSON.stringify({ reindex: true }),
-	});
+	return post(`/graph/sessions/${sessionId}/index-all`, { reindex: true });
 }
 
 export function cancelIndexing(sessionId: string): Promise<void> {
-	return request(`/graph/sessions/${sessionId}/cancel-indexing`, { method: "POST" });
+	return post(`/graph/sessions/${sessionId}/cancel-indexing`);
 }
 
 export function retryFailedIndexing(sessionId: string): Promise<void> {
-	return request(`/graph/sessions/${sessionId}/retry-failed`, { method: "POST" });
+	return post(`/graph/sessions/${sessionId}/retry-failed`);
 }
 
 export function fetchIndexStatus(sessionId: string): Promise<IndexStatus> {
@@ -308,43 +252,13 @@ export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
 }
 
 // Conversation operations
-export interface ConversationSummary {
-	id: string;
-	title: string;
-	createdAt: string;
-	updatedAt: string;
-	messageCount: number;
-}
-
-export interface ChatAttachment {
-	id: string;
-	filename: string;
-	contentType: string;
-}
-
-export interface ToolCallData {
-	toolCallId: string;
-	toolName: string;
-	args: Record<string, unknown>;
-	result?: string;
-	isError?: boolean;
-}
-
-export interface ChatMessage {
-	id: string;
-	role: "user" | "assistant";
-	content: string;
-	toolCalls?: string | null;
-	createdAt: string;
-	attachments?: ChatAttachment[];
-}
 
 export function fetchConversations(sessionId: string): Promise<ConversationSummary[]> {
 	return request(`/chat/sessions/${sessionId}/conversations`);
 }
 
 export function createConversation(sessionId: string): Promise<ConversationSummary> {
-	return request(`/chat/sessions/${sessionId}/conversations`, { method: "POST" });
+	return post(`/chat/sessions/${sessionId}/conversations`);
 }
 
 export function fetchMessages(conversationId: string): Promise<ChatMessage[]> {
@@ -355,40 +269,21 @@ export function renameConversation(
 	conversationId: string,
 	title: string,
 ): Promise<ConversationSummary> {
-	return request(`/chat/conversations/${conversationId}`, {
-		method: "PATCH",
-		body: JSON.stringify({ title }),
-	});
+	return patch(`/chat/conversations/${conversationId}`, { title });
 }
 
 export function deleteConversation(conversationId: string): Promise<void> {
-	return request(`/chat/conversations/${conversationId}`, { method: "DELETE" });
-}
-
-export interface StreamStatus {
-	active: boolean;
-	status: "streaming" | "complete" | "error" | null;
+	return del(`/chat/conversations/${conversationId}`);
 }
 
 export function fetchStreamStatus(conversationId: string): Promise<StreamStatus> {
 	return request(`/chat/conversations/${conversationId}/stream-status`);
 }
 
+// Import / export
+
 export function exportSession(sessionId: string): Promise<void> {
 	return downloadFile(`/sessions/${sessionId}/export`, `session-${sessionId}.cramkit.zip`);
-}
-
-export interface ImportResult {
-	sessionId: string;
-	stats: {
-		resourceCount: number;
-		fileCount: number;
-		chunkCount: number;
-		conceptCount: number;
-		relationshipCount: number;
-		conversationCount: number;
-		messageCount: number;
-	};
 }
 
 export function importSession(file: File): Promise<ImportResult> {

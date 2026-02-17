@@ -1,6 +1,5 @@
 import { getDb } from "@cramkit/shared";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
 import { lectureNotesResponse } from "../fixtures/llm-responses.js";
 
@@ -50,8 +49,7 @@ describe("graph routes", () => {
 		const res = await app.request(`/graph/sessions/${session.id}/concepts`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json();
-		expect(body).toEqual([]);
+		expect(await res.json()).toEqual([]);
 	});
 
 	it("GET /graph/sessions/:id/concepts — after indexing", async () => {
@@ -67,7 +65,6 @@ describe("graph routes", () => {
 		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeGreaterThan(0);
 
-		// Should be sorted by name ascending
 		const names = body.map((c) => c.name);
 		const sorted = [...names].sort();
 		expect(names).toEqual(sorted);
@@ -109,11 +106,8 @@ describe("graph routes", () => {
 
 		expect(res.status).toBe(200);
 
-		// Concept should be gone
-		const deleted = await db.concept.findUnique({ where: { id: concept?.id } });
-		expect(deleted).toBeNull();
+		expect(await db.concept.findUnique({ where: { id: concept?.id } })).toBeNull();
 
-		// Relationships involving this concept should be gone
 		const rels = await db.relationship.findMany({
 			where: {
 				sessionId: session.id,
@@ -191,7 +185,6 @@ describe("graph routes", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.ok).toBe(true);
-		// All 11 resources are isIndexed but not isGraphIndexed
 		expect(body.queued).toBe(11);
 		expect(enqueueSessionGraphIndexing).toHaveBeenCalled();
 	});
@@ -200,7 +193,6 @@ describe("graph routes", () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
 		const { session, resources } = await seedPdeSession(db);
 
-		// Index one resource directly
 		await indexResourceGraph(resources[0].id);
 
 		const app = getApp();
@@ -222,24 +214,20 @@ describe("graph routes", () => {
 			mockLlmByResourceType(messages),
 		);
 
-		// Index all resources directly (not via queue to avoid timing issues)
 		for (const resource of resources) {
 			await indexResourceGraph(resource.id);
 		}
 
 		const app = getApp();
 
-		// Check status
 		const statusRes = await app.request(`/graph/sessions/${session.id}/index-status`);
 		const status = (await statusRes.json()) as Record<string, unknown>;
 		expect(status.indexed).toBe(11);
 
-		// Check concepts
 		const conceptsRes = await app.request(`/graph/sessions/${session.id}/concepts`);
 		const concepts = (await conceptsRes.json()) as Record<string, unknown>[];
 		expect(concepts.length).toBeGreaterThanOrEqual(8);
 
-		// Verify Method Of Characteristics exists
 		const moc = concepts.find((c) => c.name === "Method Of Characteristics");
 		expect(moc).toBeDefined();
 	});

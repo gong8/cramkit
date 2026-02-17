@@ -51,23 +51,21 @@ export function Dashboard() {
 		const session = sessions?.find((s) => s.id === id);
 		if (!session) return;
 
-		if (field === "name") {
-			if (!value || session.name === value) return;
-			try {
-				await updateSession(id, { name: value });
-				queryClient.invalidateQueries({ queryKey: ["sessions"] });
-			} catch (err) {
-				log.error("commitEdit name — failed", err);
-			}
-		} else {
-			const newModule = value || null;
-			if (session.module === newModule) return;
-			try {
-				await updateSession(id, { module: newModule });
-				queryClient.invalidateQueries({ queryKey: ["sessions"] });
-			} catch (err) {
-				log.error("commitEdit module — failed", err);
-			}
+		const update =
+			field === "name"
+				? !value || session.name === value
+					? null
+					: { name: value }
+				: session.module === (value || null)
+					? null
+					: { module: value || null };
+
+		if (!update) return;
+		try {
+			await updateSession(id, update);
+			queryClient.invalidateQueries({ queryKey: ["sessions"] });
+		} catch (err) {
+			log.error(`commitEdit ${field} — failed`, err);
 		}
 	};
 

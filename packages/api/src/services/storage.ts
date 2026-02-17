@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLogger } from "@cramkit/shared";
@@ -32,11 +32,7 @@ async function saveToResourceDir(
 	const dir = join(getResourceDir(sessionId, resourceId), subdir);
 	await ensureDir(dir);
 	const filePath = join(dir, filename);
-	if (encoding) {
-		await writeFile(filePath, content, encoding);
-	} else {
-		await writeFile(filePath, content);
-	}
+	await writeFile(filePath, content, encoding ? { encoding } : undefined);
 	return filePath;
 }
 
@@ -75,11 +71,7 @@ export async function readResourceContent(sessionId: string, resourceId: string)
 	try {
 		const files = await readdir(dir);
 		const mdFiles = files.filter((f) => f.endsWith(".md")).sort();
-		const contents: string[] = [];
-		for (const f of mdFiles) {
-			const content = await readFile(join(dir, f), "utf-8");
-			contents.push(content);
-		}
+		const contents = await Promise.all(mdFiles.map((f) => readFile(join(dir, f), "utf-8")));
 		return contents.join("\n\n---\n\n");
 	} catch {
 		return "";
@@ -105,12 +97,7 @@ export async function deleteResourceDir(sessionId: string, resourceId: string): 
 }
 
 export async function deleteSessionFile(_sessionId: string, filePath: string): Promise<void> {
-	try {
-		await unlink(filePath);
-		log.debug(`deleteSessionFile — deleted ${filePath}`);
-	} catch {
-		log.debug(`deleteSessionFile — already gone ${filePath}`);
-	}
+	await safeRemove(filePath, "deleteSessionFile");
 }
 
 export async function deleteProcessedTree(sessionId: string, fileSlug: string): Promise<void> {

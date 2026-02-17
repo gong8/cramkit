@@ -1,4 +1,5 @@
 import { createLogger, createSessionSchema, getDb, updateSessionSchema } from "@cramkit/shared";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { exportSession } from "../services/session-export.js";
 import { importSession } from "../services/session-import.js";
@@ -6,6 +7,13 @@ import { importSession } from "../services/session-import.js";
 const log = createLogger("api");
 
 export const sessionsRoutes = new Hono();
+
+async function findSessionOr404(c: Context, id: string) {
+	const db = getDb();
+	const session = await db.session.findUnique({ where: { id } });
+	if (!session) return c.json({ error: "Session not found" }, 404);
+	return session;
+}
 
 // List sessions
 sessionsRoutes.get("/", async (c) => {
@@ -93,15 +101,12 @@ sessionsRoutes.patch("/:id", async (c) => {
 	return c.json(session);
 });
 
-// Clear knowledge graph for a session (concepts + relationships, reset isGraphIndexed)
+// Clear knowledge graph for a session
 sessionsRoutes.delete("/:id/graph", async (c) => {
 	const db = getDb();
 	const id = c.req.param("id");
-
-	const session = await db.session.findUnique({ where: { id } });
-	if (!session) {
-		return c.json({ error: "Session not found" }, 404);
-	}
+	const result = await findSessionOr404(c, id);
+	if (result instanceof Response) return result;
 
 	await db.$transaction([
 		db.concept.deleteMany({ where: { sessionId: id } }),
@@ -118,13 +123,10 @@ sessionsRoutes.delete("/:id/graph", async (c) => {
 
 // Export session as .cramkit.zip
 sessionsRoutes.get("/:id/export", async (c) => {
-	const db = getDb();
 	const id = c.req.param("id");
-
-	const session = await db.session.findUnique({ where: { id } });
-	if (!session) {
-		return c.json({ error: "Session not found" }, 404);
-	}
+	const result = await findSessionOr404(c, id);
+	if (result instanceof Response) return result;
+	const session = result;
 
 	try {
 		const zipBuffer = await exportSession(id);

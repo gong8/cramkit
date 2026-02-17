@@ -28,19 +28,14 @@ export async function chatCompletion(
 		content: m.content.replaceAll("\0", ""),
 	}));
 
-	// Build the prompt: system messages go to --append-system-prompt, rest inline
-	const systemParts: string[] = [];
-	const promptParts: string[] = [];
-
-	for (const msg of sanitizedMessages) {
-		if (msg.role === "system") {
-			systemParts.push(msg.content);
-		} else if (msg.role === "assistant") {
-			promptParts.push(`<previous_response>\n${msg.content}\n</previous_response>`);
-		} else {
-			promptParts.push(msg.content);
-		}
-	}
+	const systemParts = sanitizedMessages.filter((m) => m.role === "system").map((m) => m.content);
+	const promptParts = sanitizedMessages
+		.filter((m) => m.role !== "system")
+		.map((m) =>
+			m.role === "assistant"
+				? `<previous_response>\n${m.content}\n</previous_response>`
+				: m.content,
+		);
 
 	const prompt = promptParts.join("\n\n").trim();
 	if (!prompt) {

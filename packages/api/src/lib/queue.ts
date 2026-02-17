@@ -12,9 +12,7 @@ export function enqueueProcessing(resourceId: string): void {
 	log.info(`enqueueProcessing — resource ${resourceId}, queue size: ${queue.size + queue.pending}`);
 }
 
-export function getQueueSize(): number {
-	return queue.size + queue.pending;
-}
+export const getQueueSize = () => queue.size + queue.pending;
 
 export function enqueueGraphIndexing(resourceId: string): void {
 	indexingQueue.add(() => indexResourceGraph(resourceId));
@@ -22,8 +20,6 @@ export function enqueueGraphIndexing(resourceId: string): void {
 		`enqueueGraphIndexing — resource ${resourceId}, indexing queue size: ${indexingQueue.size + indexingQueue.pending}`,
 	);
 }
-
-// --- DB-backed session batch tracking ---
 
 async function runIndexJob(jobId: string): Promise<void> {
 	const db = getDb();
@@ -163,18 +159,17 @@ export interface BatchStatusResult {
 export async function getSessionBatchStatus(sessionId: string): Promise<BatchStatusResult | null> {
 	const db = getDb();
 
-	// Prefer running batch, then most recent
-	let batch = await db.indexBatch.findFirst({
-		where: { sessionId, status: "running" },
-		include: { jobs: { orderBy: { sortOrder: "asc" } } },
-	});
-	if (!batch) {
-		batch = await db.indexBatch.findFirst({
+	const include = { jobs: { orderBy: { sortOrder: "asc" as const } } };
+	const batch =
+		(await db.indexBatch.findFirst({
+			where: { sessionId, status: "running" },
+			include,
+		})) ??
+		(await db.indexBatch.findFirst({
 			where: { sessionId },
 			orderBy: { startedAt: "desc" },
-			include: { jobs: { orderBy: { sortOrder: "asc" } } },
-		});
-	}
+			include,
+		}));
 	if (!batch) return null;
 
 	// Load resource metadata for the batch
@@ -292,6 +287,4 @@ export async function retryFailedJobs(sessionId: string): Promise<number> {
 	return failedJobIds.length;
 }
 
-export function getIndexingQueueSize(): number {
-	return indexingQueue.size + indexingQueue.pending;
-}
+export const getIndexingQueueSize = () => indexingQueue.size + indexingQueue.pending;

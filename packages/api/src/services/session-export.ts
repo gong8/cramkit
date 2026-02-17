@@ -46,6 +46,19 @@ interface ConversationExport {
 	}>;
 }
 
+function sumBy<T>(arr: T[], fn: (item: T) => number): number {
+	return arr.reduce((sum, item) => sum + fn(item), 0);
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: generic utility
+function pick<T extends Record<string, any>, K extends keyof T>(obj: T, keys: K[]): Pick<T, K> {
+	const result = {} as Pick<T, K>;
+	for (const key of keys) {
+		result[key] = obj[key];
+	}
+	return result;
+}
+
 /**
  * Export a session as a zip archive buffer.
  * Includes all resources (files, chunks, tree), concepts, relationships,
@@ -114,22 +127,6 @@ function appendJson(archive: archiver.Archiver, data: unknown, zipPath: string):
 
 // biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 function buildManifest(session: any): ExportManifest {
-	const fileCount = session.resources.reduce(
-		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-		(sum: number, r: any) => sum + r.files.length,
-		0,
-	);
-	const chunkCount = session.resources.reduce(
-		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-		(sum: number, r: any) => sum + r.chunks.length,
-		0,
-	);
-	const messageCount = session.conversations.reduce(
-		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-		(sum: number, c: any) => sum + c.messages.length,
-		0,
-	);
-
 	return {
 		version: 1,
 		exportedAt: new Date().toISOString(),
@@ -144,12 +141,12 @@ function buildManifest(session: any): ExportManifest {
 		conversationIds: session.conversations.map((c: { id: string }) => c.id),
 		stats: {
 			resourceCount: session.resources.length,
-			fileCount,
-			chunkCount,
+			fileCount: sumBy(session.resources, (r: { files: unknown[] }) => r.files.length),
+			chunkCount: sumBy(session.resources, (r: { chunks: unknown[] }) => r.chunks.length),
 			conceptCount: session.concepts.length,
 			relationshipCount: session.relationships.length,
 			conversationCount: session.conversations.length,
-			messageCount,
+			messageCount: sumBy(session.conversations, (c: { messages: unknown[] }) => c.messages.length),
 		},
 	};
 }
@@ -157,39 +154,33 @@ function buildManifest(session: any): ExportManifest {
 // biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 function mapResourceExport(resource: any): ResourceExport {
 	return {
-		id: resource.id,
-		name: resource.name,
+		...pick(resource, ["id", "name", "label", "splitMode", "isIndexed", "isGraphIndexed"]),
 		type: resource.type as ResourceExport["type"],
-		label: resource.label,
-		splitMode: resource.splitMode,
-		isIndexed: resource.isIndexed,
-		isGraphIndexed: resource.isGraphIndexed,
 		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 		files: resource.files.map((f: any) => ({
-			id: f.id,
-			filename: f.filename,
+			...pick(f, ["id", "filename", "pageCount", "fileSize"]),
 			role: f.role as "PRIMARY" | "MARK_SCHEME" | "SOLUTIONS" | "SUPPLEMENT",
 			rawPath: `raw/${f.filename}`,
 			processedPath: f.processedPath ? `processed/${basename(f.processedPath)}` : null,
-			pageCount: f.pageCount,
-			fileSize: f.fileSize,
 		})),
 		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-		chunks: resource.chunks.map((c: any) => ({
-			id: c.id,
-			sourceFileId: c.sourceFileId,
-			parentId: c.parentId,
-			index: c.index,
-			depth: c.depth,
-			nodeType: c.nodeType,
-			slug: c.slug,
-			diskPath: c.diskPath,
-			title: c.title,
-			content: c.content,
-			startPage: c.startPage,
-			endPage: c.endPage,
-			keywords: c.keywords,
-		})),
+		chunks: resource.chunks.map((c: any) =>
+			pick(c, [
+				"id",
+				"sourceFileId",
+				"parentId",
+				"index",
+				"depth",
+				"nodeType",
+				"slug",
+				"diskPath",
+				"title",
+				"content",
+				"startPage",
+				"endPage",
+				"keywords",
+			]),
+		),
 	};
 }
 
@@ -220,6 +211,21 @@ async function addResourcesToArchive(
 	}
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+function mapMessage(m: any) {
+	return {
+		id: m.id,
+		role: m.role,
+		content: m.content,
+		toolCalls: m.toolCalls,
+		attachments: m.attachments
+			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+			.filter((a: any) => a.messageId !== null)
+			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+			.map((a: any) => pick(a, ["id", "filename", "contentType", "fileSize"])),
+	};
+}
+
 async function addConversationsToArchive(
 	archive: archiver.Archiver,
 	// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
@@ -229,23 +235,7 @@ async function addConversationsToArchive(
 		const convExport: ConversationExport = {
 			id: conv.id,
 			title: conv.title,
-			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-			messages: conv.messages.map((m: any) => ({
-				id: m.id,
-				role: m.role,
-				content: m.content,
-				toolCalls: m.toolCalls,
-				attachments: m.attachments
-					// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-					.filter((a: any) => a.messageId !== null)
-					// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-					.map((a: any) => ({
-						id: a.id,
-						filename: a.filename,
-						contentType: a.contentType,
-						fileSize: a.fileSize,
-					})),
-			})),
+			messages: conv.messages.map(mapMessage),
 		};
 
 		appendJson(archive, convExport, `conversations/${conv.id}.json`);
@@ -262,29 +252,23 @@ async function addConversationsToArchive(
 
 // biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 function mapConcept(c: any): ConceptExport {
-	return {
-		id: c.id,
-		name: c.name,
-		description: c.description,
-		aliases: c.aliases,
-		createdBy: c.createdBy,
-	};
+	return pick(c, ["id", "name", "description", "aliases", "createdBy"]);
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 function mapRelationship(r: any): RelationshipExport {
-	return {
-		id: r.id,
-		sourceType: r.sourceType,
-		sourceId: r.sourceId,
-		sourceLabel: r.sourceLabel,
-		targetType: r.targetType,
-		targetId: r.targetId,
-		targetLabel: r.targetLabel,
-		relationship: r.relationship,
-		confidence: r.confidence,
-		createdBy: r.createdBy,
-	};
+	return pick(r, [
+		"id",
+		"sourceType",
+		"sourceId",
+		"sourceLabel",
+		"targetType",
+		"targetId",
+		"targetLabel",
+		"relationship",
+		"confidence",
+		"createdBy",
+	]);
 }
 
 /**

@@ -1,5 +1,4 @@
 import { getDb } from "@cramkit/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
 import {
 	lectureNotesResponse,
@@ -26,12 +25,11 @@ describe("indexResourceGraph", () => {
 	it("indexes lecture notes → creates concepts", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
 		const { resources } = await seedPdeSession(db);
-		const lectureResource = resources[0]; // PDE Lectures Part 1
 
-		await indexResourceGraph(lectureResource.id);
+		await indexResourceGraph(resources[0].id);
 
 		const concepts = await db.concept.findMany({
-			where: { sessionId: lectureResource.sessionId },
+			where: { sessionId: resources[0].sessionId },
 		});
 
 		expect(concepts.length).toBeGreaterThanOrEqual(lectureNotesResponse.concepts.length);
@@ -48,15 +46,14 @@ describe("indexResourceGraph", () => {
 	it("indexes lecture notes → creates resource-concept relationships", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
 		const { resources } = await seedPdeSession(db);
-		const lectureResource = resources[0];
 
-		await indexResourceGraph(lectureResource.id);
+		await indexResourceGraph(resources[0].id);
 
 		const rels = await db.relationship.findMany({
 			where: {
-				sessionId: lectureResource.sessionId,
+				sessionId: resources[0].sessionId,
 				createdBy: "system",
-				OR: [{ sourceType: "resource", sourceId: lectureResource.id }, { sourceType: "chunk" }],
+				OR: [{ sourceType: "resource", sourceId: resources[0].id }, { sourceType: "chunk" }],
 			},
 		});
 
@@ -71,12 +68,11 @@ describe("indexResourceGraph", () => {
 	it("indexes past paper → creates question-concept links", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(pastPaperResponse));
 		const { resources } = await seedPdeSession(db);
-		const pastPaper = resources[6]; // PDE 2020 Exam
 
-		await indexResourceGraph(pastPaper.id);
+		await indexResourceGraph(resources[6].id);
 
 		const rels = await db.relationship.findMany({
-			where: { sessionId: pastPaper.sessionId, createdBy: "system" },
+			where: { sessionId: resources[6].sessionId, createdBy: "system" },
 		});
 
 		const questionRels = rels.filter((r) => r.sourceLabel?.startsWith("Q"));
@@ -86,13 +82,12 @@ describe("indexResourceGraph", () => {
 	it("indexes problem sheet → creates concept-concept links", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(problemSheetResponse));
 		const { resources } = await seedPdeSession(db);
-		const sheet = resources[2]; // PDE Problem Sheet 1
 
-		await indexResourceGraph(sheet.id);
+		await indexResourceGraph(resources[2].id);
 
 		const rels = await db.relationship.findMany({
 			where: {
-				sessionId: sheet.sessionId,
+				sessionId: resources[2].sessionId,
 				sourceType: "concept",
 				targetType: "concept",
 				createdBy: "system",
@@ -127,19 +122,16 @@ describe("indexResourceGraph", () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
 		const { resources } = await seedPdeSession(db);
 
-		// Index first resource
 		await indexResourceGraph(resources[0].id);
 		const countAfterFirst = await db.concept.count({
 			where: { sessionId: resources[0].sessionId },
 		});
 
-		// Index second resource with same concepts
 		await indexResourceGraph(resources[1].id);
 		const countAfterSecond = await db.concept.count({
 			where: { sessionId: resources[0].sessionId },
 		});
 
-		// Same concepts referenced → count should not double
 		expect(countAfterSecond).toBe(countAfterFirst);
 	});
 
@@ -153,7 +145,6 @@ describe("indexResourceGraph", () => {
 		});
 		expect(relsAfterFirst).toBeGreaterThan(0);
 
-		// Re-index same resource with different response
 		vi.mocked(chatCompletion).mockResolvedValue(
 			JSON.stringify({
 				concepts: [{ name: "New Concept Only", description: "test" }],
@@ -171,7 +162,6 @@ describe("indexResourceGraph", () => {
 			where: { sessionId: resources[0].sessionId, sourceId: resources[0].id, createdBy: "system" },
 		});
 
-		// Only the new relationship should exist for this resource
 		expect(systemRels.length).toBe(1);
 		expect(systemRels[0].targetLabel).toBe("New Concept Only");
 	});
@@ -182,7 +172,6 @@ describe("indexResourceGraph", () => {
 
 		await indexResourceGraph(resources[0].id);
 
-		// Manually create an amortised relationship
 		const concept = await db.concept.findFirst({
 			where: { sessionId: resources[0].sessionId },
 		});
@@ -199,7 +188,6 @@ describe("indexResourceGraph", () => {
 			},
 		});
 
-		// Re-index
 		await indexResourceGraph(resources[0].id);
 
 		const amortisedRels = await db.relationship.findMany({
@@ -222,7 +210,6 @@ describe("indexResourceGraph", () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
 		const { session } = await seedPdeSession(db);
 
-		// Create a non-indexed resource
 		const unindexedResource = await db.resource.create({
 			data: {
 				sessionId: session.id,
@@ -263,7 +250,6 @@ describe("indexResourceGraph", () => {
 		vi.mocked(chatCompletion).mockResolvedValue("This is not JSON at all {{{");
 		const { resources } = await seedPdeSession(db);
 
-		// Should throw a GraphIndexError after exhausting retries
 		await expect(indexResourceGraph(resources[0].id)).rejects.toThrow(/Giving up/);
 
 		const resource = await db.resource.findUnique({ where: { id: resources[0].id } });
@@ -280,7 +266,6 @@ describe("indexResourceGraph", () => {
 			where: { sessionId: resources[0].sessionId, createdBy: "system" },
 		});
 
-		// Only the valid Heat Equation link should exist, not Quantum Field Theory/String Theory/Nonexistent
 		const targetLabels = rels.map((r) => r.targetLabel);
 		expect(targetLabels).toContain("Heat Equation");
 		expect(targetLabels).not.toContain("Quantum Field Theory");
@@ -302,15 +287,12 @@ describe("indexResourceGraph", () => {
 		const concepts = await db.concept.findMany({ where: { sessionId: session.id } });
 		const relationships = await db.relationship.findMany({ where: { sessionId: session.id } });
 
-		// Should have concepts from all response types combined (deduplicated)
-		expect(concepts.length).toBeGreaterThanOrEqual(8); // At least the lecture notes concepts
+		expect(concepts.length).toBeGreaterThanOrEqual(8);
 		expect(relationships.length).toBeGreaterThan(0);
 
-		// Cross-resource concept reuse: "Method Of Characteristics" should exist only once
 		const mocConcepts = concepts.filter((c) => c.name === "Method Of Characteristics");
 		expect(mocConcepts.length).toBe(1);
 
-		// All resources should be marked as graph-indexed
 		const indexedResources = await db.resource.findMany({
 			where: { sessionId: session.id, isGraphIndexed: true },
 		});

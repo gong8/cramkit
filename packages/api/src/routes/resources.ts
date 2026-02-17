@@ -68,6 +68,39 @@ async function deleteResourceRelationships(resourceId: string) {
 	});
 }
 
+async function findResource(id: string, include?: { files?: boolean; chunks?: boolean }) {
+	const db = getDb();
+	return db.resource.findUnique({
+		where: { id },
+		include: {
+			files: include?.files ?? false,
+			chunks: include?.chunks ? { orderBy: { index: "asc" as const } } : false,
+		},
+	});
+}
+
+function buildChunkTree<T extends { id: string; parentId: string | null }>(
+	chunks: T[],
+): (T & { children: (T & { children: unknown[] })[] })[] {
+	type TreeNode = T & { children: TreeNode[] };
+	const map = new Map<string, TreeNode>();
+	const roots: TreeNode[] = [];
+
+	for (const chunk of chunks) {
+		map.set(chunk.id, { ...chunk, children: [] });
+	}
+	for (const chunk of chunks) {
+		const node = map.get(chunk.id) as TreeNode;
+		const parent = chunk.parentId ? map.get(chunk.parentId) : undefined;
+		if (parent) {
+			parent.children.push(node);
+		} else {
+			roots.push(node);
+		}
+	}
+	return roots;
+}
+
 // ── Routes ──────────────────────────────────────────────────────────
 
 // Create resource + upload files (multipart)
@@ -108,22 +141,15 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 		});
 		if (existing) {
 			const allFiles = collectFormFiles(formData);
-			if (allFiles.length === 0) {
-				return c.json({ error: "No files provided" }, 400);
-			}
+			if (allFiles.length === 0) return c.json({ error: "No files provided" }, 400);
 
 			await saveFiles(sessionId, existing.id, allFiles, "PRIMARY");
 			await reprocessResource(existing.id);
 
-			const resource = await db.resource.findUnique({
-				where: { id: existing.id },
-				include: { files: true },
-			});
-
 			log.info(
 				`POST /sessions/${sessionId}/resources — added ${allFiles.length} files to existing lecture notes resource ${existing.id}`,
 			);
-			return c.json(resource, 200);
+			return c.json(await findResource(existing.id, { files: true }), 200);
 		}
 	}
 
@@ -138,32 +164,21 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 		},
 	});
 
-	// Process primary files from form data
 	const allPrimaryFiles = collectFormFiles(formData);
 	await saveFiles(sessionId, resource.id, allPrimaryFiles, "PRIMARY");
 
-	// Optional mark scheme / solutions file
 	const markSchemeFile = formData.get("markScheme") as File | null;
-	if (markSchemeFile) {
-		await saveFiles(sessionId, resource.id, [markSchemeFile], "MARK_SCHEME");
-	}
+	if (markSchemeFile) await saveFiles(sessionId, resource.id, [markSchemeFile], "MARK_SCHEME");
 
 	const solutionsFile = formData.get("solutions") as File | null;
-	if (solutionsFile) {
-		await saveFiles(sessionId, resource.id, [solutionsFile], "SOLUTIONS");
-	}
+	if (solutionsFile) await saveFiles(sessionId, resource.id, [solutionsFile], "SOLUTIONS");
 
 	enqueueProcessing(resource.id);
-
-	const result = await db.resource.findUnique({
-		where: { id: resource.id },
-		include: { files: true },
-	});
 
 	log.info(
 		`POST /sessions/${sessionId}/resources — created resource ${resource.id}, queued for processing`,
 	);
-	return c.json(result, 201);
+	return c.json(await findResource(resource.id, { files: true }), 201);
 });
 
 // List resources for session
@@ -182,12 +197,7 @@ resourcesRoutes.get("/sessions/:sessionId/resources", async (c) => {
 
 // Get resource detail
 resourcesRoutes.get("/:id", async (c) => {
-	const db = getDb();
-	const resource = await db.resource.findUnique({
-		where: { id: c.req.param("id") },
-		include: { files: true, chunks: { orderBy: { index: "asc" } } },
-	});
-
+	const resource = await findResource(c.req.param("id"), { files: true, chunks: true });
 	if (!resource) {
 		log.warn(`GET /resources/${c.req.param("id")} — not found`);
 		return c.json({ error: "Resource not found" }, 404);
@@ -198,14 +208,9 @@ resourcesRoutes.get("/:id", async (c) => {
 
 // Get resource content (all processed markdown concatenated)
 resourcesRoutes.get("/:id/content", async (c) => {
-	const db = getDb();
-	const resource = await db.resource.findUnique({ where: { id: c.req.param("id") } });
-	if (!resource) {
-		return c.json({ error: "Resource not found" }, 404);
-	}
-	if (!resource.isIndexed) {
-		return c.json({ error: "Resource not yet processed" }, 404);
-	}
+	const resource = await findResource(c.req.param("id"));
+	if (!resource) return c.json({ error: "Resource not found" }, 404);
+	if (!resource.isIndexed) return c.json({ error: "Resource not yet processed" }, 404);
 
 	const content = await readResourceContent(resource.sessionId, resource.id);
 	log.info(`GET /resources/${resource.id}/content — ${content.length} chars`);
@@ -217,10 +222,8 @@ resourcesRoutes.get("/:id/tree", async (c) => {
 	const db = getDb();
 	const resourceId = c.req.param("id");
 
-	const resource = await db.resource.findUnique({ where: { id: resourceId } });
-	if (!resource) {
-		return c.json({ error: "Resource not found" }, 404);
-	}
+	const resource = await findResource(resourceId);
+	if (!resource) return c.json({ error: "Resource not found" }, 404);
 
 	const chunks = await db.chunk.findMany({
 		where: { resourceId },
@@ -239,38 +242,8 @@ resourcesRoutes.get("/:id/tree", async (c) => {
 		},
 	});
 
-	interface TreeChunk {
-		id: string;
-		parentId: string | null;
-		index: number;
-		depth: number;
-		nodeType: string;
-		slug: string | null;
-		diskPath: string | null;
-		title: string | null;
-		startPage: number | null;
-		endPage: number | null;
-		children: TreeChunk[];
-	}
-
-	const chunkMap = new Map<string, TreeChunk>();
-	const roots: TreeChunk[] = [];
-
-	for (const chunk of chunks) {
-		chunkMap.set(chunk.id, { ...chunk, children: [] });
-	}
-
-	for (const chunk of chunks) {
-		const node = chunkMap.get(chunk.id) as TreeChunk;
-		if (chunk.parentId && chunkMap.has(chunk.parentId)) {
-			chunkMap.get(chunk.parentId)?.children.push(node);
-		} else {
-			roots.push(node);
-		}
-	}
-
 	log.info(`GET /resources/${resourceId}/tree — ${chunks.length} chunks`);
-	return c.json(roots);
+	return c.json(buildChunkTree(chunks));
 });
 
 // Update resource metadata
@@ -295,11 +268,7 @@ resourcesRoutes.patch("/:id", async (c) => {
 
 // Delete resource
 resourcesRoutes.delete("/:id", async (c) => {
-	const db = getDb();
-	const resource = await db.resource.findUnique({
-		where: { id: c.req.param("id") },
-		include: { files: true },
-	});
+	const resource = await findResource(c.req.param("id"));
 	if (!resource) {
 		log.warn(`DELETE /resources/${c.req.param("id")} — not found`);
 		return c.json({ error: "Resource not found" }, 404);
@@ -307,7 +276,7 @@ resourcesRoutes.delete("/:id", async (c) => {
 
 	await deleteResourceRelationships(resource.id);
 	await deleteResourceDir(resource.sessionId, resource.id);
-	await db.resource.delete({ where: { id: resource.id } });
+	await getDb().resource.delete({ where: { id: resource.id } });
 
 	log.info(`DELETE /resources/${resource.id} — deleted "${resource.name}"`);
 	return c.json({ ok: true });
@@ -315,35 +284,24 @@ resourcesRoutes.delete("/:id", async (c) => {
 
 // Add file(s) to existing resource → auto re-process
 resourcesRoutes.post("/:id/files", async (c) => {
-	const db = getDb();
 	const resourceId = c.req.param("id");
-
-	const resource = await db.resource.findUnique({ where: { id: resourceId } });
-	if (!resource) {
-		return c.json({ error: "Resource not found" }, 404);
-	}
+	const resource = await findResource(resourceId);
+	if (!resource) return c.json({ error: "Resource not found" }, 404);
 
 	const formData = await c.req.formData();
 	const role = (formData.get("role") as string) || "PRIMARY";
 	const allFiles = collectFormFiles(formData);
-
-	if (allFiles.length === 0) {
-		return c.json({ error: "No files provided" }, 400);
-	}
+	if (allFiles.length === 0) return c.json({ error: "No files provided" }, 400);
 
 	await saveFiles(resource.sessionId, resourceId, allFiles, role);
 	await reprocessResource(resourceId);
 
-	const result = await db.resource.findUnique({
-		where: { id: resourceId },
-		include: { files: true },
-	});
-
+	const result = await findResource(resourceId, { files: true });
 	log.info(`POST /resources/${resourceId}/files — added ${allFiles.length} files, re-processing`);
 	return c.json(result);
 });
 
-// Remove file from resource → auto re-process
+// Remove file from resource → auto re-process (or delete resource if last file)
 resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 	const db = getDb();
 	const resourceId = c.req.param("id");
@@ -356,27 +314,21 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 
 	await db.file.delete({ where: { id: fileId } });
 
-	// Check if resource still has files
 	const remainingFiles = await db.file.count({ where: { resourceId } });
-	if (remainingFiles === 0) {
-		await deleteResourceRelationships(resourceId);
-
-		const parentResource = await db.resource.findUnique({ where: { id: resourceId } });
-		if (!parentResource) {
-			return c.json({ error: "Resource not found" }, 404);
-		}
-		await deleteResourceDir(parentResource.sessionId, resourceId);
-		await db.resource.delete({ where: { id: resourceId } });
-		log.info(
-			`DELETE /resources/${resourceId}/files/${fileId} — last file removed, resource deleted`,
-		);
-		return c.json({ ok: true, resourceDeleted: true });
+	if (remainingFiles > 0) {
+		await reprocessResource(resourceId);
+		log.info(`DELETE /resources/${resourceId}/files/${fileId} — file removed, re-processing`);
+		return c.json({ ok: true });
 	}
 
-	await reprocessResource(resourceId);
+	const resource = await findResource(resourceId);
+	if (!resource) return c.json({ error: "Resource not found" }, 404);
 
-	log.info(`DELETE /resources/${resourceId}/files/${fileId} — file removed, re-processing`);
-	return c.json({ ok: true });
+	await deleteResourceRelationships(resourceId);
+	await deleteResourceDir(resource.sessionId, resourceId);
+	await db.resource.delete({ where: { id: resourceId } });
+	log.info(`DELETE /resources/${resourceId}/files/${fileId} — last file removed, resource deleted`);
+	return c.json({ ok: true, resourceDeleted: true });
 });
 
 // Serve raw file (PDF, etc.)

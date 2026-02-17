@@ -1,5 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 vi.mock("../../packages/mcp/src/lib/api-client.js", () => ({
 	apiClient: {
 		createRelationship: vi.fn().mockResolvedValue({ id: "rel-1", ok: true }),
@@ -66,31 +64,31 @@ describe("MCP graph tools", () => {
 	it("all tools have valid Zod parameter schemas", () => {
 		for (const [_name, tool] of Object.entries(graphTools)) {
 			expect(tool.parameters).toBeDefined();
-			// Test that the schema can parse valid input
-			const schema = tool.parameters;
-			expect(typeof schema.safeParse).toBe("function");
+			expect(typeof tool.parameters.safeParse).toBe("function");
 		}
 
-		// Specific schema validations
-		const createLinkResult = graphTools.create_link.parameters.safeParse({
-			sessionId: "s1",
-			sourceType: "chunk",
-			sourceId: "c1",
-			targetType: "concept",
-			targetId: "co1",
-			relationship: "covers",
-		});
-		expect(createLinkResult.success).toBe(true);
+		expect(
+			graphTools.create_link.parameters.safeParse({
+				sessionId: "s1",
+				sourceType: "chunk",
+				sourceId: "c1",
+				targetType: "concept",
+				targetId: "co1",
+				relationship: "covers",
+			}).success,
+		).toBe(true);
 
-		const getRelatedResult = graphTools.get_related.parameters.safeParse({
-			type: "concept",
-			id: "c1",
-		});
-		expect(getRelatedResult.success).toBe(true);
+		expect(
+			graphTools.get_related.parameters.safeParse({
+				type: "concept",
+				id: "c1",
+			}).success,
+		).toBe(true);
 
-		const listConceptsResult = graphTools.list_concepts.parameters.safeParse({
-			sessionId: "s1",
-		});
-		expect(listConceptsResult.success).toBe(true);
+		expect(
+			graphTools.list_concepts.parameters.safeParse({
+				sessionId: "s1",
+			}).success,
+		).toBe(true);
 	});
 });

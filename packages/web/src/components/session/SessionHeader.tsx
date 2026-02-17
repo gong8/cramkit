@@ -8,10 +8,18 @@ import { Link } from "react-router-dom";
 
 const log = createLogger("web");
 
+function formatExamDate(examDate: string | null): string | null {
+	if (!examDate) return null;
+	return new Date(`${examDate}T00:00:00`).toLocaleDateString("en-GB", {
+		day: "numeric",
+		month: "short",
+	});
+}
+
 interface SessionHeaderProps {
 	session: Session;
 	sessionId: string;
-	examDateFormatted: string | null;
+	examDate: string | null;
 	isExporting: boolean;
 	onExport: () => void;
 }
@@ -19,10 +27,11 @@ interface SessionHeaderProps {
 export function SessionHeader({
 	session,
 	sessionId,
-	examDateFormatted,
+	examDate,
 	isExporting,
 	onExport,
 }: SessionHeaderProps) {
+	const examDateFormatted = formatExamDate(examDate);
 	const queryClient = useQueryClient();
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [renameValue, setRenameValue] = useState("");

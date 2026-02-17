@@ -18,20 +18,19 @@ export async function amortiseSearchResults(
 	try {
 		const db = getDb();
 
-		if (contentResults.length === 0) return;
-
-		// Token-based concept matching (consistent with graph-search)
 		const terms = query
 			.toLowerCase()
 			.split(/\s+/)
 			.filter((t) => t.length > 1);
+		if (contentResults.length === 0 || terms.length === 0) return;
+
 		const allConcepts = await db.concept.findMany({
 			where: { sessionId },
 			select: { id: true, name: true },
 		});
 		const matchingConcepts = allConcepts.filter((c) => {
 			const text = c.name.toLowerCase();
-			return terms.length > 0 && terms.every((t) => text.includes(t));
+			return terms.every((t) => text.includes(t));
 		});
 
 		if (matchingConcepts.length === 0) return;
@@ -72,7 +71,7 @@ export async function amortiseSearchResults(
 					sessionId,
 					sourceType: "chunk",
 					sourceId: result.chunkId,
-					sourceLabel: chunkTitleMap.get(result.chunkId) || null,
+					sourceLabel: chunkTitleMap.get(result.chunkId) ?? null,
 					targetType: "concept",
 					targetId: concept.id,
 					targetLabel: concept.name,

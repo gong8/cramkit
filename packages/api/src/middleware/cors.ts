@@ -1,15 +1,8 @@
-import { createMiddleware } from "hono/factory";
+import { cors as honoCors } from "hono/cors";
 
-export function cors() {
-	return createMiddleware(async (c, next) => {
-		c.header("Access-Control-Allow-Origin", "*");
-		c.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-		c.header("Access-Control-Allow-Headers", "Content-Type");
-
-		if (c.req.method === "OPTIONS") {
-			return c.body(null, 204);
-		}
-
-		await next();
+export const cors = () =>
+	honoCors({
+		origin: "*",
+		allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+		allowHeaders: ["Content-Type"],
 	});
-}

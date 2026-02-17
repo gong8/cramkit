@@ -195,6 +195,152 @@ function FileRow({
 	);
 }
 
+function ResourceRow({
+	resource,
+	batchStatus,
+	isExpanded,
+	onToggleExpand,
+	onDelete,
+	onRemoveFile,
+	onIndex,
+	onRename,
+}: {
+	resource: Resource;
+	batchStatus?: BatchResource["status"];
+	isExpanded: boolean;
+	onToggleExpand: () => void;
+	onDelete: () => void;
+	onRemoveFile: (fileId: string) => void;
+	onIndex: () => void;
+	onRename: () => void;
+}) {
+	const [editing, setEditing] = useState(false);
+	const [editName, setEditName] = useState("");
+	const editInputRef = useRef<HTMLInputElement>(null);
+
+	const isBusy = batchStatus === "pending" || batchStatus === "indexing";
+	const canExpand = resource.isIndexed;
+
+	const startRename = () => {
+		setEditing(true);
+		setEditName(resource.name);
+		setTimeout(() => editInputRef.current?.select(), 0);
+	};
+
+	const commitRename = async () => {
+		const trimmed = editName.trim();
+		setEditing(false);
+		if (!trimmed || resource.name === trimmed) return;
+		try {
+			await updateResource(resource.id, { name: trimmed });
+			onRename();
+		} catch (err) {
+			log.error("commitRename — failed", err);
+		}
+	};
+
+	return (
+		<div className="rounded-md border border-border">
+			<div
+				className={`flex items-center justify-between px-3 py-2 ${
+					canExpand ? "cursor-pointer hover:bg-accent/50" : ""
+				}`}
+				role={canExpand ? "button" : undefined}
+				tabIndex={canExpand ? 0 : undefined}
+				onClick={canExpand ? onToggleExpand : undefined}
+				onKeyDown={
+					canExpand
+						? (e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									e.preventDefault();
+									onToggleExpand();
+								}
+							}
+						: undefined
+				}
+			>
+				<div className="flex items-center gap-3">
+					{canExpand &&
+						(isExpanded ? (
+							<ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+						) : (
+							<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+						))}
+					<TypeBadge type={resource.type} />
+					{editing ? (
+						<InlineRenameInput
+							value={editName}
+							onChange={setEditName}
+							onCommit={() => commitRename()}
+							onCancel={() => setEditing(false)}
+							inputRef={editInputRef}
+						/>
+					) : (
+						<span
+							className="text-sm font-medium"
+							onDoubleClick={(e) => {
+								e.stopPropagation();
+								startRename();
+							}}
+						>
+							{resource.name}
+						</span>
+					)}
+					<ResourceLabel label={resource.label} />
+				</div>
+				<div
+					className="flex items-center gap-2"
+					onClick={(e) => e.stopPropagation()}
+					onKeyDown={(e) => e.stopPropagation()}
+				>
+					<span
+						className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
+					>
+						{resource.isIndexed ? "Ready" : "Processing"}
+					</span>
+					<BatchStatus status={batchStatus} />
+					<IndexStatus resource={resource} isBusy={isBusy} onIndex={onIndex} />
+					<button
+						type="button"
+						onClick={startRename}
+						className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+						title="Rename resource"
+					>
+						<Pencil className="h-3.5 w-3.5" />
+					</button>
+					<button
+						type="button"
+						onClick={onDelete}
+						className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+					>
+						<Trash2 className="h-4 w-4" />
+					</button>
+				</div>
+			</div>
+
+			{resource.files.length > 0 && !isExpanded && (
+				<div className="border-t border-border/50 bg-muted/20">
+					{resource.files.map((file) => (
+						<FileRow
+							key={file.id}
+							file={file}
+							resourceId={resource.id}
+							canRemove={resource.files.length > 1}
+							onRemove={() => onRemoveFile(file.id)}
+						/>
+					))}
+				</div>
+			)}
+
+			{isExpanded && (
+				<div className="max-h-96 overflow-y-auto border-t border-border">
+					<ResourceContent resourceId={resource.id} />
+				</div>
+			)}
+		</div>
+	);
+}
+
 interface ResourceListProps {
 	resources: Resource[];
 	sessionId: string;
@@ -210,9 +356,6 @@ export function ResourceList({
 }: ResourceListProps) {
 	const queryClient = useQueryClient();
 	const [expandedResourceId, setExpandedResourceId] = useState<string | null>(null);
-	const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
-	const [editName, setEditName] = useState("");
-	const editInputRef = useRef<HTMLInputElement>(null);
 
 	const batchStatusMap = new Map<string, BatchResource["status"]>();
 	if (batchResources) {
@@ -221,13 +364,17 @@ export function ResourceList({
 		}
 	}
 
+	const invalidateSession = () => {
+		queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+	};
+
 	const handleDeleteResource = async (resourceId: string) => {
 		log.info(`handleDeleteResource — ${resourceId}`);
 		try {
 			await deleteResource(resourceId);
 			log.info(`handleDeleteResource — deleted ${resourceId}`);
 			if (expandedResourceId === resourceId) setExpandedResourceId(null);
-			queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+			invalidateSession();
 		} catch (err) {
 			log.error("handleDeleteResource — failed", err);
 		}
@@ -238,29 +385,9 @@ export function ResourceList({
 		try {
 			await removeFileFromResource(resourceId, fileId);
 			log.info(`handleRemoveFile — removed file ${fileId}`);
-			queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+			invalidateSession();
 		} catch (err) {
 			log.error("handleRemoveFile — failed", err);
-		}
-	};
-
-	const startRename = (resource: Resource) => {
-		setEditingResourceId(resource.id);
-		setEditName(resource.name);
-		setTimeout(() => editInputRef.current?.select(), 0);
-	};
-
-	const commitRename = async (resourceId: string) => {
-		const trimmed = editName.trim();
-		setEditingResourceId(null);
-		if (!trimmed) return;
-		const resource = resources.find((r) => r.id === resourceId);
-		if (!resource || resource.name === trimmed) return;
-		try {
-			await updateResource(resourceId, { name: trimmed });
-			queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
-		} catch (err) {
-			log.error("commitRename — failed", err);
 		}
 	};
 
@@ -270,117 +397,19 @@ export function ResourceList({
 
 	return (
 		<div className="space-y-3">
-			{resources.map((resource) => {
-				const batchStatus = batchStatusMap.get(resource.id);
-				const isBusy = batchStatus === "pending" || batchStatus === "indexing";
-				const isExpanded = expandedResourceId === resource.id;
-				const canExpand = resource.isIndexed;
-
-				return (
-					<div key={resource.id} className="rounded-md border border-border">
-						<div
-							className={`flex items-center justify-between px-3 py-2 ${
-								canExpand ? "cursor-pointer hover:bg-accent/50" : ""
-							}`}
-							role={canExpand ? "button" : undefined}
-							tabIndex={canExpand ? 0 : undefined}
-							onClick={canExpand ? () => toggleExpand(resource.id) : undefined}
-							onKeyDown={
-								canExpand
-									? (e) => {
-											if (e.key === "Enter" || e.key === " ") {
-												e.preventDefault();
-												toggleExpand(resource.id);
-											}
-										}
-									: undefined
-							}
-						>
-							<div className="flex items-center gap-3">
-								{canExpand &&
-									(isExpanded ? (
-										<ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-									) : (
-										<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-									))}
-								<TypeBadge type={resource.type} />
-								{editingResourceId === resource.id ? (
-									<InlineRenameInput
-										value={editName}
-										onChange={setEditName}
-										onCommit={() => commitRename(resource.id)}
-										onCancel={() => setEditingResourceId(null)}
-										inputRef={editInputRef}
-									/>
-								) : (
-									<span
-										className="text-sm font-medium"
-										onDoubleClick={(e) => {
-											e.stopPropagation();
-											startRename(resource);
-										}}
-									>
-										{resource.name}
-									</span>
-								)}
-								<ResourceLabel label={resource.label} />
-							</div>
-							<div
-								className="flex items-center gap-2"
-								onClick={(e) => e.stopPropagation()}
-								onKeyDown={(e) => e.stopPropagation()}
-							>
-								<span
-									className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
-								>
-									{resource.isIndexed ? "Ready" : "Processing"}
-								</span>
-								<BatchStatus status={batchStatus} />
-								<IndexStatus
-									resource={resource}
-									isBusy={isBusy}
-									onIndex={() => onIndexResource(resource.id)}
-								/>
-								<button
-									type="button"
-									onClick={() => startRename(resource)}
-									className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-									title="Rename resource"
-								>
-									<Pencil className="h-3.5 w-3.5" />
-								</button>
-								<button
-									type="button"
-									onClick={() => handleDeleteResource(resource.id)}
-									className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-								>
-									<Trash2 className="h-4 w-4" />
-								</button>
-							</div>
-						</div>
-
-						{resource.files.length > 0 && !isExpanded && (
-							<div className="border-t border-border/50 bg-muted/20">
-								{resource.files.map((file) => (
-									<FileRow
-										key={file.id}
-										file={file}
-										resourceId={resource.id}
-										canRemove={resource.files.length > 1}
-										onRemove={() => handleRemoveFile(resource.id, file.id)}
-									/>
-								))}
-							</div>
-						)}
-
-						{isExpanded && (
-							<div className="max-h-96 overflow-y-auto border-t border-border">
-								<ResourceContent resourceId={resource.id} />
-							</div>
-						)}
-					</div>
-				);
-			})}
+			{resources.map((resource) => (
+				<ResourceRow
+					key={resource.id}
+					resource={resource}
+					batchStatus={batchStatusMap.get(resource.id)}
+					isExpanded={expandedResourceId === resource.id}
+					onToggleExpand={() => toggleExpand(resource.id)}
+					onDelete={() => handleDeleteResource(resource.id)}
+					onRemoveFile={(fileId) => handleRemoveFile(resource.id, fileId)}
+					onIndex={() => onIndexResource(resource.id)}
+					onRename={invalidateSession}
+				/>
+			))}
 		</div>
 	);
 }

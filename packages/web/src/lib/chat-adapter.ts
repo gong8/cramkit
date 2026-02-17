@@ -6,7 +6,6 @@ export const chatAttachmentAdapter: AttachmentAdapter = {
 	accept: "image/jpeg,image/png,image/gif,image/webp",
 
 	async add({ file }) {
-		// Restore a draft attachment without re-uploading
 		const restoreMatch = file.name.match(/^__restore__([^_]+)__(.+)$/);
 		if (restoreMatch) {
 			const [, id, originalName] = restoreMatch;
@@ -86,6 +85,12 @@ type ContentPart =
 	  }
 	| { type: "text"; text: string };
 
+interface SseState {
+	textContent: string;
+	thinkingText: string;
+	toolCalls: Map<string, ToolCallState>;
+}
+
 function parseTextToolCalls(text: string) {
 	const callRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
 	const resultRegex = /<tool_result>\s*([\s\S]*?)\s*<\/tool_result>/g;
@@ -132,18 +137,14 @@ function parseTextToolCalls(text: string) {
 	return { cleanText, parsedCalls };
 }
 
-function buildContentParts(
-	thinkingText: string,
-	toolCalls: Map<string, ToolCallState>,
-	textContent: string,
-): ContentPart[] {
+function buildContentParts(state: SseState): ContentPart[] {
 	const parts: ContentPart[] = [];
 
-	if (thinkingText) {
-		parts.push({ type: "reasoning", text: thinkingText });
+	if (state.thinkingText) {
+		parts.push({ type: "reasoning", text: state.thinkingText });
 	}
 
-	for (const tc of toolCalls.values()) {
+	for (const tc of state.toolCalls.values()) {
 		parts.push({
 			type: "tool-call",
 			toolCallId: tc.toolCallId,
@@ -155,7 +156,7 @@ function buildContentParts(
 		});
 	}
 
-	const { cleanText, parsedCalls } = parseTextToolCalls(textContent);
+	const { cleanText, parsedCalls } = parseTextToolCalls(state.textContent);
 	for (const pc of parsedCalls) {
 		parts.push({
 			type: "tool-call",
@@ -196,11 +197,21 @@ function extractRewindId(message: any): string | undefined {
 	return CUID_PATTERN.test(msgId) ? msgId : undefined;
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: assistant-ui message types are loosely typed
+function extractUserText(message: any): string {
+	return (
+		message?.content
+			.filter((part: { type: string }) => part.type === "text")
+			.map((part: { text: string }) => part.text)
+			.join("") || ""
+	);
+}
+
 function handleSseEvent(
 	eventType: string,
 	// biome-ignore lint/suspicious/noExplicitAny: SSE event data is dynamically typed
 	parsed: any,
-	state: { textContent: string; thinkingText: string; toolCalls: Map<string, ToolCallState> },
+	state: SseState,
 ): boolean {
 	switch (eventType) {
 		case "content":
@@ -244,6 +255,62 @@ function handleSseEvent(
 	}
 }
 
+async function* readSseStream(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	state: SseState,
+): AsyncGenerator<ChatModelRunResult> {
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let currentEventType = "content";
+	const yieldContent = () => ({ content: buildContentParts(state) }) as ChatModelRunResult;
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split("\n");
+			buffer = lines.pop() || "";
+
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (!trimmed) continue;
+
+				if (trimmed.startsWith("event: ")) {
+					currentEventType = trimmed.slice(7);
+					continue;
+				}
+
+				if (trimmed.startsWith("data: ")) {
+					const data = trimmed.slice(6);
+					if (data === "[DONE]") {
+						yield yieldContent();
+						return;
+					}
+
+					try {
+						const parsed = JSON.parse(data);
+						if (handleSseEvent(currentEventType, parsed, state)) {
+							yield yieldContent();
+						}
+					} catch {
+						// Skip unparseable
+					}
+
+					currentEventType = "content";
+				}
+			}
+		}
+	} finally {
+		reader.releaseLock();
+	}
+
+	if (state.textContent || state.toolCalls.size > 0 || state.thinkingText) {
+		yield yieldContent();
+	}
+}
+
 export function createCramKitChatAdapter(
 	sessionId: string,
 	conversationId: string,
@@ -251,12 +318,7 @@ export function createCramKitChatAdapter(
 	return {
 		async *run({ messages, abortSignal }) {
 			const lastMessage = messages[messages.length - 1];
-			const userText =
-				lastMessage?.content
-					.filter((part): part is { type: "text"; text: string } => part.type === "text")
-					.map((part) => part.text)
-					.join("") || "";
-
+			const userText = extractUserText(lastMessage);
 			const attachmentIds = extractAttachmentIds(lastMessage);
 			const rewindToMessageId = extractRewindId(lastMessage);
 
@@ -288,66 +350,13 @@ export function createCramKitChatAdapter(
 			const reader = response.body?.getReader();
 			if (!reader) throw new Error("No response body");
 
-			const decoder = new TextDecoder();
-			let buffer = "";
-			const state = {
+			const state: SseState = {
 				textContent: "",
 				thinkingText: "",
 				toolCalls: new Map<string, ToolCallState>(),
 			};
 
-			const yieldContent = () =>
-				({
-					content: buildContentParts(state.thinkingText, state.toolCalls, state.textContent),
-				}) as ChatModelRunResult;
-
-			try {
-				let currentEventType = "content";
-
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-
-					buffer += decoder.decode(value, { stream: true });
-					const lines = buffer.split("\n");
-					buffer = lines.pop() || "";
-
-					for (const line of lines) {
-						const trimmed = line.trim();
-						if (!trimmed) continue;
-
-						if (trimmed.startsWith("event: ")) {
-							currentEventType = trimmed.slice(7);
-							continue;
-						}
-
-						if (trimmed.startsWith("data: ")) {
-							const data = trimmed.slice(6);
-							if (data === "[DONE]") {
-								yield yieldContent();
-								return;
-							}
-
-							try {
-								const parsed = JSON.parse(data);
-								if (handleSseEvent(currentEventType, parsed, state)) {
-									yield yieldContent();
-								}
-							} catch {
-								// Skip unparseable
-							}
-
-							currentEventType = "content";
-						}
-					}
-				}
-			} finally {
-				reader.releaseLock();
-			}
-
-			if (state.textContent || state.toolCalls.size > 0 || state.thinkingText) {
-				yield yieldContent();
-			}
+			yield* readSseStream(reader, state);
 		},
 	};
 }
