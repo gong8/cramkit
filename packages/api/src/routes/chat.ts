@@ -49,7 +49,7 @@ chatRoutes.post("/stream", async (c) => {
 	const resourceListStr = session.resources
 		.map((r) => {
 			const fileList = r.files.map((f) => `    - ${f.filename} (${f.role})`).join("\n");
-			return `- ${r.label || r.name} [${r.type}]\n${fileList}`;
+			return `- ${r.name} [${r.type}]\n${fileList}`;
 		})
 		.join("\n");
 

@@ -72,7 +72,7 @@ export function FileViewer({ resources, selectedResourceId, onSelectResource }: 
 						<ChevronLeft className="h-4 w-4" />
 					</button>
 					<span className="truncate text-sm font-medium">
-						{resource?.label || resource?.name || "Resource"}
+						{resource?.name || "Resource"}
 					</span>
 				</div>
 				<div className="flex-1 overflow-y-auto">
@@ -100,7 +100,7 @@ export function FileViewer({ resources, selectedResourceId, onSelectResource }: 
 							>
 								<FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
 								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm">{resource.label || resource.name}</p>
+									<p className="truncate text-sm">{resource.name}</p>
 									<p className="truncate text-xs text-muted-foreground">
 										{resource.files.length} file{resource.files.length !== 1 ? "s" : ""}
 									</p>

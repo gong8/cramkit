@@ -111,7 +111,17 @@ export function ResourceList({ resources, sessionId }: ResourceListProps) {
 							>
 								{TYPE_LABELS[resource.type] || resource.type}
 							</span>
-							<span className="text-sm font-medium">{resource.label || resource.name}</span>
+							<span className="text-sm font-medium">{resource.name}</span>
+							{resource.label === "includes_mark_scheme" && (
+								<span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+									+ Mark Scheme
+								</span>
+							)}
+							{resource.label === "includes_solutions" && (
+								<span className="rounded bg-purple-50 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">
+									+ Solutions
+								</span>
+							)}
 						</div>
 						<div className="flex items-center gap-2">
 							<span

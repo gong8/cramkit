@@ -109,6 +109,35 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 		});
 	}
 
+	// Optional mark scheme / solutions file
+	const markSchemeFile = formData.get("markScheme") as File | null;
+	if (markSchemeFile) {
+		const rawPath = await saveResourceRawFile(sessionId, resource.id, markSchemeFile.name, Buffer.from(await markSchemeFile.arrayBuffer()));
+		await db.file.create({
+			data: {
+				resourceId: resource.id,
+				filename: markSchemeFile.name,
+				role: "MARK_SCHEME",
+				rawPath,
+				fileSize: markSchemeFile.size,
+			},
+		});
+	}
+
+	const solutionsFile = formData.get("solutions") as File | null;
+	if (solutionsFile) {
+		const rawPath = await saveResourceRawFile(sessionId, resource.id, solutionsFile.name, Buffer.from(await solutionsFile.arrayBuffer()));
+		await db.file.create({
+			data: {
+				resourceId: resource.id,
+				filename: solutionsFile.name,
+				role: "SOLUTIONS",
+				rawPath,
+				fileSize: solutionsFile.size,
+			},
+		});
+	}
+
 	enqueueProcessing(resource.id);
 
 	const result = await db.resource.findUnique({

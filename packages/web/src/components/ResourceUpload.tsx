@@ -31,8 +31,11 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 	const [hasMarkScheme, setHasMarkScheme] = useState(false);
 	const [hasSolutions, setHasSolutions] = useState(false);
 	const [splitMode, setSplitMode] = useState<"auto" | "split" | "single">("auto");
+	const [markSchemeFile, setMarkSchemeFile] = useState<File | null>(null);
+	const [solutionsFile, setSolutionsFile] = useState<File | null>(null);
 	const [uploading, setUploading] = useState(false);
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const secondaryFileInputRef = useRef<HTMLInputElement>(null);
 
 	const existingLectureNotes = existingResources?.find((r) => r.type === "LECTURE_NOTES");
 	const isAddingToExisting = resourceType === "LECTURE_NOTES" && !!existingLectureNotes;
@@ -46,6 +49,8 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 		setFiles([]);
 		setHasMarkScheme(false);
 		setHasSolutions(false);
+		setMarkSchemeFile(null);
+		setSolutionsFile(null);
 		setSplitMode("auto");
 	}, []);
 
@@ -101,6 +106,8 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 				label,
 				splitMode: splitMode !== "auto" ? splitMode : undefined,
 				files,
+				markScheme: markSchemeFile ?? undefined,
+				solutions: solutionsFile ?? undefined,
 			});
 
 			log.info("ResourceUpload — resource created");
@@ -112,7 +119,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 		} finally {
 			setUploading(false);
 		}
-	}, [resourceType, files, resourceName, hasMarkScheme, hasSolutions, splitMode, sessionId, queryClient, reset]);
+	}, [resourceType, files, resourceName, hasMarkScheme, hasSolutions, markSchemeFile, solutionsFile, splitMode, sessionId, queryClient, reset]);
 
 	return (
 		<>
@@ -215,16 +222,18 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 										</label>
 									)}
 
-									{/* Split mode tickbox */}
-									<label className="flex items-center gap-2 text-sm">
-										<input
-											type="checkbox"
-											checked={splitMode === "split"}
-											onChange={(e) => setSplitMode(e.target.checked ? "split" : "auto")}
-											className="h-4 w-4 rounded border-input"
-										/>
-										Split into chunks for indexing
-									</label>
+									{/* Split mode tickbox — only for lecture notes */}
+									{resourceType === "LECTURE_NOTES" && (
+										<label className="flex items-center gap-2 text-sm">
+											<input
+												type="checkbox"
+												checked={splitMode === "split"}
+												onChange={(e) => setSplitMode(e.target.checked ? "split" : "auto")}
+												className="h-4 w-4 rounded border-input"
+											/>
+											Split into chunks for indexing
+										</label>
+									)}
 
 									{/* File upload */}
 									<div>
@@ -270,6 +279,82 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 											className="hidden"
 										/>
 									</div>
+
+									{/* Separate mark scheme file upload */}
+									{resourceType === "PAST_PAPER" && !hasMarkScheme && (
+										<div>
+											<label className="mb-1 block text-sm font-medium">
+												Mark Scheme <span className="font-normal text-muted-foreground">(optional)</span>
+											</label>
+											{markSchemeFile ? (
+												<div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm">
+													<span className="truncate">{markSchemeFile.name}</span>
+													<button
+														onClick={() => setMarkSchemeFile(null)}
+														className="ml-2 text-muted-foreground hover:text-destructive"
+													>
+														<X className="h-3.5 w-3.5" />
+													</button>
+												</div>
+											) : (
+												<button
+													onClick={() => secondaryFileInputRef.current?.click()}
+													className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-4 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+												>
+													<Upload className="h-4 w-4" />
+													Choose mark scheme PDF
+												</button>
+											)}
+											<input
+												ref={secondaryFileInputRef}
+												type="file"
+												accept=".pdf"
+												onChange={(e) => {
+													if (e.target.files?.[0]) setMarkSchemeFile(e.target.files[0]);
+													if (secondaryFileInputRef.current) secondaryFileInputRef.current.value = "";
+												}}
+												className="hidden"
+											/>
+										</div>
+									)}
+
+									{/* Separate solutions file upload */}
+									{resourceType === "PROBLEM_SHEET" && !hasSolutions && (
+										<div>
+											<label className="mb-1 block text-sm font-medium">
+												Solutions <span className="font-normal text-muted-foreground">(optional)</span>
+											</label>
+											{solutionsFile ? (
+												<div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm">
+													<span className="truncate">{solutionsFile.name}</span>
+													<button
+														onClick={() => setSolutionsFile(null)}
+														className="ml-2 text-muted-foreground hover:text-destructive"
+													>
+														<X className="h-3.5 w-3.5" />
+													</button>
+												</div>
+											) : (
+												<button
+													onClick={() => secondaryFileInputRef.current?.click()}
+													className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-4 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+												>
+													<Upload className="h-4 w-4" />
+													Choose solutions PDF
+												</button>
+											)}
+											<input
+												ref={secondaryFileInputRef}
+												type="file"
+												accept=".pdf"
+												onChange={(e) => {
+													if (e.target.files?.[0]) setSolutionsFile(e.target.files[0]);
+													if (secondaryFileInputRef.current) secondaryFileInputRef.current.value = "";
+												}}
+												className="hidden"
+											/>
+										</div>
+									)}
 
 									{/* Actions */}
 									<div className="flex items-center justify-between pt-2">

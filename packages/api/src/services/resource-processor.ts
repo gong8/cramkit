@@ -128,7 +128,7 @@ export async function processResource(resourceId: string): Promise<void> {
 			const { fileId, tree, rawContent } = fileTrees[0];
 			const shouldSplit =
 				splitMode === "split" ||
-				(splitMode === "auto" && hasHeadings(rawContent));
+				(splitMode === "auto" && resource.type === "LECTURE_NOTES" && hasHeadings(rawContent));
 
 			if (shouldSplit) {
 				const resourceSlug = slugify(resource.name);
@@ -180,95 +180,113 @@ export async function processResource(resourceId: string): Promise<void> {
 				log.info(`processResource — single chunk for "${resource.name}"`);
 			}
 		} else {
-			// Multiple files: combine under a root node
-			const rootTitle = resource.name;
-			const combinedRoot: TreeNode = {
-				title: rootTitle,
-				content: "",
-				depth: 0,
-				order: 0,
-				nodeType: "section",
-				children: [],
-			};
+			// Multiple files
+			const shouldSplitMulti =
+				splitMode === "split" ||
+				(splitMode === "auto" && resource.type === "LECTURE_NOTES");
 
-			for (let i = 0; i < fileTrees.length; i++) {
-				const { tree } = fileTrees[i];
-				// Each file's tree becomes a child of the root
-				tree.order = i;
-				if (tree.depth === 0) tree.depth = 1;
-				// Label by role
-				const file = resource.files[i];
-				if (file.role === "MARK_SCHEME") {
-					tree.title = `Mark Scheme: ${tree.title}`;
-				} else if (file.role === "SOLUTIONS") {
-					tree.title = `Solutions: ${tree.title}`;
-				} else if (file.role === "SUPPLEMENT") {
-					tree.title = `Supplement: ${tree.title}`;
+			if (shouldSplitMulti) {
+				// Combine under a root node with full tree
+				const rootTitle = resource.name;
+				const combinedRoot: TreeNode = {
+					title: rootTitle,
+					content: "",
+					depth: 0,
+					order: 0,
+					nodeType: "section",
+					children: [],
+				};
+
+				for (let i = 0; i < fileTrees.length; i++) {
+					const { tree } = fileTrees[i];
+					tree.order = i;
+					if (tree.depth === 0) tree.depth = 1;
+					const file = resource.files[i];
+					if (file.role === "MARK_SCHEME") {
+						tree.title = `Mark Scheme: ${tree.title}`;
+					} else if (file.role === "SOLUTIONS") {
+						tree.title = `Solutions: ${tree.title}`;
+					} else if (file.role === "SUPPLEMENT") {
+						tree.title = `Supplement: ${tree.title}`;
+					}
+					combinedRoot.children.push(tree);
 				}
-				combinedRoot.children.push(tree);
-			}
 
-			const resourceSlug = slugify(resource.name);
-			const mappings = await writeResourceTreeToDisk(resource.sessionId, resourceId, resourceSlug, combinedRoot);
-			const mappingLookup = new Map<TreeNode, DiskMapping>();
-			for (const m of mappings) mappingLookup.set(m.node, m);
+				const resourceSlug = slugify(resource.name);
+				const mappings = await writeResourceTreeToDisk(resource.sessionId, resourceId, resourceSlug, combinedRoot);
+				const mappingLookup = new Map<TreeNode, DiskMapping>();
+				for (const m of mappings) mappingLookup.set(m.node, m);
 
-			// Create root chunk
-			const rootMapping = mappings.find((m) => m.node === combinedRoot);
-			const rootChunk = await db.chunk.create({
-				data: {
-					resourceId,
-					sourceFileId: null,
-					parentId: null,
-					index: counter.value++,
-					depth: combinedRoot.depth,
-					nodeType: combinedRoot.nodeType,
-					slug: rootMapping?.slug ?? null,
-					diskPath: rootMapping?.diskPath ?? null,
-					title: combinedRoot.title,
-					content: combinedRoot.content,
-					startPage: combinedRoot.startPage ?? null,
-					endPage: combinedRoot.endPage ?? null,
-				},
-			});
-
-			// Create child chunks, tracking sourceFileId for each sub-tree
-			for (let i = 0; i < combinedRoot.children.length; i++) {
-				const childTree = combinedRoot.children[i];
-				const fileId = fileTrees[i].fileId;
-
-				const childMapping = mappingLookup.get(childTree);
-				const childChunk = await db.chunk.create({
+				// Create root chunk
+				const rootMapping = mappings.find((m) => m.node === combinedRoot);
+				const rootChunk = await db.chunk.create({
 					data: {
 						resourceId,
-						sourceFileId: fileId,
-						parentId: rootChunk.id,
+						sourceFileId: null,
+						parentId: null,
 						index: counter.value++,
-						depth: childTree.depth,
-						nodeType: childTree.nodeType,
-						slug: childMapping?.slug ?? null,
-						diskPath: childMapping?.diskPath ?? null,
-						title: childTree.title,
-						content: childTree.content,
-						startPage: childTree.startPage ?? null,
-						endPage: childTree.endPage ?? null,
+						depth: combinedRoot.depth,
+						nodeType: combinedRoot.nodeType,
+						slug: rootMapping?.slug ?? null,
+						diskPath: rootMapping?.diskPath ?? null,
+						title: combinedRoot.title,
+						content: combinedRoot.content,
+						startPage: combinedRoot.startPage ?? null,
+						endPage: combinedRoot.endPage ?? null,
 					},
 				});
 
-				if (childTree.children.length > 0) {
-					await createChunkRecords(
-						resourceId,
-						fileId,
-						mappings,
-						childChunk.id,
-						childTree.children,
-						mappingLookup,
-						counter,
-					);
-				}
-			}
+				// Create child chunks, tracking sourceFileId for each sub-tree
+				for (let i = 0; i < combinedRoot.children.length; i++) {
+					const childTree = combinedRoot.children[i];
+					const fileId = fileTrees[i].fileId;
 
-			log.info(`processResource — created ${counter.value} chunks across ${fileTrees.length} files for "${resource.name}"`);
+					const childMapping = mappingLookup.get(childTree);
+					const childChunk = await db.chunk.create({
+						data: {
+							resourceId,
+							sourceFileId: fileId,
+							parentId: rootChunk.id,
+							index: counter.value++,
+							depth: childTree.depth,
+							nodeType: childTree.nodeType,
+							slug: childMapping?.slug ?? null,
+							diskPath: childMapping?.diskPath ?? null,
+							title: childTree.title,
+							content: childTree.content,
+							startPage: childTree.startPage ?? null,
+							endPage: childTree.endPage ?? null,
+						},
+					});
+
+					if (childTree.children.length > 0) {
+						await createChunkRecords(
+							resourceId,
+							fileId,
+							mappings,
+							childChunk.id,
+							childTree.children,
+							mappingLookup,
+							counter,
+						);
+					}
+				}
+
+				log.info(`processResource — created ${counter.value} chunks across ${fileTrees.length} files for "${resource.name}"`);
+			} else {
+				// Non-lecture-notes multi-file: single chunk with concatenated content
+				const allContent = fileTrees.map((ft) => ft.rawContent).join("\n\n---\n\n");
+				await db.chunk.create({
+					data: {
+						resourceId,
+						sourceFileId: fileTrees[0].fileId,
+						index: 0,
+						title: resource.name,
+						content: allContent,
+					},
+				});
+				log.info(`processResource — single chunk (multi-file) for "${resource.name}"`);
+			}
 		}
 
 		// Step 4: Mark resource as indexed

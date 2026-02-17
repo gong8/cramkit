@@ -163,6 +163,8 @@ export async function createResource(
 		label?: string;
 		splitMode?: string;
 		files: File[];
+		markScheme?: File;
+		solutions?: File;
 	},
 ): Promise<Resource> {
 	log.info(`createResource — "${data.name}" (${data.type}), ${data.files.length} files`);
@@ -175,6 +177,8 @@ export async function createResource(
 	for (const file of data.files) {
 		formData.append("files", file);
 	}
+	if (data.markScheme) formData.append("markScheme", data.markScheme);
+	if (data.solutions) formData.append("solutions", data.solutions);
 
 	const response = await fetch(`${BASE_URL}/resources/sessions/${sessionId}/resources`, {
 		method: "POST",

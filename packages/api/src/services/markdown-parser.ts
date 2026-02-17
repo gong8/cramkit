@@ -11,6 +11,23 @@ export interface TreeNode {
 
 const HEADING_REGEX = /^(#{1,6})\s+(.+)$/;
 
+/**
+ * Detect numbered section lines from PDF output like:
+ *   "1.1 \tOverview of the module"
+ *   "1.2.1 \tDefinition"
+ *   "Chapter \t1"
+ * These come from MarkItDown which strips heading markup from PDFs.
+ */
+const SECTION_NUMBER_REGEX = /^(\d+(?:\.\d+)+)\s+(.+)$/;
+const CHAPTER_LINE_REGEX = /^Chapter\s+(\d+)$/i;
+
+/** Page separators from MarkItDown: "-- 3 of 24 --" */
+const PAGE_SEPARATOR_REGEX = /^--\s*\d+\s+of\s+\d+\s*--$/;
+
+/** Running headers repeated on every page: "1.2. WHAT IS A PDE?  3" or "CHAPTER 1. INTRODUCTION" */
+const RUNNING_HEADER_REGEX = /^\d+\.\d+\.\s+[A-Z][A-Z\s?!]+\d*$/;
+const CHAPTER_HEADER_REGEX = /^\d+\s+CHAPTER\s+\d+\.\s+[A-Z]/;
+
 const NODE_TYPE_PATTERNS: Array<[RegExp, string]> = [
 	[/^(definition|def\.)\b/i, "definition"],
 	[/^(theorem|thm\.)\b/i, "theorem"],
@@ -20,6 +37,7 @@ const NODE_TYPE_PATTERNS: Array<[RegExp, string]> = [
 	[/^(corollary|cor\.)\b/i, "corollary"],
 	[/^(exercise|question|q\d+)\b/i, "question"],
 	[/^chapter\b/i, "chapter"],
+	[/^(proposition|prop\.)\b/i, "theorem"],
 ];
 
 function inferNodeType(title: string, depth: number): string {
@@ -44,11 +62,108 @@ function extractStartPage(text: string): number | undefined {
 }
 
 /**
+ * Pre-process MarkItDown PDF output to inject markdown headings.
+ *
+ * MarkItDown strips heading markup from PDFs, producing flat text with
+ * patterns like "1.1 \tOverview" and "Chapter \t1". This function detects
+ * those patterns and converts them to proper markdown headings.
+ *
+ * Also strips page separators ("-- 3 of 24 --") and running headers
+ * repeated on each page.
+ */
+export function preprocessPdfMarkdown(markdown: string): string {
+	const lines = markdown.split("\n");
+	const output: string[] = [];
+
+	// First pass: detect if the content has numbered sections
+	let hasSectionNumbers = false;
+	for (const line of lines) {
+		const trimmed = line.replace(/\t/g, " ").trim();
+		if (SECTION_NUMBER_REGEX.test(trimmed)) {
+			hasSectionNumbers = true;
+			break;
+		}
+	}
+
+	if (!hasSectionNumbers) {
+		// No numbered sections detected — return as-is but strip page separators
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (PAGE_SEPARATOR_REGEX.test(trimmed)) continue;
+			output.push(line);
+		}
+		return output.join("\n");
+	}
+
+	// Second pass: convert section patterns to headings
+	let i = 0;
+	while (i < lines.length) {
+		const trimmed = lines[i].replace(/\t/g, " ").trim();
+
+		// Strip page separators
+		if (PAGE_SEPARATOR_REGEX.test(trimmed)) {
+			i++;
+			continue;
+		}
+
+		// Strip running headers (ALL CAPS repeated on each page, like "1.2. WHAT IS A PDE?  5")
+		if (RUNNING_HEADER_REGEX.test(trimmed) || CHAPTER_HEADER_REGEX.test(trimmed)) {
+			i++;
+			continue;
+		}
+
+		// Detect "Chapter \t N" followed by title on next line
+		const chapterMatch = trimmed.match(CHAPTER_LINE_REGEX);
+		if (chapterMatch) {
+			// Next non-empty line is the chapter title
+			let title = `Chapter ${chapterMatch[1]}`;
+			let j = i + 1;
+			while (j < lines.length && lines[j].trim() === "") j++;
+			if (j < lines.length) {
+				const nextTrimmed = lines[j].trim();
+				// Only use as title if it's short and not a section number
+				if (nextTrimmed.length > 0 && nextTrimmed.length < 100 && !SECTION_NUMBER_REGEX.test(nextTrimmed.replace(/\t/g, " "))) {
+					title = `Chapter ${chapterMatch[1]}: ${nextTrimmed}`;
+					i = j + 1;
+				} else {
+					i++;
+				}
+			} else {
+				i++;
+			}
+			output.push(`# ${title}`);
+			continue;
+		}
+
+		// Detect numbered sections: "1.2.1  Definition"
+		const sectionMatch = trimmed.match(SECTION_NUMBER_REGEX);
+		if (sectionMatch) {
+			const number = sectionMatch[1];
+			const title = sectionMatch[2].trim();
+			// Depth from number of dots: "1.1" -> 2 (##), "1.2.1" -> 3 (###), "1.2.1.1" -> 4 (####)
+			const dots = (number.match(/\./g) || []).length;
+			const level = Math.min(dots + 1, 6);
+			const hashes = "#".repeat(level);
+			output.push(`${hashes} ${number} ${title}`);
+			i++;
+			continue;
+		}
+
+		output.push(lines[i]);
+		i++;
+	}
+
+	return output.join("\n");
+}
+
+/**
  * Parse markdown into a tree based on heading structure.
  * Pure function, no LLM or I/O.
  */
 export function parseMarkdownTree(markdown: string, filename: string): TreeNode {
-	const lines = markdown.split("\n");
+	// Pre-process to inject headings from PDF section numbers
+	const processed = preprocessPdfMarkdown(markdown);
+	const lines = processed.split("\n");
 
 	const root: TreeNode = {
 		title: filename.replace(/\.[^.]+$/, ""),
@@ -90,8 +205,8 @@ export function parseMarkdownTree(markdown: string, filename: string): TreeNode 
 	if (currentSegment) segments.push(currentSegment);
 
 	root.content = root.content.trimEnd();
-	root.startPage = extractStartPage(markdown);
-	root.endPage = extractPageNumber(markdown);
+	root.startPage = extractStartPage(processed);
+	root.endPage = extractPageNumber(processed);
 
 	if (segments.length === 0) {
 		// No headings at all -> single root node with all content
@@ -158,7 +273,14 @@ function mergeShortLeaves(node: TreeNode): void {
 	node.children = kept;
 }
 
-/** Check if a markdown document has any headings */
+/** Check if a markdown document has any headings (including PDF section numbers) */
 export function hasHeadings(markdown: string): boolean {
-	return markdown.split("\n").some((line) => HEADING_REGEX.test(line));
+	return markdown.split("\n").some((line) => {
+		if (HEADING_REGEX.test(line)) return true;
+		// Also detect PDF section number patterns
+		const trimmed = line.replace(/\t/g, " ").trim();
+		if (SECTION_NUMBER_REGEX.test(trimmed)) return true;
+		if (CHAPTER_LINE_REGEX.test(trimmed)) return true;
+		return false;
+	});
 }
