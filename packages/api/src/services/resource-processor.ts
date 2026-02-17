@@ -65,12 +65,16 @@ async function createChunkRecords(
 
 export async function processResource(resourceId: string): Promise<void> {
 	const db = getDb();
+	const ROLE_ORDER: Record<string, number> = { PRIMARY: 0, SUPPLEMENT: 1, MARK_SCHEME: 2, SOLUTIONS: 3 };
 	const resource = await db.resource.findUnique({
 		where: { id: resourceId },
 		include: {
-			files: { orderBy: { role: "asc" } }, // PRIMARY first
+			files: { orderBy: { createdAt: "asc" } },
 		},
 	});
+	if (resource) {
+		resource.files.sort((a, b) => (ROLE_ORDER[a.role] ?? 9) - (ROLE_ORDER[b.role] ?? 9));
+	}
 
 	if (!resource) {
 		log.error(`processResource — resource ${resourceId} not found`);
