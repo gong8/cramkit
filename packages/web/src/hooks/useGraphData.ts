@@ -45,7 +45,15 @@ export function useGraphData(sessionId: string) {
 
 	// Full graph (unfiltered)
 	const fullGraph = useMemo<FullGraphData | null>(
-		() => (graph ? buildGraphData(graph.concepts, graph.relationships, graph.resources) : null),
+		() =>
+			graph
+				? buildGraphData(
+						graph.concepts,
+						graph.relationships,
+						graph.resources,
+						graph.chunkResourceMap,
+					)
+				: null,
 		[graph],
 	);
 
@@ -62,12 +70,7 @@ export function useGraphData(sessionId: string) {
 		const filteredNodeIds = new Set<string>();
 		for (const node of fullGraph.nodes) {
 			if (disabledNodeTypes.has(node.data?.type)) continue;
-			if (
-				node.data?.type === "resource" &&
-				node.data?.resourceId &&
-				disabledResourceIds.has(node.data.resourceId)
-			)
-				continue;
+			if (node.data?.resourceId && disabledResourceIds.has(node.data.resourceId)) continue;
 			filteredNodeIds.add(node.id);
 		}
 

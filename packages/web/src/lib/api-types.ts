@@ -66,6 +66,7 @@ export interface SessionGraph {
 	concepts: Concept[];
 	relationships: Relationship[];
 	resources: GraphResource[];
+	chunkResourceMap: Record<string, string>;
 }
 
 export interface BatchResource {

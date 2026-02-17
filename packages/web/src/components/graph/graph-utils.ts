@@ -12,6 +12,7 @@ export function buildGraphData(
 	concepts: Concept[],
 	relationships: Relationship[],
 	resources: GraphResource[],
+	chunkResourceMap: Record<string, string>,
 ): FullGraphData {
 	const nodeMap = new Map<string, GraphNode>();
 	const nodeTypeSet = new Set<string>();
@@ -39,15 +40,25 @@ export function buildGraphData(
 		if (!nodeMap.has(sourceKey)) {
 			nodeTypeSet.add(r.sourceType);
 			const resMeta = r.sourceType === "resource" ? resourceMap.get(r.sourceId) : undefined;
+			const sourceResourceId =
+				r.sourceType === "resource"
+					? r.sourceId
+					: r.sourceType === "chunk"
+						? chunkResourceMap[r.sourceId]
+						: undefined;
+			const sourceResMeta = sourceResourceId ? resourceMap.get(sourceResourceId) : undefined;
 			nodeMap.set(sourceKey, {
 				id: sourceKey,
 				label: resMeta?.name || r.sourceLabel || r.sourceId.slice(0, 8),
 				fill:
-					(resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.sourceType] || "#6b7280",
+					(resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) ||
+					(sourceResMeta && RESOURCE_TYPE_COLORS[sourceResMeta.type]) ||
+					NODE_COLORS[r.sourceType] ||
+					"#6b7280",
 				data: {
 					type: r.sourceType,
-					resourceId: r.sourceType === "resource" ? r.sourceId : undefined,
-					resourceType: resMeta?.type,
+					resourceId: sourceResourceId,
+					resourceType: resMeta?.type || sourceResMeta?.type,
 				},
 			});
 		}
@@ -56,15 +67,25 @@ export function buildGraphData(
 		if (!nodeMap.has(targetKey)) {
 			nodeTypeSet.add(r.targetType);
 			const resMeta = r.targetType === "resource" ? resourceMap.get(r.targetId) : undefined;
+			const targetResourceId =
+				r.targetType === "resource"
+					? r.targetId
+					: r.targetType === "chunk"
+						? chunkResourceMap[r.targetId]
+						: undefined;
+			const targetResMeta = targetResourceId ? resourceMap.get(targetResourceId) : undefined;
 			nodeMap.set(targetKey, {
 				id: targetKey,
 				label: resMeta?.name || r.targetLabel || r.targetId.slice(0, 8),
 				fill:
-					(resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.targetType] || "#6b7280",
+					(resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) ||
+					(targetResMeta && RESOURCE_TYPE_COLORS[targetResMeta.type]) ||
+					NODE_COLORS[r.targetType] ||
+					"#6b7280",
 				data: {
 					type: r.targetType,
-					resourceId: r.targetType === "resource" ? r.targetId : undefined,
-					resourceType: resMeta?.type,
+					resourceId: targetResourceId,
+					resourceType: resMeta?.type || targetResMeta?.type,
 				},
 			});
 		}

@@ -148,19 +148,28 @@ graphRoutes.get("/sessions/:sessionId/full", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 
-	const [concepts, relationships, resources] = await Promise.all([
+	const [concepts, relationships, resources, chunks] = await Promise.all([
 		db.concept.findMany({ where: { sessionId }, orderBy: { name: "asc" } }),
 		db.relationship.findMany({ where: { sessionId } }),
 		db.resource.findMany({
 			where: { sessionId },
 			select: { id: true, name: true, type: true, label: true },
 		}),
+		db.chunk.findMany({
+			where: { resource: { sessionId } },
+			select: { id: true, resourceId: true },
+		}),
 	]);
+
+	const chunkResourceMap: Record<string, string> = {};
+	for (const chunk of chunks) {
+		chunkResourceMap[chunk.id] = chunk.resourceId;
+	}
 
 	log.info(
 		`GET /graph/sessions/${sessionId}/full — ${concepts.length} concepts, ${relationships.length} relationships, ${resources.length} resources`,
 	);
-	return c.json({ concepts, relationships, resources });
+	return c.json({ concepts, relationships, resources, chunkResourceMap });
 });
 
 graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
