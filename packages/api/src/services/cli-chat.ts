@@ -97,7 +97,7 @@ export interface ToolCallData {
 	isError?: boolean;
 }
 
-function buildPrompt(messages: CliMessage[]): string {
+function buildPrompt(messages: CliMessage[], images?: string[]): string {
 	const parts: string[] = [];
 
 	for (const msg of messages) {
@@ -113,6 +113,14 @@ function buildPrompt(messages: CliMessage[]): string {
 		}
 	}
 
+	// When images are attached, instruct the model to read them using the Read tool
+	if (images && images.length > 0) {
+		const imageList = images.map((p) => `  - ${p}`).join("\n");
+		parts.push(
+			`<attached_images>\nThe user has attached images to this conversation. Use the Read tool to view each image file:\n${imageList}\n</attached_images>`,
+		);
+	}
+
 	return parts.join("\n\n").trim();
 }
 
@@ -122,9 +130,7 @@ function buildCliArgs(
 	systemPromptPath: string,
 	disallowedTools: string[],
 	prompt: string,
-	images?: string[],
 ): string[] {
-	const imageFlags = (images ?? []).flatMap((path) => ["--image", path]);
 	return [
 		"--print",
 		"--output-format",
@@ -146,7 +152,6 @@ function buildCliArgs(
 		"--no-session-persistence",
 		"--max-turns",
 		"50",
-		...imageFlags,
 		prompt,
 	];
 }
@@ -307,14 +312,20 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 	const mcpConfigPath = writeMcpConfig(invocationDir);
 	const systemPromptPath = writeSystemPrompt(invocationDir, options.systemPrompt);
 	const model = getCliModel(options.model ?? LLM_MODEL);
-	const prompt = buildPrompt(options.messages) || (options.images?.length ? "Describe this image." : "");
+	const hasImages = options.images && options.images.length > 0;
+	const prompt = buildPrompt(options.messages, options.images) || (hasImages ? "Describe this image." : "");
+
+	// When images are attached, unblock the Read tool so the model can view them
+	const disallowedTools = hasImages
+		? BLOCKED_BUILTIN_TOOLS.filter((t) => t !== "Read")
+		: BLOCKED_BUILTIN_TOOLS;
+
 	const args = buildCliArgs(
 		model,
 		mcpConfigPath,
 		systemPromptPath,
-		BLOCKED_BUILTIN_TOOLS,
+		disallowedTools,
 		prompt,
-		options.images,
 	);
 
 	const startMs = performance.now();
