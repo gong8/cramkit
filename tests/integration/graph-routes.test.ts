@@ -1,12 +1,8 @@
 import { getDb } from "@cramkit/shared";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanDb, seedPdeSession } from "../fixtures/helpers";
-import {
-	lectureNotesResponse,
-	pastPaperResponse,
-	problemSheetResponse,
-} from "../fixtures/llm-responses";
+import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
+import { lectureNotesResponse } from "../fixtures/llm-responses.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -222,12 +218,9 @@ describe("graph routes", () => {
 	it("full PDE flow: index-all → poll status → verify concepts", async () => {
 		const { session, resources } = await seedPdeSession(db);
 
-		vi.mocked(chatCompletion).mockImplementation(async (messages) => {
-			const userMsg = messages.find((m) => m.role === "user")?.content || "";
-			if (userMsg.includes("LECTURE_NOTES")) return JSON.stringify(lectureNotesResponse);
-			if (userMsg.includes("PAST_PAPER")) return JSON.stringify(pastPaperResponse);
-			return JSON.stringify(problemSheetResponse);
-		});
+		vi.mocked(chatCompletion).mockImplementation(async (messages) =>
+			mockLlmByResourceType(messages),
+		);
 
 		// Index all resources directly (not via queue to avoid timing issues)
 		for (const resource of resources) {

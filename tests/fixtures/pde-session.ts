@@ -3,7 +3,7 @@
  * This file also contains the concept list used across fixtures.
  */
 
-export { seedPdeSession } from "./helpers";
+export { seedPdeSession } from "./helpers.js";
 
 /** Expected concepts that the LLM would extract from PDE materials */
 export const PDE_CONCEPTS = [

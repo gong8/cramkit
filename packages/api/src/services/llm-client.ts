@@ -33,16 +33,12 @@ export async function chatCompletion(
 	const promptParts: string[] = [];
 
 	for (const msg of sanitizedMessages) {
-		switch (msg.role) {
-			case "system":
-				systemParts.push(msg.content);
-				break;
-			case "assistant":
-				promptParts.push(`<previous_response>\n${msg.content}\n</previous_response>`);
-				break;
-			case "user":
-				promptParts.push(msg.content);
-				break;
+		if (msg.role === "system") {
+			systemParts.push(msg.content);
+		} else if (msg.role === "assistant") {
+			promptParts.push(`<previous_response>\n${msg.content}\n</previous_response>`);
+		} else {
+			promptParts.push(msg.content);
 		}
 	}
 

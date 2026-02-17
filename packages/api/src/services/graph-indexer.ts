@@ -229,6 +229,154 @@ ${contentStr}`,
 	];
 }
 
+const MAX_LLM_ATTEMPTS = 3;
+
+async function extractWithRetries(
+	messages: Array<{ role: "system" | "user"; content: string }>,
+	resourceName: string,
+	resourceId: string,
+): Promise<ExtractionResult> {
+	for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
+		let rawResponse = "";
+		try {
+			rawResponse = await chatCompletion(messages);
+			const jsonMatch = rawResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, rawResponse];
+			return JSON.parse(jsonMatch[1]?.trim()) as ExtractionResult;
+		} catch (error) {
+			if (error instanceof SyntaxError) {
+				log.error(
+					`indexResourceGraph — JSON parse failed for "${resourceName}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS}). Response starts with: "${rawResponse.slice(0, 300)}"`,
+				);
+			} else {
+				log.error(
+					`indexResourceGraph — LLM call failed for "${resourceName}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS})`,
+					error,
+				);
+			}
+			if (attempt === MAX_LLM_ATTEMPTS) {
+				throw new GraphIndexError(
+					`Giving up on "${resourceName}" after ${MAX_LLM_ATTEMPTS} attempts`,
+					error instanceof SyntaxError ? "parse_error" : "llm_error",
+					resourceId,
+				);
+			}
+			log.info(
+				`indexResourceGraph — retrying "${resourceName}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS})...`,
+			);
+		}
+	}
+	throw new GraphIndexError("Unreachable", "unknown", resourceId);
+}
+
+type RelData = Prisma.RelationshipCreateManyInput;
+
+function findChunkByLabel(chunks: ChunkInfo[], label: string): ChunkInfo | undefined {
+	const lower = label.toLowerCase();
+	return (
+		chunks.find((c) => c.title?.toLowerCase() === lower) ||
+		chunks.find((c) => c.title?.toLowerCase().startsWith(lower)) ||
+		chunks.find(
+			(c) => c.title?.toLowerCase().includes(lower) || c.content.toLowerCase().includes(lower),
+		)
+	);
+}
+
+function buildRelationshipData(
+	result: ExtractionResult,
+	conceptMap: Map<string, string>,
+	chunkByTitle: Map<string, string>,
+	chunks: ChunkInfo[],
+	sessionId: string,
+	resourceId: string,
+	resourceName: string,
+): RelData[] {
+	const relationships: RelData[] = [];
+
+	for (const link of result.file_concept_links) {
+		const conceptName = toTitleCase(link.conceptName);
+		const conceptId = conceptMap.get(conceptName);
+		if (!conceptId) continue;
+
+		let sourceType = "resource";
+		let sourceId = resourceId;
+		let sourceLabel = resourceName;
+
+		if (link.chunkTitle) {
+			const chunkId = fuzzyMatchTitle(link.chunkTitle, chunkByTitle);
+			if (chunkId) {
+				sourceType = "chunk";
+				sourceId = chunkId;
+				sourceLabel = link.chunkTitle;
+			}
+		}
+
+		relationships.push({
+			sessionId,
+			sourceType,
+			sourceId,
+			sourceLabel,
+			targetType: "concept",
+			targetId: conceptId,
+			targetLabel: conceptName,
+			relationship: link.relationship,
+			confidence: link.confidence ?? 0.8,
+			createdBy: "system",
+		});
+	}
+
+	for (const link of result.concept_concept_links) {
+		const sourceId = conceptMap.get(toTitleCase(link.sourceConcept));
+		const targetId = conceptMap.get(toTitleCase(link.targetConcept));
+		if (!sourceId || !targetId) continue;
+
+		relationships.push({
+			sessionId,
+			sourceType: "concept",
+			sourceId,
+			sourceLabel: toTitleCase(link.sourceConcept),
+			targetType: "concept",
+			targetId,
+			targetLabel: toTitleCase(link.targetConcept),
+			relationship: link.relationship,
+			confidence: link.confidence ?? 0.7,
+			createdBy: "system",
+		});
+	}
+
+	for (const link of result.question_concept_links) {
+		const conceptName = toTitleCase(link.conceptName);
+		const conceptId = conceptMap.get(conceptName);
+		if (!conceptId) continue;
+
+		const matchingChunk = findChunkByLabel(chunks, link.questionLabel);
+
+		relationships.push({
+			sessionId,
+			sourceType: matchingChunk ? "chunk" : "resource",
+			sourceId: matchingChunk?.id || resourceId,
+			sourceLabel: link.questionLabel,
+			targetType: "concept",
+			targetId: conceptId,
+			targetLabel: conceptName,
+			relationship: link.relationship,
+			confidence: link.confidence ?? 0.8,
+			createdBy: "system",
+		});
+	}
+
+	return relationships;
+}
+
+function deduplicateRelationships(relationships: RelData[]): RelData[] {
+	const seen = new Set<string>();
+	return relationships.filter((r) => {
+		const key = `${r.sourceType}:${r.sourceId}:${r.targetType}:${r.targetId}:${r.relationship}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
 export async function indexResourceGraph(resourceId: string): Promise<void> {
 	const db = getDb();
 
@@ -277,46 +425,11 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 		existingConcepts,
 	);
 
-	let result!: ExtractionResult;
-	const maxAttempts = 3;
-	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-		let rawResponse = "";
-		try {
-			rawResponse = await chatCompletion(messages);
-			const jsonMatch = rawResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, rawResponse];
-			result = JSON.parse(jsonMatch[1]?.trim()) as ExtractionResult;
-			break;
-		} catch (error) {
-			const isLastAttempt = attempt === maxAttempts;
-			if (error instanceof SyntaxError) {
-				log.error(
-					`indexResourceGraph — JSON parse failed for "${resource.name}" (attempt ${attempt}/${maxAttempts}). Response starts with: "${rawResponse.slice(0, 300)}"`,
-				);
-			} else {
-				log.error(
-					`indexResourceGraph — LLM call failed for "${resource.name}" (attempt ${attempt}/${maxAttempts})`,
-					error,
-				);
-			}
-			if (isLastAttempt) {
-				const msg = `Giving up on "${resource.name}" after ${maxAttempts} attempts`;
-				throw new GraphIndexError(
-					msg,
-					error instanceof SyntaxError ? "parse_error" : "llm_error",
-					resourceId,
-				);
-			}
-			log.info(
-				`indexResourceGraph — retrying "${resource.name}" (attempt ${attempt + 1}/${maxAttempts})...`,
-			);
-		}
-	}
+	const result = await extractWithRetries(messages, resource.name, resourceId);
 
-	// All DB writes happen atomically in a single transaction
 	try {
 		await db.$transaction(
 			async (tx) => {
-				// Delete existing system-created relationships for this resource before re-indexing
 				const chunkIds = resource.chunks.map((c) => c.id);
 				const sourceIds = [resourceId, ...chunkIds];
 				await tx.relationship.deleteMany({
@@ -327,7 +440,6 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 					},
 				});
 
-				// Upsert concepts
 				for (const concept of result.concepts) {
 					const name = toTitleCase(concept.name);
 					await tx.concept.upsert({
@@ -348,14 +460,12 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 					});
 				}
 
-				// Reload concepts to get IDs
 				const allConcepts = await tx.concept.findMany({
 					where: { sessionId: resource.sessionId },
 					select: { id: true, name: true },
 				});
 				const conceptMap = new Map(allConcepts.map((c) => [c.name, c.id]));
 
-				// Build chunk lookup by title for targeted relationships
 				const chunkByTitle = new Map<string, string>();
 				for (const chunk of resource.chunks) {
 					if (chunk.title) {
@@ -363,107 +473,22 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 					}
 				}
 
-				// Batch all relationship creates
-				type RelData = Prisma.RelationshipCreateManyInput;
-				const relationshipsToCreate: RelData[] = [];
+				const relationships = deduplicateRelationships(
+					buildRelationshipData(
+						result,
+						conceptMap,
+						chunkByTitle,
+						resource.chunks,
+						resource.sessionId,
+						resourceId,
+						resource.name,
+					),
+				);
 
-				// Resource-concept relationships (point to specific chunks when possible)
-				for (const link of result.file_concept_links) {
-					const conceptName = toTitleCase(link.conceptName);
-					const conceptId = conceptMap.get(conceptName);
-					if (!conceptId) continue;
-
-					let sourceType = "resource";
-					let sourceId = resourceId;
-					let sourceLabel = resource.name;
-
-					if (link.chunkTitle) {
-						const chunkId = fuzzyMatchTitle(link.chunkTitle, chunkByTitle);
-						if (chunkId) {
-							sourceType = "chunk";
-							sourceId = chunkId;
-							sourceLabel = link.chunkTitle;
-						}
-					}
-
-					relationshipsToCreate.push({
-						sessionId: resource.sessionId,
-						sourceType,
-						sourceId,
-						sourceLabel,
-						targetType: "concept",
-						targetId: conceptId,
-						targetLabel: conceptName,
-						relationship: link.relationship,
-						confidence: link.confidence ?? 0.8,
-						createdBy: "system",
-					});
+				if (relationships.length > 0) {
+					await tx.relationship.createMany({ data: relationships });
 				}
 
-				// Concept-concept relationships
-				for (const link of result.concept_concept_links) {
-					const sourceId = conceptMap.get(toTitleCase(link.sourceConcept));
-					const targetId = conceptMap.get(toTitleCase(link.targetConcept));
-					if (!sourceId || !targetId) continue;
-
-					relationshipsToCreate.push({
-						sessionId: resource.sessionId,
-						sourceType: "concept",
-						sourceId,
-						sourceLabel: toTitleCase(link.sourceConcept),
-						targetType: "concept",
-						targetId,
-						targetLabel: toTitleCase(link.targetConcept),
-						relationship: link.relationship,
-						confidence: link.confidence ?? 0.7,
-						createdBy: "system",
-					});
-				}
-
-				// Question-concept relationships
-				for (const link of result.question_concept_links) {
-					const conceptName = toTitleCase(link.conceptName);
-					const conceptId = conceptMap.get(conceptName);
-					if (!conceptId) continue;
-
-					const qLabel = link.questionLabel.toLowerCase();
-					const matchingChunk =
-						resource.chunks.find((c) => c.title?.toLowerCase() === qLabel) ||
-						resource.chunks.find((c) => c.title?.toLowerCase().startsWith(qLabel)) ||
-						resource.chunks.find(
-							(c) =>
-								c.title?.toLowerCase().includes(qLabel) || c.content.toLowerCase().includes(qLabel),
-						);
-
-					relationshipsToCreate.push({
-						sessionId: resource.sessionId,
-						sourceType: matchingChunk ? "chunk" : "resource",
-						sourceId: matchingChunk?.id || resourceId,
-						sourceLabel: link.questionLabel,
-						targetType: "concept",
-						targetId: conceptId,
-						targetLabel: conceptName,
-						relationship: link.relationship,
-						confidence: link.confidence ?? 0.8,
-						createdBy: "system",
-					});
-				}
-
-				// Deduplicate relationships
-				const seenKeys = new Set<string>();
-				const dedupedRelationships: RelData[] = relationshipsToCreate.filter((r) => {
-					const key = `${r.sourceType}:${r.sourceId}:${r.targetType}:${r.targetId}:${r.relationship}`;
-					if (seenKeys.has(key)) return false;
-					seenKeys.add(key);
-					return true;
-				});
-
-				// Batch insert all relationships at once
-				if (dedupedRelationships.length > 0) {
-					await tx.relationship.createMany({ data: dedupedRelationships });
-				}
-
-				// Mark resource as graph-indexed with duration
 				const graphIndexDurationMs = Date.now() - startTime;
 				await tx.resource.update({
 					where: { id: resourceId },

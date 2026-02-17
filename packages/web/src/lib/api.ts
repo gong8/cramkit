@@ -1,4 +1,4 @@
-import { createLogger } from "@/lib/logger";
+import { createLogger } from "@/lib/logger.js";
 
 const log = createLogger("web");
 const BASE_URL = "/api";
@@ -22,6 +22,44 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 	log.debug(`${method} ${path} — ${response.status} OK`);
 	return response.json() as Promise<T>;
+}
+
+async function uploadFormData<T>(path: string, formData: FormData): Promise<T> {
+	const response = await fetch(`${BASE_URL}${path}`, {
+		method: "POST",
+		body: formData,
+	});
+
+	if (!response.ok) {
+		log.error(`POST ${path} — ${response.status}`);
+		throw new Error(`Upload error: ${response.status}`);
+	}
+
+	return response.json() as Promise<T>;
+}
+
+async function downloadFile(path: string, fallbackFilename: string): Promise<void> {
+	const response = await fetch(`${BASE_URL}${path}`);
+
+	if (!response.ok) {
+		log.error(`GET ${path} — ${response.status}`);
+		throw new Error(`Download error: ${response.status}`);
+	}
+
+	const blob = await response.blob();
+	const disposition = response.headers.get("Content-Disposition");
+	const filenameMatch = disposition?.match(/filename="?(.+?)"?$/);
+	const filename = filenameMatch?.[1] ?? fallbackFilename;
+
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(url);
+	log.info(`download triggered: ${filename}`);
 }
 
 export interface SessionSummary {
@@ -130,30 +168,23 @@ export interface ResourceContent {
 	content: string;
 }
 
-export async function fetchSessions(): Promise<SessionSummary[]> {
-	log.info("fetchSessions");
-	const sessions = await request<SessionSummary[]>("/sessions");
-	log.info(`fetchSessions — got ${sessions.length} sessions`);
-	return sessions;
+export function fetchSessions(): Promise<SessionSummary[]> {
+	return request("/sessions");
 }
 
 export function fetchSession(id: string): Promise<Session> {
-	log.info(`fetchSession — ${id}`);
 	return request(`/sessions/${id}`);
 }
 
-export async function createSession(data: {
+export function createSession(data: {
 	name: string;
 	module?: string;
 	examDate?: string;
 }): Promise<Session> {
-	log.info(`createSession — "${data.name}"`);
-	const session = await request<Session>("/sessions", {
+	return request("/sessions", {
 		method: "POST",
 		body: JSON.stringify(data),
 	});
-	log.info(`createSession — created ${session.id}`);
-	return session;
 }
 
 export function updateSession(
@@ -166,7 +197,6 @@ export function updateSession(
 		examDate?: string | null;
 	},
 ): Promise<Session> {
-	log.info(`updateSession — ${id}`);
 	return request(`/sessions/${id}`, {
 		method: "PATCH",
 		body: JSON.stringify(data),
@@ -174,17 +204,14 @@ export function updateSession(
 }
 
 export function deleteSession(id: string): Promise<void> {
-	log.info(`deleteSession — ${id}`);
 	return request(`/sessions/${id}`, { method: "DELETE" });
 }
 
 export function clearSessionGraph(sessionId: string): Promise<{ ok: boolean }> {
-	log.info(`clearSessionGraph — ${sessionId}`);
 	return request(`/sessions/${sessionId}/graph`, { method: "DELETE" });
 }
 
-// Resource operations
-export async function createResource(
+export function createResource(
 	sessionId: string,
 	data: {
 		name: string;
@@ -196,59 +223,31 @@ export async function createResource(
 		solutions?: File;
 	},
 ): Promise<Resource> {
-	log.info(`createResource — "${data.name}" (${data.type}), ${data.files.length} files`);
 	const formData = new FormData();
 	formData.append("name", data.name);
 	formData.append("type", data.type);
 	if (data.label) formData.append("label", data.label);
 	if (data.splitMode) formData.append("splitMode", data.splitMode);
-
-	for (const file of data.files) {
-		formData.append("files", file);
-	}
+	for (const file of data.files) formData.append("files", file);
 	if (data.markScheme) formData.append("markScheme", data.markScheme);
 	if (data.solutions) formData.append("solutions", data.solutions);
 
-	const response = await fetch(`${BASE_URL}/resources/sessions/${sessionId}/resources`, {
-		method: "POST",
-		body: formData,
-	});
-
-	if (!response.ok) {
-		log.error(`createResource — failed: ${response.status}`);
-		throw new Error(`Upload error: ${response.status}`);
-	}
-
-	log.info(`createResource — completed "${data.name}"`);
-	return response.json() as Promise<Resource>;
+	return uploadFormData(`/resources/sessions/${sessionId}/resources`, formData);
 }
 
-export async function addFilesToResource(
+export function addFilesToResource(
 	resourceId: string,
 	files: File[],
 	role?: string,
 ): Promise<Resource> {
-	log.info(`addFilesToResource — ${resourceId}, ${files.length} files`);
 	const formData = new FormData();
 	if (role) formData.append("role", role);
-	for (const file of files) {
-		formData.append("files", file);
-	}
+	for (const file of files) formData.append("files", file);
 
-	const response = await fetch(`${BASE_URL}/resources/${resourceId}/files`, {
-		method: "POST",
-		body: formData,
-	});
-
-	if (!response.ok) {
-		throw new Error(`Upload error: ${response.status}`);
-	}
-
-	return response.json() as Promise<Resource>;
+	return uploadFormData(`/resources/${resourceId}/files`, formData);
 }
 
 export function removeFileFromResource(resourceId: string, fileId: string): Promise<void> {
-	log.info(`removeFileFromResource — resource=${resourceId}, file=${fileId}`);
 	return request(`/resources/${resourceId}/files/${fileId}`, { method: "DELETE" });
 }
 
@@ -256,7 +255,6 @@ export function updateResource(
 	resourceId: string,
 	data: { name?: string; label?: string | null },
 ): Promise<Resource> {
-	log.info(`updateResource — ${resourceId}`, data);
 	return request(`/resources/${resourceId}`, {
 		method: "PATCH",
 		body: JSON.stringify(data),
@@ -264,17 +262,14 @@ export function updateResource(
 }
 
 export function deleteResource(resourceId: string): Promise<void> {
-	log.info(`deleteResource — ${resourceId}`);
 	return request(`/resources/${resourceId}`, { method: "DELETE" });
 }
 
 export function fetchResourceContent(resourceId: string): Promise<ResourceContent> {
-	log.info(`fetchResourceContent — ${resourceId}`);
 	return request(`/resources/${resourceId}/content`);
 }
 
 export function indexResource(sessionId: string, resourceId: string): Promise<void> {
-	log.info(`indexResource — session=${sessionId}, resource=${resourceId}`);
 	return request(`/graph/sessions/${sessionId}/index-resource`, {
 		method: "POST",
 		body: JSON.stringify({ resourceId }),
@@ -282,12 +277,10 @@ export function indexResource(sessionId: string, resourceId: string): Promise<vo
 }
 
 export function indexAllResources(sessionId: string): Promise<void> {
-	log.info(`indexAllResources — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/index-all`, { method: "POST" });
 }
 
 export function reindexAllResources(sessionId: string): Promise<void> {
-	log.info(`reindexAllResources — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/index-all`, {
 		method: "POST",
 		body: JSON.stringify({ reindex: true }),
@@ -295,12 +288,10 @@ export function reindexAllResources(sessionId: string): Promise<void> {
 }
 
 export function cancelIndexing(sessionId: string): Promise<void> {
-	log.info(`cancelIndexing — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/cancel-indexing`, { method: "POST" });
 }
 
 export function retryFailedIndexing(sessionId: string): Promise<void> {
-	log.info(`retryFailedIndexing — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/retry-failed`, { method: "POST" });
 }
 
@@ -309,12 +300,10 @@ export function fetchIndexStatus(sessionId: string): Promise<IndexStatus> {
 }
 
 export function fetchConcepts(sessionId: string): Promise<Concept[]> {
-	log.info(`fetchConcepts — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/concepts`);
 }
 
 export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
-	log.info(`fetchSessionGraph — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/full`);
 }
 
@@ -351,17 +340,14 @@ export interface ChatMessage {
 }
 
 export function fetchConversations(sessionId: string): Promise<ConversationSummary[]> {
-	log.info(`fetchConversations — session=${sessionId}`);
 	return request(`/chat/sessions/${sessionId}/conversations`);
 }
 
 export function createConversation(sessionId: string): Promise<ConversationSummary> {
-	log.info(`createConversation — session=${sessionId}`);
 	return request(`/chat/sessions/${sessionId}/conversations`, { method: "POST" });
 }
 
 export function fetchMessages(conversationId: string): Promise<ChatMessage[]> {
-	log.info(`fetchMessages — conversation=${conversationId}`);
 	return request(`/chat/conversations/${conversationId}/messages`);
 }
 
@@ -369,7 +355,6 @@ export function renameConversation(
 	conversationId: string,
 	title: string,
 ): Promise<ConversationSummary> {
-	log.info(`renameConversation — ${conversationId}`);
 	return request(`/chat/conversations/${conversationId}`, {
 		method: "PATCH",
 		body: JSON.stringify({ title }),
@@ -377,7 +362,6 @@ export function renameConversation(
 }
 
 export function deleteConversation(conversationId: string): Promise<void> {
-	log.info(`deleteConversation — ${conversationId}`);
 	return request(`/chat/conversations/${conversationId}`, { method: "DELETE" });
 }
 
@@ -390,30 +374,8 @@ export function fetchStreamStatus(conversationId: string): Promise<StreamStatus>
 	return request(`/chat/conversations/${conversationId}/stream-status`);
 }
 
-// Import/Export operations
-export async function exportSession(sessionId: string): Promise<void> {
-	log.info(`exportSession — ${sessionId}`);
-	const response = await fetch(`${BASE_URL}/sessions/${sessionId}/export`);
-
-	if (!response.ok) {
-		log.error(`exportSession — failed: ${response.status}`);
-		throw new Error(`Export error: ${response.status}`);
-	}
-
-	const blob = await response.blob();
-	const disposition = response.headers.get("Content-Disposition");
-	const filenameMatch = disposition?.match(/filename="?(.+?)"?$/);
-	const filename = filenameMatch?.[1] ?? `session-${sessionId}.cramkit.zip`;
-
-	const url = URL.createObjectURL(blob);
-	const a = document.createElement("a");
-	a.href = url;
-	a.download = filename;
-	document.body.appendChild(a);
-	a.click();
-	document.body.removeChild(a);
-	URL.revokeObjectURL(url);
-	log.info(`exportSession — download triggered: ${filename}`);
+export function exportSession(sessionId: string): Promise<void> {
+	return downloadFile(`/sessions/${sessionId}/export`, `session-${sessionId}.cramkit.zip`);
 }
 
 export interface ImportResult {
@@ -429,22 +391,8 @@ export interface ImportResult {
 	};
 }
 
-export async function importSession(file: File): Promise<ImportResult> {
-	log.info(`importSession — file: ${file.name} (${file.size} bytes)`);
+export function importSession(file: File): Promise<ImportResult> {
 	const formData = new FormData();
 	formData.append("file", file);
-
-	const response = await fetch(`${BASE_URL}/sessions/import`, {
-		method: "POST",
-		body: formData,
-	});
-
-	if (!response.ok) {
-		log.error(`importSession — failed: ${response.status}`);
-		throw new Error(`Import error: ${response.status}`);
-	}
-
-	const result = (await response.json()) as ImportResult;
-	log.info(`importSession — created session ${result.sessionId}`);
-	return result;
+	return uploadFormData("/sessions/import", formData);
 }

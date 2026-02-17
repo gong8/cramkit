@@ -1,12 +1,12 @@
 import { getDb } from "@cramkit/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanDb, seedPdeSession } from "../fixtures/helpers";
+import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
 import {
 	lectureNotesResponse,
 	pastPaperResponse,
 	problemSheetResponse,
 	responseWithUnknownConcepts,
-} from "../fixtures/llm-responses";
+} from "../fixtures/llm-responses.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -291,13 +291,9 @@ describe("indexResourceGraph", () => {
 	it("full PDE session: index all 11 resources sequentially", async () => {
 		const { resources, session } = await seedPdeSession(db);
 
-		// Lecture notes get lectureNotesResponse, past papers get pastPaperResponse, sheets get problemSheetResponse
-		vi.mocked(chatCompletion).mockImplementation(async (messages) => {
-			const userMsg = messages.find((m) => m.role === "user")?.content || "";
-			if (userMsg.includes("LECTURE_NOTES")) return JSON.stringify(lectureNotesResponse);
-			if (userMsg.includes("PAST_PAPER")) return JSON.stringify(pastPaperResponse);
-			return JSON.stringify(problemSheetResponse);
-		});
+		vi.mocked(chatCompletion).mockImplementation(async (messages) =>
+			mockLlmByResourceType(messages),
+		);
 
 		for (const resource of resources) {
 			await indexResourceGraph(resource.id);

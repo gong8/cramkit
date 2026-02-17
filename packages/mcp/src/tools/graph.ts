@@ -1,8 +1,5 @@
-import { createLogger } from "@cramkit/shared";
 import { z } from "zod";
 import { apiClient } from "../lib/api-client.js";
-
-const log = createLogger("mcp");
 
 export const graphTools = {
 	create_link: {
@@ -41,21 +38,8 @@ export const graphTools = {
 			relationship: string;
 			confidence?: number;
 		}) => {
-			log.info(
-				`create_link — ${params.sourceType}:${params.sourceId} -> ${params.targetType}:${params.targetId}`,
-			);
-			const result = await apiClient.createRelationship(params.sessionId, {
-				sourceType: params.sourceType,
-				sourceId: params.sourceId,
-				sourceLabel: params.sourceLabel,
-				targetType: params.targetType,
-				targetId: params.targetId,
-				targetLabel: params.targetLabel,
-				relationship: params.relationship,
-				confidence: params.confidence,
-				createdBy: "claude",
-			});
-			return JSON.stringify(result, null, 2);
+			const { sessionId, ...rest } = params;
+			return apiClient.createRelationship(sessionId, { ...rest, createdBy: "claude" });
 		},
 	},
 
@@ -67,12 +51,8 @@ export const graphTools = {
 			id: z.string().describe("Entity ID"),
 			relationshipType: z.string().optional().describe("Filter by relationship type"),
 		}),
-		execute: async (params: { type: string; id: string; relationshipType?: string }) => {
-			log.info(`get_related — type=${params.type}, id=${params.id}`);
-			const results = await apiClient.getRelated(params.type, params.id, params.relationshipType);
-			log.info(`get_related — found ${(results as unknown[]).length} relationships`);
-			return JSON.stringify(results, null, 2);
-		},
+		execute: async (params: { type: string; id: string; relationshipType?: string }) =>
+			apiClient.getRelated(params.type, params.id, params.relationshipType),
 	},
 
 	list_concepts: {
@@ -81,12 +61,7 @@ export const graphTools = {
 		parameters: z.object({
 			sessionId: z.string().describe("The session ID"),
 		}),
-		execute: async ({ sessionId }: { sessionId: string }) => {
-			log.info(`list_concepts — session=${sessionId}`);
-			const concepts = await apiClient.listConcepts(sessionId);
-			log.info(`list_concepts — found ${(concepts as unknown[]).length} concepts`);
-			return JSON.stringify(concepts, null, 2);
-		},
+		execute: async ({ sessionId }: { sessionId: string }) => apiClient.listConcepts(sessionId),
 	},
 
 	get_concept: {
@@ -95,10 +70,6 @@ export const graphTools = {
 		parameters: z.object({
 			conceptId: z.string().describe("The concept ID (from list_concepts or get_related)"),
 		}),
-		execute: async ({ conceptId }: { conceptId: string }) => {
-			log.info(`get_concept — ${conceptId}`);
-			const concept = await apiClient.getConcept(conceptId);
-			return JSON.stringify(concept, null, 2);
-		},
+		execute: async ({ conceptId }: { conceptId: string }) => apiClient.getConcept(conceptId),
 	},
 };

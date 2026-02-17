@@ -1,36 +1,14 @@
 import { getDb } from "@cramkit/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
-import { cleanDb } from "../fixtures/helpers";
+import { cleanDb, seedSessionWithChunks } from "../fixtures/helpers.js";
 
 const db = getDb();
 
 async function seedForAmortiser() {
-	const session = await db.session.create({
-		data: { name: "Amortiser Test Session" },
+	const { session, resource, chunks } = await seedSessionWithChunks(db, {
+		name: "Amortiser Test Session",
 	});
-
-	const resource = await db.resource.create({
-		data: {
-			sessionId: session.id,
-			name: "Test Resource",
-			type: "LECTURE_NOTES",
-			isIndexed: true,
-		},
-	});
-
-	const chunks = [];
-	for (let i = 0; i < 5; i++) {
-		chunks.push(
-			await db.chunk.create({
-				data: {
-					resourceId: resource.id,
-					index: i,
-					content: `Chunk content ${i}`,
-				},
-			}),
-		);
-	}
 
 	const concept = await db.concept.create({
 		data: {
@@ -107,28 +85,11 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("caps at 10 new relationships", async () => {
-		const session = await db.session.create({ data: { name: "Cap Test" } });
-
-		const resource = await db.resource.create({
-			data: {
-				sessionId: session.id,
-				name: "Big Resource",
-				type: "LECTURE_NOTES",
-				isIndexed: true,
-			},
+		const { session, resource, chunks } = await seedSessionWithChunks(db, {
+			name: "Cap Test",
+			chunkCount: 20,
 		});
 
-		// Create 20 chunks
-		const chunks = [];
-		for (let i = 0; i < 20; i++) {
-			chunks.push(
-				await db.chunk.create({
-					data: { resourceId: resource.id, index: i, content: `chunk ${i}` },
-				}),
-			);
-		}
-
-		// Create 3 concepts matching the query
 		for (const name of ["Heat Equation", "Heat Transfer", "Heat Diffusion"]) {
 			await db.concept.create({
 				data: { sessionId: session.id, name, description: "Heat related" },

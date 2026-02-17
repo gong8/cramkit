@@ -281,6 +281,27 @@ interface StreamParser {
 	process(msg: Record<string, unknown>): void;
 }
 
+/** Extract tool_result blocks from a message's content array and emit them */
+function emitToolResults(
+	content: Array<Record<string, unknown>> | undefined,
+	emitSSE: (event: string, data: string) => void,
+): void {
+	if (!content) return;
+	for (const block of content) {
+		if (block.type !== "tool_result") continue;
+		const toolUseId = block.tool_use_id as string;
+		const isError = block.is_error === true;
+		const blockContent = block.content as string | Array<Record<string, unknown>> | undefined;
+		let resultText = "";
+		if (typeof blockContent === "string") {
+			resultText = blockContent;
+		} else if (Array.isArray(blockContent)) {
+			resultText = blockContent.map((c) => (c.text as string) || "").join("");
+		}
+		emitSSE("tool_result", JSON.stringify({ toolCallId: toolUseId, result: resultText, isError }));
+	}
+}
+
 /**
  * Creates a stateful stream parser that handles content_block_start/delta/stop
  * events for text, tool_use, and thinking blocks.
@@ -292,39 +313,58 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
 	const toolCalls = new Map<number, { id: string; name: string; argsJson: string }>();
 	const thinkingText = new Map<number, string>();
 
-	function processToolResults(message: Record<string, unknown>): void {
-		const content = message.content as Array<Record<string, unknown>> | undefined;
-		if (!content) return;
-		for (const block of content) {
-			if (block.type === "tool_result") {
-				const toolUseId = block.tool_use_id as string;
-				const isError = block.is_error === true;
-				let resultText = "";
-				const blockContent = block.content as string | Array<Record<string, unknown>> | undefined;
-				if (typeof blockContent === "string") {
-					resultText = blockContent;
-				} else if (Array.isArray(blockContent)) {
-					resultText = blockContent.map((c) => (c.text as string) || "").join("");
-				}
-				emitSSE(
-					"tool_result",
-					JSON.stringify({
-						toolCallId: toolUseId,
-						result: resultText,
-						isError,
-					}),
-				);
-			}
+	function handleBlockStart(index: number, block: Record<string, unknown>): void {
+		const blockType = block.type as string;
+		if (blockType === "tool_use") {
+			blockTypes.set(index, "tool_use");
+			const toolCallId = (block.id as string) || `tool_${index}`;
+			const toolName = (block.name as string) || "unknown";
+			toolCalls.set(index, { id: toolCallId, name: toolName, argsJson: "" });
+			emitSSE("tool_call_start", JSON.stringify({ toolCallId, toolName }));
+		} else if (blockType === "thinking") {
+			blockTypes.set(index, "thinking");
+			thinkingText.set(index, "");
+			emitSSE("thinking_start", JSON.stringify({}));
+		} else {
+			blockTypes.set(index, "text");
 		}
+	}
+
+	function handleBlockDelta(index: number, delta: Record<string, unknown>): void {
+		const deltaType = delta.type as string;
+		const blockType = blockTypes.get(index);
+
+		if (deltaType === "text_delta" && delta.text && blockType === "text") {
+			emitSSE("content", JSON.stringify({ content: delta.text as string }));
+		} else if (deltaType === "input_json_delta" && delta.partial_json !== undefined) {
+			const tc = toolCalls.get(index);
+			if (tc) tc.argsJson += delta.partial_json as string;
+		} else if (deltaType === "thinking_delta" && delta.thinking) {
+			const prev = thinkingText.get(index) || "";
+			thinkingText.set(index, prev + (delta.thinking as string));
+			emitSSE("thinking_delta", JSON.stringify({ text: delta.thinking as string }));
+		}
+	}
+
+	function handleBlockStop(index: number): void {
+		if (blockTypes.get(index) !== "tool_use") return;
+		const tc = toolCalls.get(index);
+		if (!tc) return;
+		let args: Record<string, unknown> = {};
+		try {
+			args = tc.argsJson ? JSON.parse(tc.argsJson) : {};
+		} catch {
+			log.warn(`Failed to parse tool call args for ${tc.name}`);
+		}
+		emitSSE("tool_call_args", JSON.stringify({ toolCallId: tc.id, toolName: tc.name, args }));
 	}
 
 	function process(msg: Record<string, unknown>): void {
 		// Handle top-level "user" messages containing tool_result blocks
-		// These are emitted by the CLI outside of stream_event wrappers
 		if (msg.type === "user") {
 			const message = msg.message as Record<string, unknown> | undefined;
 			if (message?.role === "user") {
-				processToolResults(message);
+				emitToolResults(message.content as Array<Record<string, unknown>> | undefined, emitSSE);
 			}
 			return;
 		}
@@ -333,83 +373,27 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
 		const event = msg.event as Record<string, unknown> | undefined;
 		if (!event) return;
 
+		const index = event.index as number;
+
 		switch (event.type) {
 			case "content_block_start": {
-				const index = event.index as number;
 				const block = event.content_block as Record<string, unknown> | undefined;
-				if (!block) break;
-
-				const blockType = block.type as string;
-				if (blockType === "tool_use") {
-					blockTypes.set(index, "tool_use");
-					const toolCallId = (block.id as string) || `tool_${index}`;
-					const toolName = (block.name as string) || "unknown";
-					toolCalls.set(index, { id: toolCallId, name: toolName, argsJson: "" });
-					emitSSE("tool_call_start", JSON.stringify({ toolCallId, toolName }));
-				} else if (blockType === "thinking") {
-					blockTypes.set(index, "thinking");
-					thinkingText.set(index, "");
-					emitSSE("thinking_start", JSON.stringify({}));
-				} else {
-					blockTypes.set(index, "text");
-				}
+				if (block) handleBlockStart(index, block);
 				break;
 			}
-
 			case "content_block_delta": {
-				const index = event.index as number;
 				const delta = event.delta as Record<string, unknown> | undefined;
-				if (!delta) break;
-
-				const deltaType = delta.type as string;
-				const blockType = blockTypes.get(index);
-
-				if (deltaType === "text_delta" && delta.text) {
-					if (blockType === "text") {
-						emitSSE("content", JSON.stringify({ content: delta.text as string }));
-					}
-					// Ignore text_delta for other block types
-				} else if (deltaType === "input_json_delta" && delta.partial_json !== undefined) {
-					// Accumulate tool call args JSON
-					const tc = toolCalls.get(index);
-					if (tc) {
-						tc.argsJson += delta.partial_json as string;
-					}
-				} else if (deltaType === "thinking_delta" && delta.thinking) {
-					const prev = thinkingText.get(index) || "";
-					thinkingText.set(index, prev + (delta.thinking as string));
-					emitSSE("thinking_delta", JSON.stringify({ text: delta.thinking as string }));
-				}
+				if (delta) handleBlockDelta(index, delta);
 				break;
 			}
-
 			case "content_block_stop": {
-				const index = event.index as number;
-				const blockType = blockTypes.get(index);
-
-				if (blockType === "tool_use") {
-					const tc = toolCalls.get(index);
-					if (tc) {
-						let args: Record<string, unknown> = {};
-						try {
-							args = tc.argsJson ? JSON.parse(tc.argsJson) : {};
-						} catch {
-							log.warn(`Failed to parse tool call args for ${tc.name}`);
-						}
-						emitSSE(
-							"tool_call_args",
-							JSON.stringify({ toolCallId: tc.id, toolName: tc.name, args }),
-						);
-					}
-				}
+				handleBlockStop(index);
 				break;
 			}
-
-			// Handle tool results from stream_event message_start with role "user"
 			case "message_start": {
 				const message = event.message as Record<string, unknown> | undefined;
 				if (message?.role === "user") {
-					processToolResults(message);
+					emitToolResults(message.content as Array<Record<string, unknown>> | undefined, emitSSE);
 				}
 				break;
 			}
@@ -419,43 +403,111 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
 	return { process };
 }
 
-/**
- * Spawn the Claude CLI with MCP tools and stream the response.
- * Emits structured SSE events for text, tool calls, thinking, and results.
- */
-export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Array> {
+/** Prepare all temp files and CLI args needed for a chat invocation */
+async function prepareInvocation(options: CliChatOptions): Promise<{
+	invocationDir: string;
+	args: string[];
+	model: string;
+}> {
 	const invocationDir = createInvocationDir();
 	const systemPromptPath = writeSystemPrompt(invocationDir, options.systemPrompt);
 	const model = getCliModel(options.model ?? LLM_MODEL);
 	const hasImages = options.images && options.images.length > 0;
 
+	let cliImagePaths = options.images;
+	if (hasImages) {
+		cliImagePaths = await resizeImagesForCli(options.images ?? [], invocationDir);
+	}
+
+	const mcpConfigPath = writeMcpConfig(invocationDir, cliImagePaths);
+	const prompt =
+		buildPrompt(options.messages, cliImagePaths) || (hasImages ? "Describe this image." : "");
+	const args = buildCliArgs(model, mcpConfigPath, systemPromptPath, BLOCKED_BUILTIN_TOOLS, prompt);
+
+	return { invocationDir, args, model };
+}
+
+/** Wire up stdout parsing, stderr logging, abort handling, and cleanup on the spawned process */
+function wireProcess(
+	proc: ChildProcessWithoutNullStreams,
+	parser: StreamParser,
+	emitSSE: (event: string, data: string) => void,
+	tryClose: () => void,
+	cleanup: () => void,
+	startMs: number,
+	signal?: AbortSignal,
+): void {
+	proc.stdin?.end();
+	log.info(`cli-chat PID: ${proc.pid}`);
+
+	if (signal) {
+		signal.addEventListener("abort", () => {
+			log.info(`cli-chat abort signal, killing PID ${proc.pid}`);
+			proc.kill("SIGTERM");
+		});
+	}
+
+	let buffer = "";
+
+	proc.stdout?.on("data", (chunk: Buffer) => {
+		buffer += chunk.toString();
+		const lines = buffer.split("\n");
+		buffer = lines.pop() || "";
+
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+
+			let msg: Record<string, unknown>;
+			try {
+				msg = JSON.parse(trimmed);
+			} catch {
+				continue;
+			}
+
+			parser.process(msg);
+
+			if (msg.type === "result") {
+				const elapsed = (performance.now() - startMs).toFixed(0);
+				const cost = msg.cost_usd ? `$${(msg.cost_usd as number).toFixed(4)}` : "n/a";
+				log.info(`cli-chat DONE — ${elapsed}ms, ${msg.num_turns ?? "?"} turns, cost=${cost}`);
+			}
+		}
+	});
+
+	proc.stderr?.on("data", (chunk: Buffer) => {
+		const text = chunk.toString().trim();
+		if (text) log.warn(`cli-chat stderr: ${text.slice(0, 300)}`);
+	});
+
+	proc.on("close", (code) => {
+		const elapsed = (performance.now() - startMs).toFixed(0);
+		log.info(`cli-chat process exited code=${code} elapsed=${elapsed}ms`);
+		tryClose();
+		cleanup();
+	});
+
+	proc.on("error", (err) => {
+		log.error(`cli-chat process error: ${err.message}`);
+		emitSSE("error", JSON.stringify({ error: err.message }));
+		tryClose();
+		cleanup();
+	});
+}
+
+/**
+ * Spawn the Claude CLI with MCP tools and stream the response.
+ * Emits structured SSE events for text, tool calls, thinking, and results.
+ */
+export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Array> {
 	return new ReadableStream({
 		async start(controller) {
 			const encoder = new TextEncoder();
-
-			// Resize images for CLI consumption (must happen before building prompt)
-			let cliImagePaths = options.images;
-			if (hasImages) {
-				cliImagePaths = await resizeImagesForCli(options.images ?? [], invocationDir);
-			}
-
-			// Write MCP config — includes image viewer MCP server when images are attached
-			const mcpConfigPath = writeMcpConfig(invocationDir, cliImagePaths);
-
-			const prompt =
-				buildPrompt(options.messages, cliImagePaths) || (hasImages ? "Describe this image." : "");
-
-			// All builtin tools stay blocked — images are served via MCP, not Read
-			const args = buildCliArgs(
-				model,
-				mcpConfigPath,
-				systemPromptPath,
-				BLOCKED_BUILTIN_TOOLS,
-				prompt,
-			);
-
+			const { invocationDir, args, model } = await prepareInvocation(options);
 			const startMs = performance.now();
-			log.info(`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${prompt.length} chars`);
+			log.info(
+				`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${args[args.length - 1].length} chars`,
+			);
 
 			function emitSSE(event: string, data: string): void {
 				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
@@ -482,20 +534,7 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 				return;
 			}
 
-			proc.stdin?.end();
-			log.info(`cli-chat PID: ${proc.pid}`);
-
-			if (options.signal) {
-				options.signal.addEventListener("abort", () => {
-					log.info(`cli-chat abort signal, killing PID ${proc.pid}`);
-					proc.kill("SIGTERM");
-				});
-			}
-
-			const parser = createStreamParser(emitSSE);
-			let buffer = "";
 			let closed = false;
-
 			const tryClose = (): void => {
 				if (closed) return;
 				closed = true;
@@ -503,58 +542,16 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 				controller.close();
 			};
 
-			proc.stdout?.on("data", (chunk: Buffer) => {
-				buffer += chunk.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-
-				for (const line of lines) {
-					const trimmed = line.trim();
-					if (!trimmed) continue;
-
-					let msg: Record<string, unknown>;
-					try {
-						msg = JSON.parse(trimmed);
-					} catch {
-						continue;
-					}
-
-					parser.process(msg);
-
-					if (msg.type === "result") {
-						const elapsed = (performance.now() - startMs).toFixed(0);
-						const cost = msg.cost_usd ? `$${(msg.cost_usd as number).toFixed(4)}` : "n/a";
-						log.info(`cli-chat DONE — ${elapsed}ms, ${msg.num_turns ?? "?"} turns, cost=${cost}`);
-					}
-				}
-			});
-
-			proc.stderr?.on("data", (chunk: Buffer) => {
-				const text = chunk.toString().trim();
-				if (text) log.warn(`cli-chat stderr: ${text.slice(0, 300)}`);
-			});
-
-			function cleanupTempDir() {
+			const cleanup = (): void => {
 				try {
 					rmSync(invocationDir, { recursive: true, force: true });
 				} catch {
 					// best-effort cleanup
 				}
-			}
+			};
 
-			proc.on("close", (code) => {
-				const elapsed = (performance.now() - startMs).toFixed(0);
-				log.info(`cli-chat process exited code=${code} elapsed=${elapsed}ms`);
-				tryClose();
-				cleanupTempDir();
-			});
-
-			proc.on("error", (err) => {
-				log.error(`cli-chat process error: ${err.message}`);
-				emitSSE("error", JSON.stringify({ error: err.message }));
-				tryClose();
-				cleanupTempDir();
-			});
+			const parser = createStreamParser(emitSSE);
+			wireProcess(proc, parser, emitSSE, tryClose, cleanup, startMs, options.signal);
 		},
 	});
 }

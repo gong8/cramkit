@@ -1,24 +1,12 @@
 import type { z } from "zod";
+import { FileRoleEnum, ResourceTypeEnum } from "./schemas.js";
 import type { exportManifestSchema, resourceExportSchema } from "./schemas.js";
 
-export const ResourceType = {
-	LECTURE_NOTES: "LECTURE_NOTES",
-	PAST_PAPER: "PAST_PAPER",
-	PROBLEM_SHEET: "PROBLEM_SHEET",
-	SPECIFICATION: "SPECIFICATION",
-	OTHER: "OTHER",
-} as const;
+export const ResourceType = ResourceTypeEnum.enum;
+export type ResourceType = z.infer<typeof ResourceTypeEnum>;
 
-export type ResourceType = (typeof ResourceType)[keyof typeof ResourceType];
-
-export const FileRole = {
-	PRIMARY: "PRIMARY",
-	MARK_SCHEME: "MARK_SCHEME",
-	SOLUTIONS: "SOLUTIONS",
-	SUPPLEMENT: "SUPPLEMENT",
-} as const;
-
-export type FileRole = (typeof FileRole)[keyof typeof FileRole];
+export const FileRole = FileRoleEnum.enum;
+export type FileRole = z.infer<typeof FileRoleEnum>;
 
 export type ProcessingStatus = "uploading" | "converting" | "indexing" | "ready" | "error";
 

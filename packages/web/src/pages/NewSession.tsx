@@ -5,6 +5,23 @@ import { useNavigate } from "react-router-dom";
 
 const log = createLogger("web");
 
+const inputClass = "w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
+
+function Field({
+	id,
+	label,
+	...props
+}: { id: string; label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+	return (
+		<div>
+			<label htmlFor={id} className="mb-1 block text-sm font-medium">
+				{label}
+			</label>
+			<input id={id} className={inputClass} {...props} />
+		</div>
+	);
+}
+
 export function NewSession() {
 	const navigate = useNavigate();
 	const [name, setName] = useState("");
@@ -38,47 +55,30 @@ export function NewSession() {
 			<h1 className="mb-6 text-2xl font-bold">New Session</h1>
 
 			<form onSubmit={handleSubmit} className="space-y-4">
-				<div>
-					<label htmlFor="name" className="mb-1 block text-sm font-medium">
-						Session Name *
-					</label>
-					<input
-						id="name"
-						type="text"
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-						placeholder="e.g. PDEs Midterm"
-						className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-						required
-					/>
-				</div>
-
-				<div>
-					<label htmlFor="module" className="mb-1 block text-sm font-medium">
-						Module
-					</label>
-					<input
-						id="module"
-						type="text"
-						value={module}
-						onChange={(e) => setModule(e.target.value)}
-						placeholder="e.g. M2AA1 - Partial Differential Equations"
-						className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-					/>
-				</div>
-
-				<div>
-					<label htmlFor="examDate" className="mb-1 block text-sm font-medium">
-						Exam Date
-					</label>
-					<input
-						id="examDate"
-						type="date"
-						value={examDate}
-						onChange={(e) => setExamDate(e.target.value)}
-						className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-					/>
-				</div>
+				<Field
+					id="name"
+					label="Session Name *"
+					type="text"
+					value={name}
+					onChange={(e) => setName(e.target.value)}
+					placeholder="e.g. PDEs Midterm"
+					required
+				/>
+				<Field
+					id="module"
+					label="Module"
+					type="text"
+					value={module}
+					onChange={(e) => setModule(e.target.value)}
+					placeholder="e.g. M2AA1 - Partial Differential Equations"
+				/>
+				<Field
+					id="examDate"
+					label="Exam Date"
+					type="date"
+					value={examDate}
+					onChange={(e) => setExamDate(e.target.value)}
+				/>
 
 				<button
 					type="submit"

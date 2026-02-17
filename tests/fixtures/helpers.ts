@@ -1,9 +1,52 @@
 import type { PrismaClient } from "@prisma/client";
 import type { Mock } from "vitest";
+import { lectureNotesResponse, pastPaperResponse, problemSheetResponse } from "./llm-responses.js";
 
 /** Cast a vi.fn() or vi.mocked() to its Mock type for type-safe assertions */
 export function asMock<T extends (...args: unknown[]) => unknown>(fn: T): Mock<T> {
 	return fn as unknown as Mock<T>;
+}
+
+/** Mock implementation that routes chatCompletion by resource type in the user message */
+export function mockLlmByResourceType(messages: { role: string; content: string }[]) {
+	const userMsg = messages.find((m) => m.role === "user")?.content || "";
+	if (userMsg.includes("LECTURE_NOTES")) return JSON.stringify(lectureNotesResponse);
+	if (userMsg.includes("PAST_PAPER")) return JSON.stringify(pastPaperResponse);
+	return JSON.stringify(problemSheetResponse);
+}
+
+/** Seed a session with a single resource and N numbered chunks */
+export async function seedSessionWithChunks(
+	db: PrismaClient,
+	opts: { name?: string; chunkCount?: number; resourceType?: string } = {},
+) {
+	const { name = "Test Session", chunkCount = 5, resourceType = "LECTURE_NOTES" } = opts;
+
+	const session = await db.session.create({ data: { name } });
+	const resource = await db.resource.create({
+		data: {
+			sessionId: session.id,
+			name: "Test Resource",
+			type: resourceType,
+			isIndexed: true,
+		},
+	});
+
+	const chunks = [];
+	for (let i = 0; i < chunkCount; i++) {
+		chunks.push(
+			await db.chunk.create({
+				data: {
+					resourceId: resource.id,
+					index: i,
+					title: `Section ${i + 1}`,
+					content: `Chunk content ${i}`,
+				},
+			}),
+		);
+	}
+
+	return { session, resource, chunks };
 }
 
 /** Seed a full PDE midterm session with 11 resources (each with 1 file) and chunks. Returns DB IDs. */

@@ -21,16 +21,32 @@ export async function ensureDir(dir: string): Promise<void> {
 	await mkdir(dir, { recursive: true });
 }
 
+async function saveToResourceDir(
+	sessionId: string,
+	resourceId: string,
+	subdir: string,
+	filename: string,
+	content: Buffer | string,
+	encoding?: BufferEncoding,
+): Promise<string> {
+	const dir = join(getResourceDir(sessionId, resourceId), subdir);
+	await ensureDir(dir);
+	const filePath = join(dir, filename);
+	if (encoding) {
+		await writeFile(filePath, content, encoding);
+	} else {
+		await writeFile(filePath, content);
+	}
+	return filePath;
+}
+
 export async function saveResourceRawFile(
 	sessionId: string,
 	resourceId: string,
 	filename: string,
 	content: Buffer,
 ): Promise<string> {
-	const dir = join(getResourceDir(sessionId, resourceId), "raw");
-	await ensureDir(dir);
-	const filePath = join(dir, filename);
-	await writeFile(filePath, content);
+	const filePath = await saveToResourceDir(sessionId, resourceId, "raw", filename, content);
 	log.debug(`saveResourceRawFile — ${filePath}`);
 	return filePath;
 }
@@ -41,10 +57,14 @@ export async function saveResourceProcessedFile(
 	filename: string,
 	content: string,
 ): Promise<string> {
-	const dir = join(getResourceDir(sessionId, resourceId), "processed");
-	await ensureDir(dir);
-	const filePath = join(dir, `${filename}.md`);
-	await writeFile(filePath, content, "utf-8");
+	const filePath = await saveToResourceDir(
+		sessionId,
+		resourceId,
+		"processed",
+		`${filename}.md`,
+		content,
+		"utf-8",
+	);
 	log.debug(`saveResourceProcessedFile — ${filePath}`);
 	return filePath;
 }
@@ -71,14 +91,17 @@ export async function readProcessedFile(filePath: string): Promise<string> {
 	return readFile(filePath, "utf-8");
 }
 
-export async function deleteResourceDir(sessionId: string, resourceId: string): Promise<void> {
-	const dir = getResourceDir(sessionId, resourceId);
+async function safeRemove(path: string, label: string): Promise<void> {
 	try {
-		await rm(dir, { recursive: true, force: true });
-		log.debug(`deleteResourceDir — deleted ${dir}`);
+		await rm(path, { recursive: true, force: true });
+		log.debug(`${label} — deleted ${path}`);
 	} catch {
-		log.debug(`deleteResourceDir — already gone ${dir}`);
+		log.debug(`${label} — already gone ${path}`);
 	}
+}
+
+export async function deleteResourceDir(sessionId: string, resourceId: string): Promise<void> {
+	await safeRemove(getResourceDir(sessionId, resourceId), "deleteResourceDir");
 }
 
 export async function deleteSessionFile(_sessionId: string, filePath: string): Promise<void> {
@@ -91,11 +114,5 @@ export async function deleteSessionFile(_sessionId: string, filePath: string): P
 }
 
 export async function deleteProcessedTree(sessionId: string, fileSlug: string): Promise<void> {
-	const dir = join(getSessionDir(sessionId), "processed", fileSlug);
-	try {
-		await rm(dir, { recursive: true, force: true });
-		log.debug(`deleteProcessedTree — deleted ${dir}`);
-	} catch {
-		log.debug(`deleteProcessedTree — already gone ${dir}`);
-	}
+	await safeRemove(join(getSessionDir(sessionId), "processed", fileSlug), "deleteProcessedTree");
 }

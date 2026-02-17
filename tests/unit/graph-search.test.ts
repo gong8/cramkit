@@ -1,41 +1,15 @@
 import { getDb } from "@cramkit/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { searchGraph } from "../../packages/api/src/services/graph-search.js";
-import { cleanDb } from "../fixtures/helpers";
+import { cleanDb, seedSessionWithChunks } from "../fixtures/helpers.js";
 
 const db = getDb();
 
-// Helper to seed a session with concepts, chunks, and relationships
 async function seedGraphData() {
-	const session = await db.session.create({
-		data: { name: "PDE Test Session" },
+	const { session, resource, chunks } = await seedSessionWithChunks(db, {
+		name: "PDE Test Session",
 	});
 
-	const resource = await db.resource.create({
-		data: {
-			sessionId: session.id,
-			name: "PDE Lectures",
-			type: "LECTURE_NOTES",
-			isIndexed: true,
-		},
-	});
-
-	// Create multiple chunks
-	const chunks = [];
-	for (let i = 0; i < 5; i++) {
-		chunks.push(
-			await db.chunk.create({
-				data: {
-					resourceId: resource.id,
-					index: i,
-					title: `Section ${i + 1}`,
-					content: `Content for section ${i + 1} about PDEs`,
-				},
-			}),
-		);
-	}
-
-	// Create concepts
 	const heatEq = await db.concept.create({
 		data: {
 			sessionId: session.id,
@@ -61,7 +35,7 @@ async function seedGraphData() {
 		},
 	});
 
-	// Create relationships: resource -> concept
+	// resource -> concept
 	await db.relationship.create({
 		data: {
 			sessionId: session.id,
@@ -146,7 +120,6 @@ describe("searchGraph", () => {
 		const results = await searchGraph(session.id, "Heat Equation", 10);
 
 		expect(results.length).toBeGreaterThan(0);
-		// Results should include chunks from the linked resource
 		const resultResourceIds = results.map((r) => r.resourceId);
 		expect(resultResourceIds).toContain(resource.id);
 	});

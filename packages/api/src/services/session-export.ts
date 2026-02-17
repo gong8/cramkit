@@ -54,7 +54,6 @@ interface ConversationExport {
 export async function exportSession(sessionId: string): Promise<Buffer> {
 	const db = getDb();
 
-	// 1. Query session with ALL related data
 	const session = await db.session.findUnique({
 		where: { id: sessionId },
 		include: {
@@ -83,13 +82,55 @@ export async function exportSession(sessionId: string): Promise<Buffer> {
 
 	log.info(`exportSession — exporting "${session.name}" (${sessionId})`);
 
-	// 2. Compute stats
-	const fileCount = session.resources.reduce((sum, r) => sum + r.files.length, 0);
-	const chunkCount = session.resources.reduce((sum, r) => sum + r.chunks.length, 0);
-	const messageCount = session.conversations.reduce((sum, c) => sum + c.messages.length, 0);
+	const manifest = buildManifest(session);
+	const archive = archiver("zip", { zlib: { level: 6 } });
+	const chunks: Buffer[] = [];
 
-	// 3. Build manifest
-	const manifest: ExportManifest = {
+	archive.on("data", (chunk: Buffer) => chunks.push(chunk));
+	archive.on("warning", (err) => log.warn(`archiver warning: ${err.message}`));
+	archive.on("error", (err) => {
+		throw err;
+	});
+
+	appendJson(archive, manifest, "manifest.json");
+	await addResourcesToArchive(archive, sessionId, session.resources);
+	appendJson(archive, session.concepts.map(mapConcept), "concepts.json");
+	appendJson(archive, session.relationships.map(mapRelationship), "relationships.json");
+	await addConversationsToArchive(archive, session.conversations);
+	archive.append(buildReadme(session.name, manifest), { name: "README.txt" });
+
+	await archive.finalize();
+
+	const buffer = Buffer.concat(chunks);
+	log.info(
+		`exportSession — completed "${session.name}" (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`,
+	);
+	return buffer;
+}
+
+function appendJson(archive: archiver.Archiver, data: unknown, zipPath: string): void {
+	archive.append(JSON.stringify(data, null, 2), { name: zipPath });
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+function buildManifest(session: any): ExportManifest {
+	const fileCount = session.resources.reduce(
+		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+		(sum: number, r: any) => sum + r.files.length,
+		0,
+	);
+	const chunkCount = session.resources.reduce(
+		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+		(sum: number, r: any) => sum + r.chunks.length,
+		0,
+	);
+	const messageCount = session.conversations.reduce(
+		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+		(sum: number, c: any) => sum + c.messages.length,
+		0,
+	);
+
+	return {
 		version: 1,
 		exportedAt: new Date().toISOString(),
 		session: {
@@ -99,8 +140,8 @@ export async function exportSession(sessionId: string): Promise<Buffer> {
 			scope: session.scope,
 			notes: session.notes,
 		},
-		resourceIds: session.resources.map((r) => r.id),
-		conversationIds: session.conversations.map((c) => c.id),
+		resourceIds: session.resources.map((r: { id: string }) => r.id),
+		conversationIds: session.conversations.map((c: { id: string }) => c.id),
 		stats: {
 			resourceCount: session.resources.length,
 			fileCount,
@@ -111,97 +152,128 @@ export async function exportSession(sessionId: string): Promise<Buffer> {
 			messageCount,
 		},
 	};
+}
 
-	// 4. Create zip archive
-	const archive = archiver("zip", { zlib: { level: 6 } });
-	const chunks: Buffer[] = [];
+// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+function mapResourceExport(resource: any): ResourceExport {
+	return {
+		id: resource.id,
+		name: resource.name,
+		type: resource.type as ResourceExport["type"],
+		label: resource.label,
+		splitMode: resource.splitMode,
+		isIndexed: resource.isIndexed,
+		isGraphIndexed: resource.isGraphIndexed,
+		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+		files: resource.files.map((f: any) => ({
+			id: f.id,
+			filename: f.filename,
+			role: f.role as "PRIMARY" | "MARK_SCHEME" | "SOLUTIONS" | "SUPPLEMENT",
+			rawPath: `raw/${f.filename}`,
+			processedPath: f.processedPath ? `processed/${basename(f.processedPath)}` : null,
+			pageCount: f.pageCount,
+			fileSize: f.fileSize,
+		})),
+		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+		chunks: resource.chunks.map((c: any) => ({
+			id: c.id,
+			sourceFileId: c.sourceFileId,
+			parentId: c.parentId,
+			index: c.index,
+			depth: c.depth,
+			nodeType: c.nodeType,
+			slug: c.slug,
+			diskPath: c.diskPath,
+			title: c.title,
+			content: c.content,
+			startPage: c.startPage,
+			endPage: c.endPage,
+			keywords: c.keywords,
+		})),
+	};
+}
 
-	archive.on("data", (chunk: Buffer) => chunks.push(chunk));
-	archive.on("warning", (err) => log.warn(`archiver warning: ${err.message}`));
-	archive.on("error", (err) => {
-		throw err;
-	});
-
-	// manifest.json
-	archive.append(JSON.stringify(manifest, null, 2), { name: "manifest.json" });
-
-	// 5. Resources
-	for (const resource of session.resources) {
-		const resourcePrefix = `resources/${resource.id}`;
+async function addResourcesToArchive(
+	archive: archiver.Archiver,
+	sessionId: string,
+	// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+	resources: any[],
+): Promise<void> {
+	for (const resource of resources) {
+		const prefix = `resources/${resource.id}`;
 		const resourceDir = getResourceDir(sessionId, resource.id);
 
-		// Build resource.json with relativized paths
-		const resourceExport: ResourceExport = {
-			id: resource.id,
-			name: resource.name,
-			type: resource.type as ResourceExport["type"],
-			label: resource.label,
-			splitMode: resource.splitMode,
-			isIndexed: resource.isIndexed,
-			isGraphIndexed: resource.isGraphIndexed,
-			files: resource.files.map((f) => ({
-				id: f.id,
-				filename: f.filename,
-				role: f.role as "PRIMARY" | "MARK_SCHEME" | "SOLUTIONS" | "SUPPLEMENT",
-				rawPath: `raw/${f.filename}`,
-				processedPath: f.processedPath ? `processed/${basename(f.processedPath)}` : null,
-				pageCount: f.pageCount,
-				fileSize: f.fileSize,
-			})),
-			chunks: resource.chunks.map((c) => ({
-				id: c.id,
-				sourceFileId: c.sourceFileId,
-				parentId: c.parentId,
-				index: c.index,
-				depth: c.depth,
-				nodeType: c.nodeType,
-				slug: c.slug,
-				diskPath: c.diskPath,
-				title: c.title,
-				content: c.content,
-				startPage: c.startPage,
-				endPage: c.endPage,
-				keywords: c.keywords,
-			})),
-		};
+		appendJson(archive, mapResourceExport(resource), `${prefix}/resource.json`);
 
-		archive.append(JSON.stringify(resourceExport, null, 2), {
-			name: `${resourcePrefix}/resource.json`,
-		});
-
-		// Copy raw files from disk
 		for (const file of resource.files) {
-			await appendFileIfExists(archive, file.rawPath, `${resourcePrefix}/raw/${file.filename}`);
-		}
-
-		// Copy processed files from disk
-		for (const file of resource.files) {
+			await appendFileIfExists(archive, file.rawPath, `${prefix}/raw/${file.filename}`);
 			if (file.processedPath) {
 				await appendFileIfExists(
 					archive,
 					file.processedPath,
-					`${resourcePrefix}/processed/${basename(file.processedPath)}`,
+					`${prefix}/processed/${basename(file.processedPath)}`,
 				);
 			}
 		}
 
-		// Copy tree directory
-		const treeDir = join(resourceDir, "tree");
-		await appendDirectoryIfExists(archive, treeDir, `${resourcePrefix}/tree`);
+		await appendDirectoryIfExists(archive, join(resourceDir, "tree"), `${prefix}/tree`);
 	}
+}
 
-	// 6. Concepts
-	const conceptsExport: ConceptExport[] = session.concepts.map((c) => ({
+async function addConversationsToArchive(
+	archive: archiver.Archiver,
+	// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+	conversations: any[],
+): Promise<void> {
+	for (const conv of conversations) {
+		const convExport: ConversationExport = {
+			id: conv.id,
+			title: conv.title,
+			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+			messages: conv.messages.map((m: any) => ({
+				id: m.id,
+				role: m.role,
+				content: m.content,
+				toolCalls: m.toolCalls,
+				attachments: m.attachments
+					// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+					.filter((a: any) => a.messageId !== null)
+					// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+					.map((a: any) => ({
+						id: a.id,
+						filename: a.filename,
+						contentType: a.contentType,
+						fileSize: a.fileSize,
+					})),
+			})),
+		};
+
+		appendJson(archive, convExport, `conversations/${conv.id}.json`);
+
+		for (const msg of conv.messages) {
+			for (const att of msg.attachments) {
+				if (att.messageId === null) continue;
+				const ext = att.filename.split(".").pop() ?? "bin";
+				await appendFileIfExists(archive, att.diskPath, `attachments/${att.id}.${ext}`);
+			}
+		}
+	}
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+function mapConcept(c: any): ConceptExport {
+	return {
 		id: c.id,
 		name: c.name,
 		description: c.description,
 		aliases: c.aliases,
 		createdBy: c.createdBy,
-	}));
-	archive.append(JSON.stringify(conceptsExport, null, 2), { name: "concepts.json" });
+	};
+}
 
-	// 7. Relationships
-	const relationshipsExport: RelationshipExport[] = session.relationships.map((r) => ({
+// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+function mapRelationship(r: any): RelationshipExport {
+	return {
 		id: r.id,
 		sourceType: r.sourceType,
 		sourceId: r.sourceId,
@@ -212,56 +284,7 @@ export async function exportSession(sessionId: string): Promise<Buffer> {
 		relationship: r.relationship,
 		confidence: r.confidence,
 		createdBy: r.createdBy,
-	}));
-	archive.append(JSON.stringify(relationshipsExport, null, 2), { name: "relationships.json" });
-
-	// 8. Conversations + attachments
-	for (const conv of session.conversations) {
-		const convExport: ConversationExport = {
-			id: conv.id,
-			title: conv.title,
-			messages: conv.messages.map((m) => ({
-				id: m.id,
-				role: m.role,
-				content: m.content,
-				toolCalls: m.toolCalls,
-				attachments: m.attachments
-					.filter((a) => a.messageId !== null)
-					.map((a) => ({
-						id: a.id,
-						filename: a.filename,
-						contentType: a.contentType,
-						fileSize: a.fileSize,
-					})),
-			})),
-		};
-
-		archive.append(JSON.stringify(convExport, null, 2), {
-			name: `conversations/${conv.id}.json`,
-		});
-
-		// Copy attachment binaries
-		for (const msg of conv.messages) {
-			for (const att of msg.attachments) {
-				if (att.messageId === null) continue; // skip orphans
-				const ext = att.filename.split(".").pop() ?? "bin";
-				await appendFileIfExists(archive, att.diskPath, `attachments/${att.id}.${ext}`);
-			}
-		}
-	}
-
-	// 9. README.txt
-	const readme = buildReadme(session.name, manifest);
-	archive.append(readme, { name: "README.txt" });
-
-	// Finalize and collect buffer
-	await archive.finalize();
-
-	const buffer = Buffer.concat(chunks);
-	log.info(
-		`exportSession — completed "${session.name}" (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`,
-	);
-	return buffer;
+	};
 }
 
 /**
@@ -308,30 +331,40 @@ async function appendDirectoryIfExists(
  * Build a human-readable README for the export.
  */
 function buildReadme(sessionName: string, manifest: ExportManifest): string {
-	const lines: string[] = [];
-	lines.push("CramKit Session Export");
-	lines.push("======================");
-	lines.push("");
-	lines.push(`Session: ${sessionName}`);
-	if (manifest.session.module) lines.push(`Module: ${manifest.session.module}`);
-	if (manifest.session.examDate) lines.push(`Exam Date: ${manifest.session.examDate}`);
-	if (manifest.session.scope) lines.push(`Scope: ${manifest.session.scope}`);
-	if (manifest.session.notes) lines.push(`Notes: ${manifest.session.notes}`);
-	lines.push("");
-	lines.push(`Exported: ${manifest.exportedAt}`);
-	lines.push(`Format Version: ${manifest.version}`);
-	lines.push("");
-	lines.push("Contents");
-	lines.push("--------");
-	lines.push(`Resources: ${manifest.stats.resourceCount}`);
-	lines.push(`Files: ${manifest.stats.fileCount}`);
-	lines.push(`Chunks: ${manifest.stats.chunkCount}`);
-	lines.push(`Concepts: ${manifest.stats.conceptCount}`);
-	lines.push(`Relationships: ${manifest.stats.relationshipCount}`);
-	lines.push(`Conversations: ${manifest.stats.conversationCount}`);
-	lines.push(`Messages: ${manifest.stats.messageCount}`);
-	lines.push("");
-	lines.push("This archive was created by CramKit and can be imported");
-	lines.push("into another CramKit instance using the Import feature.");
-	return lines.join("\n");
+	const s = manifest.session;
+	const meta = [
+		`Session: ${sessionName}`,
+		s.module && `Module: ${s.module}`,
+		s.examDate && `Exam Date: ${s.examDate}`,
+		s.scope && `Scope: ${s.scope}`,
+		s.notes && `Notes: ${s.notes}`,
+	].filter(Boolean);
+
+	const st = manifest.stats;
+	const stats = [
+		`Resources: ${st.resourceCount}`,
+		`Files: ${st.fileCount}`,
+		`Chunks: ${st.chunkCount}`,
+		`Concepts: ${st.conceptCount}`,
+		`Relationships: ${st.relationshipCount}`,
+		`Conversations: ${st.conversationCount}`,
+		`Messages: ${st.messageCount}`,
+	];
+
+	return [
+		"CramKit Session Export",
+		"======================",
+		"",
+		...meta,
+		"",
+		`Exported: ${manifest.exportedAt}`,
+		`Format Version: ${manifest.version}`,
+		"",
+		"Contents",
+		"--------",
+		...stats,
+		"",
+		"This archive was created by CramKit and can be imported",
+		"into another CramKit instance using the Import feature.",
+	].join("\n");
 }

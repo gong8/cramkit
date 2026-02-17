@@ -1,11 +1,6 @@
 import { getDb } from "@cramkit/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanDb, seedPdeSession } from "../fixtures/helpers";
-import {
-	lectureNotesResponse,
-	pastPaperResponse,
-	problemSheetResponse,
-} from "../fixtures/llm-responses";
+import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -36,12 +31,9 @@ describe("full indexing flow", () => {
 		}
 
 		// Setup LLM mock per resource type
-		vi.mocked(chatCompletion).mockImplementation(async (messages) => {
-			const userMsg = messages.find((m) => m.role === "user")?.content || "";
-			if (userMsg.includes("LECTURE_NOTES")) return JSON.stringify(lectureNotesResponse);
-			if (userMsg.includes("PAST_PAPER")) return JSON.stringify(pastPaperResponse);
-			return JSON.stringify(problemSheetResponse);
-		});
+		vi.mocked(chatCompletion).mockImplementation(async (messages) =>
+			mockLlmByResourceType(messages),
+		);
 
 		// Step 2: Index all resources
 		for (const resource of resources) {

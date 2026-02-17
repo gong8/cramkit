@@ -36,51 +36,36 @@ function buildFrontmatter(node: TreeNode): string {
 	return lines.join("\n");
 }
 
+async function writeMarkdownFile(filePath: string, node: TreeNode): Promise<void> {
+	const content = `${buildFrontmatter(node)}\n\n${node.content}`;
+	await writeFile(filePath, content, "utf-8");
+}
+
 async function writeNodeToDisk(
 	baseDir: string,
 	relativeBase: string,
 	node: TreeNode,
 	mappings: DiskMapping[],
 ): Promise<void> {
-	const slug =
-		node.order === 0 && node.depth === 0 ? "" : `${zeroPad(node.order)}-${slugify(node.title)}`;
-
+	const isRoot = node.order === 0 && node.depth === 0;
+	const slug = isRoot ? "" : `${zeroPad(node.order)}-${slugify(node.title)}`;
 	const isLeaf = node.children.length === 0;
 
-	if (node.depth === 0) {
-		// Root node: write _index.md at base
-		await mkdir(baseDir, { recursive: true });
-		const filePath = join(baseDir, "_index.md");
-		const diskPath = join(relativeBase, "_index.md");
-		const content = `${buildFrontmatter(node)}\n\n${node.content}`;
-		await writeFile(filePath, content, "utf-8");
-		mappings.push({ node, diskPath, slug: "_index" });
+	const dirPath = isRoot || isLeaf ? baseDir : join(baseDir, slug);
+	const relDir = isRoot || isLeaf ? relativeBase : join(relativeBase, slug);
+	const fileName = isLeaf && !isRoot ? `${slug}.md` : "_index.md";
 
-		for (const child of node.children) {
-			await writeNodeToDisk(baseDir, relativeBase, child, mappings);
-		}
-	} else if (isLeaf) {
-		// Leaf node: write as a single .md file
-		const fileName = `${slug}.md`;
-		const filePath = join(baseDir, fileName);
-		const diskPath = join(relativeBase, fileName);
-		const content = `${buildFrontmatter(node)}\n\n${node.content}`;
-		await writeFile(filePath, content, "utf-8");
-		mappings.push({ node, diskPath, slug });
-	} else {
-		// Non-leaf: create directory + _index.md
-		const dirPath = join(baseDir, slug);
+	if (!isLeaf || isRoot) {
 		await mkdir(dirPath, { recursive: true });
+	}
 
-		const indexPath = join(dirPath, "_index.md");
-		const diskPath = join(relativeBase, slug, "_index.md");
-		const content = `${buildFrontmatter(node)}\n\n${node.content}`;
-		await writeFile(indexPath, content, "utf-8");
-		mappings.push({ node, diskPath, slug });
+	const filePath = join(dirPath, fileName);
+	const diskPath = join(relDir, fileName);
+	await writeMarkdownFile(filePath, node);
+	mappings.push({ node, diskPath, slug: isLeaf && !isRoot ? slug : isRoot ? "_index" : slug });
 
-		for (const child of node.children) {
-			await writeNodeToDisk(dirPath, join(relativeBase, slug), child, mappings);
-		}
+	for (const child of node.children) {
+		await writeNodeToDisk(dirPath, relDir, child, mappings);
 	}
 }
 
@@ -88,6 +73,18 @@ async function writeNodeToDisk(
  * Write a parsed tree to disk for a resource as a directory hierarchy.
  * Returns mappings from tree nodes to disk paths.
  */
+async function writeTree(
+	baseDir: string,
+	relativeBase: string,
+	tree: TreeNode,
+): Promise<DiskMapping[]> {
+	const mappings: DiskMapping[] = [];
+	log.info(`writeTree — writing to ${baseDir}`);
+	await writeNodeToDisk(baseDir, relativeBase, tree, mappings);
+	log.info(`writeTree — wrote ${mappings.length} nodes`);
+	return mappings;
+}
+
 export async function writeResourceTreeToDisk(
 	sessionId: string,
 	resourceId: string,
@@ -95,15 +92,7 @@ export async function writeResourceTreeToDisk(
 	tree: TreeNode,
 ): Promise<DiskMapping[]> {
 	const resourceDir = getResourceDir(sessionId, resourceId);
-	const baseDir = join(resourceDir, "tree", resourceSlug);
-	const relativeBase = join("tree", resourceSlug);
-	const mappings: DiskMapping[] = [];
-
-	log.info(`writeResourceTreeToDisk — writing to ${baseDir}`);
-	await writeNodeToDisk(baseDir, relativeBase, tree, mappings);
-	log.info(`writeResourceTreeToDisk — wrote ${mappings.length} nodes`);
-
-	return mappings;
+	return writeTree(join(resourceDir, "tree", resourceSlug), join("tree", resourceSlug), tree);
 }
 
 /**
@@ -115,13 +104,5 @@ export async function writeTreeToDisk(
 	tree: TreeNode,
 ): Promise<DiskMapping[]> {
 	const sessionDir = getSessionDir(sessionId);
-	const baseDir = join(sessionDir, "processed", fileSlug);
-	const relativeBase = join("processed", fileSlug);
-	const mappings: DiskMapping[] = [];
-
-	log.info(`writeTreeToDisk — writing to ${baseDir}`);
-	await writeNodeToDisk(baseDir, relativeBase, tree, mappings);
-	log.info(`writeTreeToDisk — wrote ${mappings.length} nodes`);
-
-	return mappings;
+	return writeTree(join(sessionDir, "processed", fileSlug), join("processed", fileSlug), tree);
 }

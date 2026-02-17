@@ -1,8 +1,7 @@
 import { createLogger, initDb } from "@cramkit/shared";
 import { Hono } from "hono";
+import { resumeInterruptedBatches } from "./lib/queue.js";
 import { cors } from "./middleware/cors.js";
-
-const log = createLogger("api");
 import { chatRoutes } from "./routes/chat.js";
 import { chunksRoutes } from "./routes/chunks.js";
 import { graphRoutes } from "./routes/graph.js";
@@ -11,7 +10,7 @@ import { resourcesRoutes } from "./routes/resources.js";
 import { searchRoutes } from "./routes/search.js";
 import { sessionsRoutes } from "./routes/sessions.js";
 
-import { resumeInterruptedBatches } from "./lib/queue.js";
+const log = createLogger("api");
 
 await initDb();
 await resumeInterruptedBatches();

@@ -1,8 +1,5 @@
-import { createLogger } from "@cramkit/shared";
 import { z } from "zod";
 import { apiClient } from "../lib/api-client.js";
-
-const log = createLogger("mcp");
 
 interface RelationshipRow {
 	sourceType: string;
@@ -15,45 +12,39 @@ interface RelationshipRow {
 	confidence: number | null;
 }
 
-function extractConceptLinks(
+function extractConceptLinks(entityType: string, entityId: string, rows: RelationshipRow[]) {
+	return rows
+		.filter(
+			(r) =>
+				(r.sourceType === "concept" && r.targetType === entityType && r.targetId === entityId) ||
+				(r.targetType === "concept" && r.sourceType === entityType && r.sourceId === entityId),
+		)
+		.map((r) => {
+			const isConceptSource = r.sourceType === "concept";
+			return {
+				conceptId: isConceptSource ? r.sourceId : r.targetId,
+				conceptName: isConceptSource ? r.sourceLabel || r.sourceId : r.targetLabel || r.targetId,
+				relationship: r.relationship,
+				confidence: r.confidence ?? 1,
+			};
+		});
+}
+
+async function fetchWithConcepts(
 	entityType: string,
 	entityId: string,
-	relationships: RelationshipRow[],
-): Array<{ conceptId: string; conceptName: string; relationship: string; confidence: number }> {
-	const concepts: Array<{
-		conceptId: string;
-		conceptName: string;
-		relationship: string;
-		confidence: number;
-	}> = [];
-
-	for (const rel of relationships) {
-		if (
-			rel.sourceType === "concept" &&
-			rel.targetType === entityType &&
-			rel.targetId === entityId
-		) {
-			concepts.push({
-				conceptId: rel.sourceId,
-				conceptName: rel.sourceLabel || rel.sourceId,
-				relationship: rel.relationship,
-				confidence: rel.confidence ?? 1,
-			});
-		} else if (
-			rel.targetType === "concept" &&
-			rel.sourceType === entityType &&
-			rel.sourceId === entityId
-		) {
-			concepts.push({
-				conceptId: rel.targetId,
-				conceptName: rel.targetLabel || rel.targetId,
-				relationship: rel.relationship,
-				confidence: rel.confidence ?? 1,
-			});
-		}
-	}
-
-	return concepts;
+	fetcher: () => Promise<unknown>,
+) {
+	const [entity, relationships] = await Promise.all([
+		fetcher(),
+		apiClient.getRelated(entityType, entityId),
+	]);
+	const relatedConcepts = extractConceptLinks(
+		entityType,
+		entityId,
+		relationships as RelationshipRow[],
+	);
+	return { ...(entity as object), relatedConcepts };
 }
 
 export const contentTools = {
@@ -65,20 +56,8 @@ export const contentTools = {
 			query: z.string().describe("Search query"),
 			limit: z.number().optional().describe("Max results (default 10)"),
 		}),
-		execute: async ({
-			sessionId,
-			query,
-			limit,
-		}: {
-			sessionId: string;
-			query: string;
-			limit?: number;
-		}) => {
-			log.info(`search_notes — session=${sessionId}, query="${query}", limit=${limit ?? 10}`);
-			const results = await apiClient.searchNotes(sessionId, query, limit);
-			log.info(`search_notes — found ${(results as unknown[]).length} results`);
-			return JSON.stringify(results, null, 2);
-		},
+		execute: async (params: { sessionId: string; query: string; limit?: number }) =>
+			apiClient.searchNotes(params.sessionId, params.query, params.limit),
 	},
 
 	get_resource_content: {
@@ -87,11 +66,8 @@ export const contentTools = {
 		parameters: z.object({
 			resourceId: z.string().describe("The resource ID"),
 		}),
-		execute: async ({ resourceId }: { resourceId: string }) => {
-			log.info(`get_resource_content — ${resourceId}`);
-			const resource = await apiClient.getResourceContent(resourceId);
-			return JSON.stringify(resource, null, 2);
-		},
+		execute: async ({ resourceId }: { resourceId: string }) =>
+			apiClient.getResourceContent(resourceId),
 	},
 
 	get_resource_info: {
@@ -100,20 +76,8 @@ export const contentTools = {
 		parameters: z.object({
 			resourceId: z.string().describe("The resource ID"),
 		}),
-		execute: async ({ resourceId }: { resourceId: string }) => {
-			log.info(`get_resource_info — ${resourceId}`);
-			const [resource, relationships] = await Promise.all([
-				apiClient.getResource(resourceId),
-				apiClient.getRelated("resource", resourceId),
-			]);
-			const relatedConcepts = extractConceptLinks(
-				"resource",
-				resourceId,
-				relationships as RelationshipRow[],
-			);
-			log.info(`get_resource_info — ${resourceId}, ${relatedConcepts.length} related concepts`);
-			return JSON.stringify({ ...(resource as object), relatedConcepts }, null, 2);
-		},
+		execute: async ({ resourceId }: { resourceId: string }) =>
+			fetchWithConcepts("resource", resourceId, () => apiClient.getResource(resourceId)),
 	},
 
 	get_chunk: {
@@ -122,20 +86,8 @@ export const contentTools = {
 		parameters: z.object({
 			chunkId: z.string().describe("The chunk ID"),
 		}),
-		execute: async ({ chunkId }: { chunkId: string }) => {
-			log.info(`get_chunk — ${chunkId}`);
-			const [chunk, relationships] = await Promise.all([
-				apiClient.getChunk(chunkId),
-				apiClient.getRelated("chunk", chunkId),
-			]);
-			const relatedConcepts = extractConceptLinks(
-				"chunk",
-				chunkId,
-				relationships as RelationshipRow[],
-			);
-			log.info(`get_chunk — ${chunkId}, ${relatedConcepts.length} related concepts`);
-			return JSON.stringify({ ...(chunk as object), relatedConcepts }, null, 2);
-		},
+		execute: async ({ chunkId }: { chunkId: string }) =>
+			fetchWithConcepts("chunk", chunkId, () => apiClient.getChunk(chunkId)),
 	},
 
 	get_resource_index: {
@@ -144,11 +96,7 @@ export const contentTools = {
 		parameters: z.object({
 			resourceId: z.string().describe("The resource ID"),
 		}),
-		execute: async ({ resourceId }: { resourceId: string }) => {
-			log.info(`get_resource_index — ${resourceId}`);
-			const tree = await apiClient.getResourceTree(resourceId);
-			log.info(`get_resource_index — returned tree for ${resourceId}`);
-			return JSON.stringify(tree, null, 2);
-		},
+		execute: async ({ resourceId }: { resourceId: string }) =>
+			apiClient.getResourceTree(resourceId),
 	},
 };

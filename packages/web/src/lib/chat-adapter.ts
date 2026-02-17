@@ -73,13 +73,183 @@ interface ToolCallState {
 	isError?: boolean;
 }
 
+type ContentPart =
+	| { type: "reasoning"; text: string }
+	| {
+			type: "tool-call";
+			toolCallId: string;
+			toolName: string;
+			args: Record<string, unknown>;
+			argsText: string;
+			result?: unknown;
+			isError?: boolean;
+	  }
+	| { type: "text"; text: string };
+
+function parseTextToolCalls(text: string) {
+	const callRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+	const resultRegex = /<tool_result>\s*([\s\S]*?)\s*<\/tool_result>/g;
+
+	const calls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+	const results: string[] = [];
+
+	let m: RegExpExecArray | null;
+	m = callRegex.exec(text);
+	while (m !== null) {
+		try {
+			const parsed = JSON.parse(m[1]);
+			calls.push({
+				toolName: parsed.name || "unknown",
+				args: parsed.arguments || {},
+			});
+		} catch {
+			// Skip unparseable
+		}
+		m = callRegex.exec(text);
+	}
+
+	m = resultRegex.exec(text);
+	while (m !== null) {
+		results.push(m[1].trim());
+		m = resultRegex.exec(text);
+	}
+
+	const parsedCalls = calls.map((call, i) => ({
+		id: `text_tc_${i}`,
+		toolName: call.toolName,
+		args: call.args,
+		result: results[i],
+	}));
+
+	const cleanText = text
+		.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+		.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
+		.replace(/<tool_call[\s\S]*$/, "")
+		.replace(/<tool_result[\s\S]*$/, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+
+	return { cleanText, parsedCalls };
+}
+
+function buildContentParts(
+	thinkingText: string,
+	toolCalls: Map<string, ToolCallState>,
+	textContent: string,
+): ContentPart[] {
+	const parts: ContentPart[] = [];
+
+	if (thinkingText) {
+		parts.push({ type: "reasoning", text: thinkingText });
+	}
+
+	for (const tc of toolCalls.values()) {
+		parts.push({
+			type: "tool-call",
+			toolCallId: tc.toolCallId,
+			toolName: tc.toolName,
+			args: tc.args ?? {},
+			argsText: JSON.stringify(tc.args ?? {}),
+			result: tc.result,
+			isError: tc.isError,
+		});
+	}
+
+	const { cleanText, parsedCalls } = parseTextToolCalls(textContent);
+	for (const pc of parsedCalls) {
+		parts.push({
+			type: "tool-call",
+			toolCallId: pc.id,
+			toolName: pc.toolName,
+			args: pc.args,
+			argsText: JSON.stringify(pc.args),
+			result: pc.result,
+			isError: false,
+		});
+	}
+
+	parts.push({ type: "text", text: cleanText });
+
+	return parts;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: assistant-ui message types are loosely typed
+function extractAttachmentIds(message: any): string[] {
+	if (!message?.attachments || !Array.isArray(message.attachments)) return [];
+	return (
+		message.attachments
+			.filter(
+				// biome-ignore lint/suspicious/noExplicitAny: dynamic attachment shape
+				(att: any) => typeof att?.id === "string" && att.id,
+			)
+			// biome-ignore lint/suspicious/noExplicitAny: dynamic attachment shape
+			.map((att: any) => att.id as string)
+	);
+}
+
+const CUID_PATTERN = /^c[a-z0-9]{20,}$/;
+
+// biome-ignore lint/suspicious/noExplicitAny: assistant-ui message types are loosely typed
+function extractRewindId(message: any): string | undefined {
+	if (!message?.id) return undefined;
+	const msgId = message.id as string;
+	return CUID_PATTERN.test(msgId) ? msgId : undefined;
+}
+
+function handleSseEvent(
+	eventType: string,
+	// biome-ignore lint/suspicious/noExplicitAny: SSE event data is dynamically typed
+	parsed: any,
+	state: { textContent: string; thinkingText: string; toolCalls: Map<string, ToolCallState> },
+): boolean {
+	switch (eventType) {
+		case "content":
+			if (parsed.content) {
+				state.textContent += parsed.content;
+				return true;
+			}
+			return false;
+
+		case "tool_call_start":
+			state.toolCalls.set(parsed.toolCallId, {
+				toolCallId: parsed.toolCallId,
+				toolName: parsed.toolName,
+			});
+			return true;
+
+		case "tool_call_args": {
+			const tc = state.toolCalls.get(parsed.toolCallId);
+			if (tc) tc.args = parsed.args;
+			return true;
+		}
+
+		case "tool_result": {
+			const tc = state.toolCalls.get(parsed.toolCallId);
+			if (tc) {
+				tc.result = parsed.result;
+				tc.isError = parsed.isError;
+			}
+			return true;
+		}
+
+		case "thinking_delta":
+			if (parsed.text) {
+				state.thinkingText += parsed.text;
+				return true;
+			}
+			return false;
+
+		default:
+			return false;
+	}
+}
+
 export function createCramKitChatAdapter(
 	sessionId: string,
 	conversationId: string,
 ): ChatModelAdapter {
 	return {
 		async *run({ messages, abortSignal }) {
-			// Extract the latest user message
 			const lastMessage = messages[messages.length - 1];
 			const userText =
 				lastMessage?.content
@@ -87,35 +257,8 @@ export function createCramKitChatAdapter(
 					.map((part) => part.text)
 					.join("") || "";
 
-			// Extract attachment IDs from the message's attachments array.
-			// assistant-ui puts images in message.attachments (not message.content),
-			// each with an `id` matching our upload response ID.
-			const attachmentIds: string[] = [];
-			if (lastMessage && "attachments" in lastMessage && Array.isArray(lastMessage.attachments)) {
-				for (const att of lastMessage.attachments) {
-					if (
-						att &&
-						typeof att === "object" &&
-						"id" in att &&
-						typeof att.id === "string" &&
-						att.id
-					) {
-						attachmentIds.push(att.id);
-					}
-				}
-			}
-
-			// Detect retry: check if the last user message has an existing ID (from history)
-			const lastUserMsg = lastMessage;
-			let rewindToMessageId: string | undefined;
-			if (lastUserMsg && "id" in lastUserMsg && lastUserMsg.id) {
-				// Only treat as rewind if the ID is a real DB ID (Prisma cuid format),
-				// not an auto-generated short ID from assistant-ui
-				const msgId = lastUserMsg.id as string;
-				if (/^c[a-z0-9]{20,}$/.test(msgId)) {
-					rewindToMessageId = msgId;
-				}
-			}
+			const attachmentIds = extractAttachmentIds(lastMessage);
+			const rewindToMessageId = extractRewindId(lastMessage);
 
 			const response = await fetch(`${BASE_URL}/chat/stream`, {
 				method: "POST",
@@ -137,11 +280,7 @@ export function createCramKitChatAdapter(
 						: `Something went wrong (${response.status}). Please try again.`;
 				yield {
 					content: [{ type: "text", text: errorText }],
-					status: {
-						type: "incomplete",
-						reason: "error",
-						error: errorText,
-					},
+					status: { type: "incomplete", reason: "error", error: errorText },
 				} as ChatModelRunResult;
 				return;
 			}
@@ -151,113 +290,16 @@ export function createCramKitChatAdapter(
 
 			const decoder = new TextDecoder();
 			let buffer = "";
-			let textContent = "";
-			let thinkingText = "";
-			const toolCalls = new Map<string, ToolCallState>();
+			const state = {
+				textContent: "",
+				thinkingText: "",
+				toolCalls: new Map<string, ToolCallState>(),
+			};
 
-			/**
-			 * Parse <tool_call> and <tool_result> XML from text content into
-			 * structured tool-call parts that assistant-ui renders via ToolCallDisplay.
-			 */
-			function parseTextToolCalls(text: string) {
-				const callRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
-				const resultRegex = /<tool_result>\s*([\s\S]*?)\s*<\/tool_result>/g;
-
-				const calls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
-				const results: string[] = [];
-
-				let m: RegExpExecArray | null;
-				m = callRegex.exec(text);
-				while (m !== null) {
-					try {
-						const parsed = JSON.parse(m[1]);
-						calls.push({
-							toolName: parsed.name || "unknown",
-							args: parsed.arguments || {},
-						});
-					} catch {
-						// Skip unparseable
-					}
-					m = callRegex.exec(text);
-				}
-
-				m = resultRegex.exec(text);
-				while (m !== null) {
-					results.push(m[1].trim());
-					m = resultRegex.exec(text);
-				}
-
-				const parsedCalls = calls.map((call, i) => ({
-					id: `text_tc_${i}`,
-					toolName: call.toolName,
-					args: call.args,
-					result: results[i],
-				}));
-
-				// Strip complete tags and trailing incomplete tags
-				const cleanText = text
-					.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-					.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
-					.replace(/<tool_call[\s\S]*$/, "")
-					.replace(/<tool_result[\s\S]*$/, "")
-					.replace(/\n{3,}/g, "\n\n")
-					.trim();
-
-				return { cleanText, parsedCalls };
-			}
-
-			function buildContentParts() {
-				const parts: Array<
-					| { type: "reasoning"; text: string }
-					| {
-							type: "tool-call";
-							toolCallId: string;
-							toolName: string;
-							args: Record<string, unknown>;
-							argsText: string;
-							result?: unknown;
-							isError?: boolean;
-					  }
-					| { type: "text"; text: string }
-				> = [];
-
-				// Thinking/reasoning block
-				if (thinkingText) {
-					parts.push({ type: "reasoning", text: thinkingText });
-				}
-
-				// SSE-based tool calls (from proper tool_use content blocks)
-				for (const tc of toolCalls.values()) {
-					parts.push({
-						type: "tool-call",
-						toolCallId: tc.toolCallId,
-						toolName: tc.toolName,
-						args: tc.args ?? {},
-						argsText: JSON.stringify(tc.args ?? {}),
-						result: tc.result,
-						isError: tc.isError,
-					});
-				}
-
-				// Parse text-embedded tool calls (from <tool_call> XML in text)
-				const { cleanText, parsedCalls } = parseTextToolCalls(textContent);
-				for (const pc of parsedCalls) {
-					parts.push({
-						type: "tool-call",
-						toolCallId: pc.id,
-						toolName: pc.toolName,
-						args: pc.args,
-						argsText: JSON.stringify(pc.args),
-						result: pc.result,
-						isError: false,
-					});
-				}
-
-				// Clean text content (XML stripped)
-				parts.push({ type: "text", text: cleanText });
-
-				return parts;
-			}
+			const yieldContent = () =>
+				({
+					content: buildContentParts(state.thinkingText, state.toolCalls, state.textContent),
+				}) as ChatModelRunResult;
 
 			try {
 				let currentEventType = "content";
@@ -274,7 +316,6 @@ export function createCramKitChatAdapter(
 						const trimmed = line.trim();
 						if (!trimmed) continue;
 
-						// Parse SSE event type
 						if (trimmed.startsWith("event: ")) {
 							currentEventType = trimmed.slice(7);
 							continue;
@@ -283,71 +324,19 @@ export function createCramKitChatAdapter(
 						if (trimmed.startsWith("data: ")) {
 							const data = trimmed.slice(6);
 							if (data === "[DONE]") {
-								yield { content: buildContentParts() } as ChatModelRunResult;
+								yield yieldContent();
 								return;
 							}
 
 							try {
 								const parsed = JSON.parse(data);
-
-								switch (currentEventType) {
-									case "content": {
-										if (parsed.content) {
-											textContent += parsed.content;
-											yield { content: buildContentParts() } as ChatModelRunResult;
-										}
-										break;
-									}
-
-									case "tool_call_start": {
-										const { toolCallId, toolName } = parsed;
-										toolCalls.set(toolCallId, {
-											toolCallId,
-											toolName,
-										});
-										yield { content: buildContentParts() } as ChatModelRunResult;
-										break;
-									}
-
-									case "tool_call_args": {
-										const { toolCallId, args } = parsed;
-										const tc = toolCalls.get(toolCallId);
-										if (tc) {
-											tc.args = args;
-										}
-										yield { content: buildContentParts() } as ChatModelRunResult;
-										break;
-									}
-
-									case "tool_result": {
-										const { toolCallId, result, isError } = parsed;
-										const tc = toolCalls.get(toolCallId);
-										if (tc) {
-											tc.result = result;
-											tc.isError = isError;
-										}
-										yield { content: buildContentParts() } as ChatModelRunResult;
-										break;
-									}
-
-									case "thinking_delta": {
-										if (parsed.text) {
-											thinkingText += parsed.text;
-											yield { content: buildContentParts() } as ChatModelRunResult;
-										}
-										break;
-									}
-
-									case "thinking_start": {
-										// Just mark that thinking has started, text comes via deltas
-										break;
-									}
+								if (handleSseEvent(currentEventType, parsed, state)) {
+									yield yieldContent();
 								}
 							} catch {
 								// Skip unparseable
 							}
 
-							// Reset event type after data line
 							currentEventType = "content";
 						}
 					}
@@ -356,8 +345,8 @@ export function createCramKitChatAdapter(
 				reader.releaseLock();
 			}
 
-			if (textContent || toolCalls.size > 0 || thinkingText) {
-				yield { content: buildContentParts() } as ChatModelRunResult;
+			if (state.textContent || state.toolCalls.size > 0 || state.thinkingText) {
+				yield yieldContent();
 			}
 		},
 	};

@@ -1,12 +1,17 @@
 import { type Resource, createResource } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, Upload, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Plus, Upload } from "lucide-react";
+import { useCallback, useReducer, useRef, useState } from "react";
+import {
+	FileChip,
+	Modal,
+	type ResourceType,
+	SecondaryFilePicker,
+	TYPE_LABELS,
+} from "./resource-utils.js";
 
 const log = createLogger("web");
-
-type ResourceType = "LECTURE_NOTES" | "PAST_PAPER" | "PROBLEM_SHEET" | "SPECIFICATION" | "OTHER";
 
 const TYPE_OPTIONS: Array<{ value: ResourceType; label: string; description: string }> = [
 	{ value: "LECTURE_NOTES", label: "Lecture Notes", description: "One or more lecture PDFs" },
@@ -16,6 +21,75 @@ const TYPE_OPTIONS: Array<{ value: ResourceType; label: string; description: str
 	{ value: "OTHER", label: "Other", description: "Any other resource" },
 ];
 
+interface FormState {
+	step: "type" | "details";
+	resourceType: ResourceType | null;
+	resourceName: string;
+	files: File[];
+	hasMarkScheme: boolean;
+	hasSolutions: boolean;
+	splitMode: "auto" | "split" | "single";
+	markSchemeFile: File | null;
+	solutionsFile: File | null;
+}
+
+const INITIAL_FORM: FormState = {
+	step: "type",
+	resourceType: null,
+	resourceName: "",
+	files: [],
+	hasMarkScheme: false,
+	hasSolutions: false,
+	splitMode: "auto",
+	markSchemeFile: null,
+	solutionsFile: null,
+};
+
+type FormAction =
+	| { type: "reset" }
+	| { type: "selectType"; value: ResourceType }
+	| { type: "backToType" }
+	| { type: "setName"; value: string }
+	| { type: "addFiles"; files: File[] }
+	| { type: "removeFile"; index: number }
+	| { type: "setHasMarkScheme"; value: boolean }
+	| { type: "setHasSolutions"; value: boolean }
+	| { type: "setSplitMode"; value: FormState["splitMode"] }
+	| { type: "setMarkSchemeFile"; file: File | null }
+	| { type: "setSolutionsFile"; file: File | null };
+
+function formReducer(state: FormState, action: FormAction): FormState {
+	switch (action.type) {
+		case "reset":
+			return INITIAL_FORM;
+		case "selectType":
+			return {
+				...state,
+				step: "details",
+				resourceType: action.value,
+				splitMode: action.value === "LECTURE_NOTES" ? "split" : state.splitMode,
+			};
+		case "backToType":
+			return { ...state, step: "type", files: [] };
+		case "setName":
+			return { ...state, resourceName: action.value };
+		case "addFiles":
+			return { ...state, files: [...state.files, ...action.files] };
+		case "removeFile":
+			return { ...state, files: state.files.filter((_, i) => i !== action.index) };
+		case "setHasMarkScheme":
+			return { ...state, hasMarkScheme: action.value };
+		case "setHasSolutions":
+			return { ...state, hasSolutions: action.value };
+		case "setSplitMode":
+			return { ...state, splitMode: action.value };
+		case "setMarkSchemeFile":
+			return { ...state, markSchemeFile: action.file };
+		case "setSolutionsFile":
+			return { ...state, solutionsFile: action.file };
+	}
+}
+
 interface ResourceUploadProps {
 	sessionId: string;
 	existingResources?: Resource[];
@@ -24,117 +98,72 @@ interface ResourceUploadProps {
 export function ResourceUpload({ sessionId, existingResources }: ResourceUploadProps) {
 	const queryClient = useQueryClient();
 	const [isOpen, setIsOpen] = useState(false);
-	const [step, setStep] = useState<"type" | "details">("type");
-	const [resourceType, setResourceType] = useState<ResourceType | null>(null);
-	const [resourceName, setResourceName] = useState("");
-	const [files, setFiles] = useState<File[]>([]);
-	const [hasMarkScheme, setHasMarkScheme] = useState(false);
-	const [hasSolutions, setHasSolutions] = useState(false);
-	const [splitMode, setSplitMode] = useState<"auto" | "split" | "single">("auto");
-	const [markSchemeFile, setMarkSchemeFile] = useState<File | null>(null);
-	const [solutionsFile, setSolutionsFile] = useState<File | null>(null);
 	const [uploading, setUploading] = useState(false);
+	const [form, dispatch] = useReducer(formReducer, INITIAL_FORM);
 	const fileInputRef = useRef<HTMLInputElement>(null);
-	const secondaryFileInputRef = useRef<HTMLInputElement>(null);
 
 	const existingLectureNotes = existingResources?.find((r) => r.type === "LECTURE_NOTES");
-	const isAddingToExisting = resourceType === "LECTURE_NOTES" && !!existingLectureNotes;
-
-	const allowMultipleFiles = resourceType === "LECTURE_NOTES";
-
-	const reset = useCallback(() => {
-		setStep("type");
-		setResourceType(null);
-		setResourceName("");
-		setFiles([]);
-		setHasMarkScheme(false);
-		setHasSolutions(false);
-		setMarkSchemeFile(null);
-		setSolutionsFile(null);
-		setSplitMode("auto");
-	}, []);
+	const isAddingToExisting = form.resourceType === "LECTURE_NOTES" && !!existingLectureNotes;
+	const allowMultipleFiles = form.resourceType === "LECTURE_NOTES";
 
 	const handleOpen = () => {
-		reset();
+		dispatch({ type: "reset" });
 		setIsOpen(true);
 	};
 
 	const handleClose = () => {
 		if (!uploading) {
 			setIsOpen(false);
-			reset();
+			dispatch({ type: "reset" });
 		}
-	};
-
-	const handleTypeSelect = (type: ResourceType) => {
-		setResourceType(type);
-		if (type === "LECTURE_NOTES") {
-			setSplitMode("split");
-		}
-		setStep("details");
 	};
 
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files) {
 			const newFiles = Array.from(e.target.files);
 			if (allowMultipleFiles) {
-				setFiles((prev) => [...prev, ...newFiles]);
+				dispatch({ type: "addFiles", files: newFiles });
 			} else {
-				setFiles(newFiles.slice(0, 1));
+				dispatch({ type: "addFiles", files: newFiles.slice(0, 1) });
 			}
 		}
 		if (fileInputRef.current) fileInputRef.current.value = "";
 	};
 
-	const removeFile = (index: number) => {
-		setFiles((prev) => prev.filter((_, i) => i !== index));
-	};
-
 	const handleSubmit = useCallback(async () => {
-		if (!resourceType || files.length === 0) return;
+		if (!form.resourceType || form.files.length === 0) return;
 		setUploading(true);
 		try {
-			const name = resourceName || files.map((f) => f.name.replace(/\.[^.]+$/, "")).join(", ");
+			const name =
+				form.resourceName || form.files.map((f) => f.name.replace(/\.[^.]+$/, "")).join(", ");
 
 			let label: string | undefined;
-			if (resourceType === "PAST_PAPER" && hasMarkScheme) {
+			if (form.resourceType === "PAST_PAPER" && form.hasMarkScheme) {
 				label = "includes_mark_scheme";
-			} else if (resourceType === "PROBLEM_SHEET" && hasSolutions) {
+			} else if (form.resourceType === "PROBLEM_SHEET" && form.hasSolutions) {
 				label = "includes_solutions";
 			}
 
 			await createResource(sessionId, {
 				name,
-				type: resourceType,
+				type: form.resourceType,
 				label,
-				splitMode: splitMode !== "auto" ? splitMode : undefined,
-				files,
-				markScheme: markSchemeFile ?? undefined,
-				solutions: solutionsFile ?? undefined,
+				splitMode: form.splitMode !== "auto" ? form.splitMode : undefined,
+				files: form.files,
+				markScheme: form.markSchemeFile ?? undefined,
+				solutions: form.solutionsFile ?? undefined,
 			});
 
 			log.info("ResourceUpload — resource created");
 			queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
 			setIsOpen(false);
-			reset();
+			dispatch({ type: "reset" });
 		} catch (err) {
 			log.error("ResourceUpload — upload error", err);
 		} finally {
 			setUploading(false);
 		}
-	}, [
-		resourceType,
-		files,
-		resourceName,
-		hasMarkScheme,
-		hasSolutions,
-		markSchemeFile,
-		solutionsFile,
-		splitMode,
-		sessionId,
-		queryClient,
-		reset,
-	]);
+	}, [form, sessionId, queryClient]);
 
 	return (
 		<>
@@ -148,282 +177,230 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 			</button>
 
 			{isOpen && (
-				<div
-					className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-					onClick={handleClose}
-					onKeyDown={handleClose}
-					role="presentation"
-				>
-					<div
-						className="relative w-full max-w-lg rounded-lg border border-border bg-background p-6 shadow-lg"
-						onClick={(e) => e.stopPropagation()}
-						onKeyDown={(e) => e.stopPropagation()}
-						role="presentation"
-					>
+				<Modal onClose={handleClose}>
+					{form.step === "type" && (
+						<TypeStep
+							existingLectureNotes={!!existingLectureNotes}
+							onSelect={(t) => dispatch({ type: "selectType", value: t })}
+						/>
+					)}
+
+					{form.step === "details" && form.resourceType && (
+						<DetailsStep
+							form={form}
+							dispatch={dispatch}
+							isAddingToExisting={isAddingToExisting}
+							allowMultipleFiles={allowMultipleFiles}
+							fileInputRef={fileInputRef}
+							onFileChange={handleFileChange}
+							onSubmit={handleSubmit}
+							uploading={uploading}
+						/>
+					)}
+				</Modal>
+			)}
+		</>
+	);
+}
+
+function TypeStep({
+	existingLectureNotes,
+	onSelect,
+}: {
+	existingLectureNotes: boolean;
+	onSelect: (type: ResourceType) => void;
+}) {
+	return (
+		<>
+			<h2 className="mb-4 text-lg font-semibold">What are you uploading?</h2>
+			<div className="space-y-2">
+				{TYPE_OPTIONS.map((opt) => {
+					const isExisting = opt.value === "LECTURE_NOTES" && existingLectureNotes;
+					return (
 						<button
 							type="button"
-							onClick={handleClose}
-							className="absolute right-3 top-3 rounded p-1 text-muted-foreground hover:text-foreground"
+							key={opt.value}
+							onClick={() => onSelect(opt.value)}
+							className="flex w-full items-center justify-between rounded-md border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-primary/5"
 						>
-							<X className="h-4 w-4" />
+							<div>
+								<div className="text-sm font-medium">{opt.label}</div>
+								<div className="text-xs text-muted-foreground">
+									{isExisting ? "Add more files to existing lecture notes" : opt.description}
+								</div>
+							</div>
 						</button>
+					);
+				})}
+			</div>
+		</>
+	);
+}
 
-						{/* Step 1: Pick resource type */}
-						{step === "type" && (
-							<>
-								<h2 className="mb-4 text-lg font-semibold">What are you uploading?</h2>
-								<div className="space-y-2">
-									{TYPE_OPTIONS.map((opt) => {
-										const isExisting = opt.value === "LECTURE_NOTES" && !!existingLectureNotes;
-										return (
-											<button
-												type="button"
-												key={opt.value}
-												onClick={() => handleTypeSelect(opt.value)}
-												className="flex w-full items-center justify-between rounded-md border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-primary/5"
-											>
-												<div>
-													<div className="text-sm font-medium">{opt.label}</div>
-													<div className="text-xs text-muted-foreground">
-														{isExisting
-															? "Add more files to existing lecture notes"
-															: opt.description}
-													</div>
-												</div>
-											</button>
-										);
-									})}
-								</div>
-							</>
-						)}
+function DetailsStep({
+	form,
+	dispatch,
+	isAddingToExisting,
+	allowMultipleFiles,
+	fileInputRef,
+	onFileChange,
+	onSubmit,
+	uploading,
+}: {
+	form: FormState;
+	dispatch: React.Dispatch<FormAction>;
+	isAddingToExisting: boolean;
+	allowMultipleFiles: boolean;
+	fileInputRef: React.RefObject<HTMLInputElement | null>;
+	onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+	onSubmit: () => void;
+	uploading: boolean;
+}) {
+	return (
+		<>
+			<h2 className="mb-4 text-lg font-semibold">
+				{isAddingToExisting
+					? "Add to Lecture Notes"
+					: `New ${(form.resourceType && TYPE_LABELS[form.resourceType]) || form.resourceType}`}
+			</h2>
 
-						{/* Step 2: Upload details */}
-						{step === "details" && resourceType && (
-							<>
-								<h2 className="mb-4 text-lg font-semibold">
-									{isAddingToExisting
-										? "Add to Lecture Notes"
-										: `New ${TYPE_OPTIONS.find((o) => o.value === resourceType)?.label}`}
-								</h2>
-
-								<div className="space-y-4">
-									{/* Resource name */}
-									{!isAddingToExisting && (
-										<div>
-											<label htmlFor="resource-name" className="mb-1 block text-sm font-medium">
-												Name <span className="font-normal text-muted-foreground">(optional)</span>
-											</label>
-											<input
-												id="resource-name"
-												type="text"
-												value={resourceName}
-												onChange={(e) => setResourceName(e.target.value)}
-												placeholder="Defaults to filename"
-												className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-											/>
-										</div>
-									)}
-
-									{/* Tickbox: includes mark scheme */}
-									{resourceType === "PAST_PAPER" && (
-										<label className="flex items-center gap-2 text-sm">
-											<input
-												type="checkbox"
-												checked={hasMarkScheme}
-												onChange={(e) => setHasMarkScheme(e.target.checked)}
-												className="h-4 w-4 rounded border-input"
-											/>
-											PDF includes mark scheme
-										</label>
-									)}
-
-									{/* Tickbox: includes solutions */}
-									{resourceType === "PROBLEM_SHEET" && (
-										<label className="flex items-center gap-2 text-sm">
-											<input
-												type="checkbox"
-												checked={hasSolutions}
-												onChange={(e) => setHasSolutions(e.target.checked)}
-												className="h-4 w-4 rounded border-input"
-											/>
-											PDF includes solutions
-										</label>
-									)}
-
-									{/* Split mode tickbox — only for lecture notes */}
-									{resourceType === "LECTURE_NOTES" && (
-										<label className="flex items-center gap-2 text-sm">
-											<input
-												type="checkbox"
-												checked={splitMode === "split"}
-												onChange={(e) => setSplitMode(e.target.checked ? "split" : "auto")}
-												className="h-4 w-4 rounded border-input"
-											/>
-											Split into chunks for indexing
-										</label>
-									)}
-
-									{/* File upload */}
-									<div>
-										<label htmlFor="resource-file" className="mb-1 block text-sm font-medium">
-											{allowMultipleFiles ? "Files" : "File"}
-										</label>
-
-										{files.length > 0 && (
-											<div className="mb-2 space-y-1">
-												{files.map((file, i) => (
-													<div
-														key={`${file.name}-${i}`}
-														className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm"
-													>
-														<span className="truncate">{file.name}</span>
-														<button
-															type="button"
-															onClick={() => removeFile(i)}
-															className="ml-2 text-muted-foreground hover:text-destructive"
-														>
-															<X className="h-3.5 w-3.5" />
-														</button>
-													</div>
-												))}
-											</div>
-										)}
-
-										{(allowMultipleFiles || files.length === 0) && (
-											<button
-												type="button"
-												onClick={() => fileInputRef.current?.click()}
-												className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-6 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-											>
-												<Upload className="h-4 w-4" />
-												{files.length > 0 ? "Add more files" : "Choose file"}
-											</button>
-										)}
-
-										<input
-											id="resource-file"
-											ref={fileInputRef}
-											type="file"
-											accept=".pdf"
-											multiple={allowMultipleFiles}
-											onChange={handleFileChange}
-											className="hidden"
-										/>
-									</div>
-
-									{/* Separate mark scheme file upload */}
-									{resourceType === "PAST_PAPER" && !hasMarkScheme && (
-										<div>
-											<label htmlFor="mark-scheme-file" className="mb-1 block text-sm font-medium">
-												Mark Scheme{" "}
-												<span className="font-normal text-muted-foreground">(optional)</span>
-											</label>
-											{markSchemeFile ? (
-												<div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm">
-													<span className="truncate">{markSchemeFile.name}</span>
-													<button
-														type="button"
-														onClick={() => setMarkSchemeFile(null)}
-														className="ml-2 text-muted-foreground hover:text-destructive"
-													>
-														<X className="h-3.5 w-3.5" />
-													</button>
-												</div>
-											) : (
-												<button
-													type="button"
-													onClick={() => secondaryFileInputRef.current?.click()}
-													className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-4 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-												>
-													<Upload className="h-4 w-4" />
-													Choose mark scheme PDF
-												</button>
-											)}
-											<input
-												id="mark-scheme-file"
-												ref={secondaryFileInputRef}
-												type="file"
-												accept=".pdf"
-												onChange={(e) => {
-													if (e.target.files?.[0]) setMarkSchemeFile(e.target.files[0]);
-													if (secondaryFileInputRef.current)
-														secondaryFileInputRef.current.value = "";
-												}}
-												className="hidden"
-											/>
-										</div>
-									)}
-
-									{/* Separate solutions file upload */}
-									{resourceType === "PROBLEM_SHEET" && !hasSolutions && (
-										<div>
-											<label htmlFor="solutions-file" className="mb-1 block text-sm font-medium">
-												Solutions{" "}
-												<span className="font-normal text-muted-foreground">(optional)</span>
-											</label>
-											{solutionsFile ? (
-												<div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm">
-													<span className="truncate">{solutionsFile.name}</span>
-													<button
-														type="button"
-														onClick={() => setSolutionsFile(null)}
-														className="ml-2 text-muted-foreground hover:text-destructive"
-													>
-														<X className="h-3.5 w-3.5" />
-													</button>
-												</div>
-											) : (
-												<button
-													type="button"
-													onClick={() => secondaryFileInputRef.current?.click()}
-													className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-4 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-												>
-													<Upload className="h-4 w-4" />
-													Choose solutions PDF
-												</button>
-											)}
-											<input
-												id="solutions-file"
-												ref={secondaryFileInputRef}
-												type="file"
-												accept=".pdf"
-												onChange={(e) => {
-													if (e.target.files?.[0]) setSolutionsFile(e.target.files[0]);
-													if (secondaryFileInputRef.current)
-														secondaryFileInputRef.current.value = "";
-												}}
-												className="hidden"
-											/>
-										</div>
-									)}
-
-									{/* Actions */}
-									<div className="flex items-center justify-between pt-2">
-										<button
-											type="button"
-											onClick={() => {
-												setStep("type");
-												setFiles([]);
-											}}
-											className="text-sm text-muted-foreground hover:text-foreground"
-										>
-											Back
-										</button>
-										<button
-											type="button"
-											onClick={handleSubmit}
-											disabled={files.length === 0 || uploading}
-											className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-										>
-											{uploading ? "Uploading..." : "Upload"}
-										</button>
-									</div>
-								</div>
-							</>
-						)}
+			<div className="space-y-4">
+				{!isAddingToExisting && (
+					<div>
+						<label htmlFor="resource-name" className="mb-1 block text-sm font-medium">
+							Name <span className="font-normal text-muted-foreground">(optional)</span>
+						</label>
+						<input
+							id="resource-name"
+							type="text"
+							value={form.resourceName}
+							onChange={(e) => dispatch({ type: "setName", value: e.target.value })}
+							placeholder="Defaults to filename"
+							className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+						/>
 					</div>
+				)}
+
+				{form.resourceType === "PAST_PAPER" && (
+					<label className="flex items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							checked={form.hasMarkScheme}
+							onChange={(e) => dispatch({ type: "setHasMarkScheme", value: e.target.checked })}
+							className="h-4 w-4 rounded border-input"
+						/>
+						PDF includes mark scheme
+					</label>
+				)}
+
+				{form.resourceType === "PROBLEM_SHEET" && (
+					<label className="flex items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							checked={form.hasSolutions}
+							onChange={(e) => dispatch({ type: "setHasSolutions", value: e.target.checked })}
+							className="h-4 w-4 rounded border-input"
+						/>
+						PDF includes solutions
+					</label>
+				)}
+
+				{form.resourceType === "LECTURE_NOTES" && (
+					<label className="flex items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							checked={form.splitMode === "split"}
+							onChange={(e) =>
+								dispatch({
+									type: "setSplitMode",
+									value: e.target.checked ? "split" : "auto",
+								})
+							}
+							className="h-4 w-4 rounded border-input"
+						/>
+						Split into chunks for indexing
+					</label>
+				)}
+
+				<div>
+					<label htmlFor="resource-file" className="mb-1 block text-sm font-medium">
+						{allowMultipleFiles ? "Files" : "File"}
+					</label>
+
+					{form.files.length > 0 && (
+						<div className="mb-2 space-y-1">
+							{form.files.map((file, i) => (
+								<FileChip
+									key={`${file.name}-${i}`}
+									name={file.name}
+									onRemove={() => dispatch({ type: "removeFile", index: i })}
+								/>
+							))}
+						</div>
+					)}
+
+					{(allowMultipleFiles || form.files.length === 0) && (
+						<button
+							type="button"
+							onClick={() => fileInputRef.current?.click()}
+							className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-6 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+						>
+							<Upload className="h-4 w-4" />
+							{form.files.length > 0 ? "Add more files" : "Choose file"}
+						</button>
+					)}
+
+					<input
+						id="resource-file"
+						ref={fileInputRef}
+						type="file"
+						accept=".pdf"
+						multiple={allowMultipleFiles}
+						onChange={onFileChange}
+						className="hidden"
+					/>
 				</div>
-			)}
+
+				{form.resourceType === "PAST_PAPER" && !form.hasMarkScheme && (
+					<SecondaryFilePicker
+						id="mark-scheme-file"
+						label="Mark Scheme"
+						file={form.markSchemeFile}
+						onFileChange={(f) => dispatch({ type: "setMarkSchemeFile", file: f })}
+						onClear={() => dispatch({ type: "setMarkSchemeFile", file: null })}
+						buttonLabel="Choose mark scheme PDF"
+					/>
+				)}
+
+				{form.resourceType === "PROBLEM_SHEET" && !form.hasSolutions && (
+					<SecondaryFilePicker
+						id="solutions-file"
+						label="Solutions"
+						file={form.solutionsFile}
+						onFileChange={(f) => dispatch({ type: "setSolutionsFile", file: f })}
+						onClear={() => dispatch({ type: "setSolutionsFile", file: null })}
+						buttonLabel="Choose solutions PDF"
+					/>
+				)}
+
+				<div className="flex items-center justify-between pt-2">
+					<button
+						type="button"
+						onClick={() => dispatch({ type: "backToType" })}
+						className="text-sm text-muted-foreground hover:text-foreground"
+					>
+						Back
+					</button>
+					<button
+						type="button"
+						onClick={onSubmit}
+						disabled={form.files.length === 0 || uploading}
+						className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+					>
+						{uploading ? "Uploading..." : "Upload"}
+					</button>
+				</div>
+			</div>
 		</>
 	);
 }

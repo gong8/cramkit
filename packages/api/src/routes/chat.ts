@@ -4,9 +4,14 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { chatStreamRequestSchema, createLogger, getDb } from "@cramkit/shared";
 import { Hono } from "hono";
-import { streamSSE } from "hono/streaming";
 import { streamCliChat } from "../services/cli-chat.js";
-import { getStream, startStream, subscribe } from "../services/stream-manager.js";
+import { getStream, startStream } from "../services/stream-manager.js";
+import {
+	buildSystemPrompt,
+	collectImagePaths,
+	persistUserMessage,
+	pipeStreamToSSE,
+} from "./chat-helpers.js";
 
 const log = createLogger("api");
 
@@ -221,26 +226,7 @@ chatRoutes.post("/conversations/:id/stream-reconnect", async (c) => {
 	}
 
 	log.info(`POST /chat/conversations/${id}/stream-reconnect — reconnecting`);
-	return streamSSE(c, async (sseStream) => {
-		const handle = subscribe(id, async (event, data) => {
-			try {
-				await sseStream.writeSSE({ data, event });
-			} catch {
-				// Client disconnected during write
-			}
-		});
-
-		if (!handle) {
-			await sseStream.writeSSE({ data: "[DONE]", event: "done" });
-			return;
-		}
-
-		try {
-			await handle.delivered;
-		} finally {
-			handle.unsubscribe();
-		}
-	});
+	return pipeStreamToSSE(c, id);
 });
 
 // Stream chat — persists messages to DB
@@ -272,65 +258,18 @@ chatRoutes.post("/stream", async (c) => {
 	const existingStream = getStream(conversationId);
 	if (existingStream && existingStream.status === "streaming") {
 		log.info(`POST /chat/stream — reconnecting to active stream for ${conversationId}`);
-		return streamSSE(c, async (sseStream) => {
-			const handle = subscribe(conversationId, async (event, data) => {
-				try {
-					await sseStream.writeSSE({ data, event });
-				} catch {
-					// Client disconnected during write, ignore
-				}
-			});
-
-			if (!handle) {
-				await sseStream.writeSSE({ data: "[DONE]", event: "done" });
-				return;
-			}
-
-			try {
-				await handle.delivered;
-			} finally {
-				handle.unsubscribe();
-			}
-		});
+		return pipeStreamToSSE(c, conversationId);
 	}
 
-	// Handle rewind (retry/edit)
-	if (rewindToMessageId) {
-		const targetMessage = await db.message.findUnique({
-			where: { id: rewindToMessageId },
-		});
-		if (!targetMessage || targetMessage.conversationId !== conversationId) {
-			return c.json({ error: "Rewind target message not found" }, 404);
-		}
-
-		// Delete all messages after the target
-		await db.message.deleteMany({
-			where: {
-				conversationId,
-				createdAt: { gt: targetMessage.createdAt },
-			},
-		});
-
-		// If the content differs, update the target message (edit case)
-		if (targetMessage.content !== message) {
-			await db.message.update({
-				where: { id: rewindToMessageId },
-				data: { content: message },
-			});
-		}
-	} else {
-		// Save new user message
-		const userMessage = await db.message.create({
-			data: { conversationId, role: "user", content: message },
-		});
-
-		// Link attachments to the user message
-		if (attachmentIds && attachmentIds.length > 0) {
-			await db.chatAttachment.updateMany({
-				where: { id: { in: attachmentIds }, messageId: null },
-				data: { messageId: userMessage.id },
-			});
-		}
+	// Handle rewind (retry/edit) or save new user message
+	const result = await persistUserMessage(db, {
+		conversationId,
+		message,
+		attachmentIds,
+		rewindToMessageId,
+	});
+	if (result.error) {
+		return c.json({ error: result.error }, 404);
 	}
 
 	// Load full message history from DB (include attachments for image paths)
@@ -344,13 +283,7 @@ chatRoutes.post("/stream", async (c) => {
 		},
 	});
 
-	// Collect image paths from all messages in the conversation
-	const imagePaths: string[] = [];
-	for (const msg of history) {
-		for (const att of msg.attachments) {
-			if (att.diskPath) imagePaths.push(att.diskPath);
-		}
-	}
+	const imagePaths = collectImagePaths(history);
 
 	// Auto-title on first user message
 	if (history.length === 1) {
@@ -386,87 +319,7 @@ chatRoutes.post("/stream", async (c) => {
 		return c.json({ error: "Session not found" }, 404);
 	}
 
-	const resourceListStr = session.resources
-		.map((r) => {
-			const status = r.isGraphIndexed
-				? "fully indexed"
-				: r.isIndexed
-					? "content-indexed, no knowledge graph"
-					: "not yet indexed";
-			const fileList = r.files.map((f) => `    - ${f.filename} (${f.role})`).join("\n");
-			return `- ${r.name} [${r.type}] (id: ${r.id}, ${status})\n${fileList}`;
-		})
-		.join("\n");
-
-	const systemPrompt = `You are a study tutor for CramKit. You help students prepare for exams by drawing on their uploaded study materials and a knowledge graph built from those materials.
-
-Be warm, clear, and knowledgeable — like a great TA or private tutor. Encourage the student but be honest when they misunderstand something. Use precise terminology and always explain it. Keep your responses appropriately sized: a short factual answer should be a few sentences; a concept explanation should be a focused paragraph or two; only write long responses for comprehensive overviews or full worked solutions.
-
-<session>
-Session: ${session.name}${session.module ? `\nModule: ${session.module}` : ""}${session.examDate ? `\nExam date: ${new Date(session.examDate).toLocaleDateString()}` : ""}${session.scope ? `\nExam scope: ${session.scope}` : ""}${session.notes ? `\nStudent notes: ${session.notes}` : ""}
-Session ID for tool calls: ${sessionId}
-</session>
-
-<materials>
-${resourceListStr || "No resources uploaded yet."}
-</materials>
-
-<tool_strategy>
-You have MCP tools (prefixed mcp__cramkit__) that query the student's indexed materials and a knowledge graph of extracted concepts and relationships. Always pass the session ID shown above.
-
-WHEN THE STUDENT ASKS ABOUT A TOPIC:
-1. Start with search_notes — it searches both content text and the knowledge graph. Use the key concept name as your query (not the student's full sentence). If results are sparse, rephrase with synonyms or broader terms and search again.
-2. If a search result looks relevant, use get_chunk to retrieve the full content and its related concepts. This is important for definitions, theorems, and proofs where you need the complete text.
-3. If the student asks about a specific resource you can see in the materials list above, use get_resource_index to see its table of contents, then get_chunk for specific sections. Use get_resource_content only when you need the entire document (e.g. "summarise this whole set of notes").
-
-WHEN THE STUDENT ASKS HOW TOPICS CONNECT OR WHAT TO STUDY:
-1. Use list_concepts to see all concepts the knowledge graph has identified.
-2. Use get_concept to see a concept's relationships — prerequisites, related topics, which chunks cover it, which questions test it.
-3. Use get_related to explore connections from any entity (resource, chunk, or concept).
-
-ACTIVELY ENRICH THE KNOWLEDGE GRAPH:
-You MUST use create_link to strengthen the knowledge graph whenever you discover connections during the conversation. This is critical — the graph improves over time through your contributions. Use create_link when:
-- You discover a prerequisite relationship ("to understand X, the student needs Y") → create a prerequisite link between the two concepts
-- A past paper question clearly tests a specific concept → create a "tests" link from the question chunk to the concept
-- Two concepts from different resources are clearly related but not yet linked → create a "related_to", "extends", "special_case_of", or "generalizes" link
-- A chunk contains a definition or proof for a concept → create a "covers" or "proves" link
-- You notice a contradiction or different treatment across resources → create a "contradicts" or "related_to" link
-
-Use confidence scores to reflect your certainty: 0.9-1.0 for obvious connections, 0.7-0.8 for likely connections. Always include human-readable sourceLabel and targetLabel so the graph stays navigable. Do this naturally as part of answering — don't announce it to the student or make it the focus of your response.
-
-WHEN THE STUDENT WANTS TO PRACTICE:
-1. Use list_past_papers or list_problem_sheets to see what's available and whether mark schemes/solutions exist.
-2. Use get_past_paper to retrieve a paper's content.
-3. When helping with a past paper question, use get_concept and get_related to find which concepts it tests and pull in the relevant material.
-
-WHEN NOT TO USE TOOLS:
-- Follow-up questions about content you already retrieved in this conversation
-- General study advice, exam technique tips, or motivational support
-- Explaining something you just showed them in different words
-- Asking the student clarifying questions
-
-FALLBACK CHAIN:
-1. search_notes with the key concept → 2. rephrase and search again with synonyms/broader terms → 3. list_concepts to check if it exists under a different name → 4. If genuinely not in the materials, say so clearly and offer to explain from your own knowledge, noting it may not match the course's specific treatment.
-
-Never fabricate citations. If you did not retrieve content from a tool, do not claim it is from the student's notes.
-</tool_strategy>
-
-<formatting>
-- Use markdown. The student's interface renders markdown with KaTeX.
-- Write maths in LaTeX: $..$ for inline, $$...$$ for display. Always use LaTeX for mathematical expressions, never plain text approximations.
-- Use **bold** for key terms on first introduction.
-- Use headings (##, ###) to structure longer responses.
-- When presenting a definition, theorem, or formula from their materials, format it as a block quote and cite the source: "From [Resource Name], Section X:".
-- When supplementing with your own knowledge, be transparent: "This isn't in your uploaded materials, but..." or "Your notes cover X; I'd add that..."
-</formatting>
-
-<teaching>
-- Default to giving clear, direct answers with good explanations. Lead with the intuition, then give the formal detail.
-- When the student is working through a problem or past paper question, shift to an adaptive approach: offer a hint or ask a guiding question before revealing the full solution, unless they explicitly ask for the answer.
-- Use concrete examples to illustrate abstract concepts. Connect new concepts to ones already in their materials.
-- When breaking down proofs or derivations, use numbered steps.
-- Occasionally (not every message) suggest relevant next steps when clearly useful: mentioning a related past paper question, flagging a prerequisite they should review, or offering to quiz them on what you just covered. Keep suggestions natural, not formulaic.
-</teaching>`;
+	const systemPrompt = buildSystemPrompt(session, sessionId);
 
 	log.info(
 		`POST /chat/stream — session=${sessionId}, conversation=${conversationId}, history=${history.length} messages`,
@@ -483,24 +336,5 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 	startStream(conversationId, cliStream, db);
 
 	// Subscribe this SSE connection to the stream
-	return streamSSE(c, async (sseStream) => {
-		const handle = subscribe(conversationId, async (event, data) => {
-			try {
-				await sseStream.writeSSE({ data, event });
-			} catch {
-				// Client disconnected during write, ignore
-			}
-		});
-
-		if (!handle) {
-			await sseStream.writeSSE({ data: "[DONE]", event: "done" });
-			return;
-		}
-
-		try {
-			await handle.delivered;
-		} finally {
-			handle.unsubscribe();
-		}
-	});
+	return pipeStreamToSSE(c, conversationId);
 });

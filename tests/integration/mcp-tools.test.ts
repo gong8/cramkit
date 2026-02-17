@@ -41,7 +41,7 @@ describe("MCP graph tools", () => {
 			createdBy: "claude",
 		});
 
-		expect(JSON.parse(result)).toHaveProperty("id");
+		expect(result).toHaveProperty("id");
 	});
 
 	it("get_related calls getRelated with params", async () => {
@@ -52,16 +52,15 @@ describe("MCP graph tools", () => {
 		});
 
 		expect(apiClient.getRelated).toHaveBeenCalledWith("concept", "concept-1", "prerequisite");
-		expect(JSON.parse(result)).toBeInstanceOf(Array);
+		expect(result).toBeInstanceOf(Array);
 	});
 
 	it("list_concepts calls listConcepts", async () => {
 		const result = await graphTools.list_concepts.execute({ sessionId: "session-1" });
 
 		expect(apiClient.listConcepts).toHaveBeenCalledWith("session-1");
-		const parsed = JSON.parse(result);
-		expect(parsed).toBeInstanceOf(Array);
-		expect(parsed[0].name).toBe("Heat Equation");
+		expect(result).toBeInstanceOf(Array);
+		expect(result[0].name).toBe("Heat Equation");
 	});
 
 	it("all tools have valid Zod parameter schemas", () => {

@@ -20,13 +20,15 @@ interface ContentResult {
 	relatedConcepts?: Array<{ name: string; relationship: string }>;
 }
 
+interface ScorableChunk {
+	title: string | null;
+	content: string;
+	keywords: string | null;
+	nodeType: string;
+}
+
 function scoreChunk(
-	chunk: {
-		title: string | null;
-		content: string;
-		keywords: string | null;
-		nodeType: string;
-	},
+	chunk: ScorableChunk,
 	queryTerms: string[],
 	query: string,
 	isGraphResult: boolean,
@@ -36,16 +38,12 @@ function scoreChunk(
 	const lowerQuery = query.toLowerCase();
 	const lowerTitle = (chunk.title || "").toLowerCase();
 
-	// Exact title match: 10 points
 	if (lowerTitle === lowerQuery) {
 		score += 10;
-	}
-	// Partial title match: 6 points
-	else if (lowerTitle.includes(lowerQuery)) {
+	} else if (lowerTitle.includes(lowerQuery)) {
 		score += 6;
 	}
 
-	// Keyword term match: 4 points per query term
 	const lowerKeywords = (chunk.keywords || "").toLowerCase();
 	for (const term of queryTerms) {
 		const lt = term.toLowerCase();
@@ -55,7 +53,6 @@ function scoreChunk(
 		}
 	}
 
-	// Content occurrence: 1 point each (capped at 5)
 	const lowerContent = chunk.content.toLowerCase();
 	let occurrences = 0;
 	let searchFrom = 0;
@@ -67,17 +64,59 @@ function scoreChunk(
 	}
 	score += occurrences;
 
-	// Graph result bonus: +3 points
-	if (isGraphResult) {
-		score += 3;
-	}
-
-	// nodeType bonus
-	if (chunk.nodeType === "definition") score += 2;
-	else if (chunk.nodeType === "theorem") score += 2;
+	if (isGraphResult) score += 3;
+	if (chunk.nodeType === "definition" || chunk.nodeType === "theorem") score += 2;
 	else if (chunk.nodeType === "question") score += 1;
 
 	return { score, matchedKeywords };
+}
+
+function buildContentResults(
+	contentChunks: Array<{
+		id: string;
+		title: string | null;
+		content: string;
+		keywords: string | null;
+		nodeType: string;
+		resource: { id: string; name: string; type: string };
+	}>,
+	graphResults: Awaited<ReturnType<typeof searchGraph>>,
+	queryTerms: string[],
+	query: string,
+): ContentResult[] {
+	const graphChunkIds = new Set(graphResults.map((g) => g.chunkId));
+	const graphByChunkId = new Map(graphResults.map((g) => [g.chunkId, g]));
+
+	const results: ContentResult[] = contentChunks.map((chunk) => {
+		const isGraphResult = graphChunkIds.has(chunk.id);
+		const { score, matchedKeywords } = scoreChunk(chunk, queryTerms, query, isGraphResult);
+		const graphMatch = graphByChunkId.get(chunk.id);
+
+		return {
+			chunkId: chunk.id,
+			resourceId: chunk.resource.id,
+			resourceName: chunk.resource.name,
+			resourceType: chunk.resource.type,
+			title: chunk.title,
+			content: chunk.content,
+			source: isGraphResult ? ("both" as const) : ("content" as const),
+			score,
+			keywords: matchedKeywords,
+			relatedConcepts: graphMatch?.relatedConcepts,
+		};
+	});
+
+	// Add graph-only results
+	const seenChunkIds = new Set(results.map((r) => r.chunkId));
+	for (const graphResult of graphResults) {
+		if (seenChunkIds.has(graphResult.chunkId)) continue;
+		const { score, matchedKeywords } = scoreChunk(graphResult, queryTerms, query, true);
+		results.push({ ...graphResult, score, keywords: matchedKeywords });
+		seenChunkIds.add(graphResult.chunkId);
+	}
+
+	results.sort((a, b) => b.score - a.score);
+	return results;
 }
 
 // Search across session materials
@@ -96,7 +135,6 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 	const overFetchLimit = parsed.data.limit * 3;
 	const queryTerms = parsed.data.q.split(/\s+/).filter((t) => t.length > 1);
 
-	// Run content search and graph search in parallel
 	const [contentChunks, graphResults] = await Promise.all([
 		db.chunk.findMany({
 			where: {
@@ -117,75 +155,13 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 		searchGraph(sessionId, parsed.data.q, overFetchLimit),
 	]);
 
-	// Build content results with scores
-	const graphChunkIds = new Set(graphResults.map((g) => g.chunkId));
-
-	const contentResults: ContentResult[] = contentChunks.map((chunk) => {
-		const isGraphResult = graphChunkIds.has(chunk.id);
-		const { score, matchedKeywords } = scoreChunk(
-			{
-				title: chunk.title,
-				content: chunk.content,
-				keywords: chunk.keywords,
-				nodeType: chunk.nodeType,
-			},
-			queryTerms,
-			parsed.data.q,
-			isGraphResult,
-		);
-
-		const graphMatch = graphResults.find((g) => g.chunkId === chunk.id);
-
-		return {
-			chunkId: chunk.id,
-			resourceId: chunk.resource.id,
-			resourceName: chunk.resource.name,
-			resourceType: chunk.resource.type,
-			title: chunk.title,
-			content: chunk.content,
-			source: isGraphResult ? ("both" as const) : ("content" as const),
-			score,
-			keywords: matchedKeywords,
-			relatedConcepts: graphMatch?.relatedConcepts,
-		};
-	});
-
-	// Add graph-only results
-	const seenChunkIds = new Set(contentResults.map((r) => r.chunkId));
-
-	for (const graphResult of graphResults) {
-		if (!seenChunkIds.has(graphResult.chunkId)) {
-			// We need to score graph-only results too
-			const { score, matchedKeywords } = scoreChunk(
-				{
-					title: graphResult.title,
-					content: graphResult.content,
-					keywords: graphResult.keywords,
-					nodeType: graphResult.nodeType,
-				},
-				queryTerms,
-				parsed.data.q,
-				true,
-			);
-
-			contentResults.push({
-				...graphResult,
-				score,
-				keywords: matchedKeywords,
-			});
-			seenChunkIds.add(graphResult.chunkId);
-		}
-	}
-
-	// Sort by score descending, then trim to limit
-	contentResults.sort((a, b) => b.score - a.score);
-	const merged = contentResults.slice(0, parsed.data.limit);
+	const allResults = buildContentResults(contentChunks, graphResults, queryTerms, parsed.data.q);
+	const merged = allResults.slice(0, parsed.data.limit);
 
 	log.info(
 		`GET /sessions/${sessionId}/search — query="${parsed.data.q}", found ${merged.length} results (content=${contentChunks.length}, graph=${graphResults.length})`,
 	);
 
-	// Fire amortisation async (don't await)
 	amortiseSearchResults(
 		sessionId,
 		parsed.data.q,

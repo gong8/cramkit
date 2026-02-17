@@ -62,12 +62,7 @@ async function runIndexJob(jobId: string): Promise<void> {
 		});
 	} catch (error) {
 		// Failure
-		const errorMessage =
-			error instanceof GraphIndexError
-				? error.message
-				: error instanceof Error
-					? error.message
-					: String(error);
+		const errorMessage = error instanceof Error ? error.message : String(error);
 		const errorType = error instanceof GraphIndexError ? error.errorType : ("unknown" as const);
 
 		await db.indexJob.update({

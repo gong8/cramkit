@@ -13,6 +13,63 @@ const log = createLogger("api");
 
 export const resourcesRoutes = new Hono();
 
+// ── Shared helpers ──────────────────────────────────────────────────
+
+function collectFormFiles(formData: FormData): File[] {
+	const files = formData.getAll("files") as File[];
+	const single = formData.get("file") as File | null;
+	return single ? [single, ...files] : files;
+}
+
+async function saveFiles(sessionId: string, resourceId: string, files: File[], role: string) {
+	const db = getDb();
+	for (const f of files) {
+		const rawPath = await saveResourceRawFile(
+			sessionId,
+			resourceId,
+			f.name,
+			Buffer.from(await f.arrayBuffer()),
+		);
+		await db.file.create({
+			data: {
+				resourceId,
+				filename: f.name,
+				role: role as "PRIMARY" | "MARK_SCHEME" | "SOLUTIONS" | "SUPPLEMENT",
+				rawPath,
+				fileSize: f.size,
+			},
+		});
+	}
+}
+
+async function reprocessResource(resourceId: string) {
+	const db = getDb();
+	await db.resource.update({
+		where: { id: resourceId },
+		data: { isIndexed: false, isGraphIndexed: false },
+	});
+	enqueueProcessing(resourceId);
+}
+
+async function deleteResourceRelationships(resourceId: string) {
+	const db = getDb();
+	const chunkIds = (
+		await db.chunk.findMany({
+			where: { resourceId },
+			select: { id: true },
+		})
+	).map((c) => c.id);
+
+	const entityIds = [resourceId, ...chunkIds];
+	await db.relationship.deleteMany({
+		where: {
+			OR: [{ sourceId: { in: entityIds } }, { targetId: { in: entityIds } }],
+		},
+	});
+}
+
+// ── Routes ──────────────────────────────────────────────────────────
+
 // Create resource + upload files (multipart)
 resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 	const db = getDb();
@@ -50,39 +107,13 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 			where: { sessionId, type: "LECTURE_NOTES" },
 		});
 		if (existing) {
-			// Add files to existing lecture notes resource instead
-			const files = formData.getAll("files") as File[];
-			const file = formData.get("file") as File | null;
-			const allFiles = file ? [file, ...files] : files;
-
+			const allFiles = collectFormFiles(formData);
 			if (allFiles.length === 0) {
 				return c.json({ error: "No files provided" }, 400);
 			}
 
-			for (const f of allFiles) {
-				const rawPath = await saveResourceRawFile(
-					sessionId,
-					existing.id,
-					f.name,
-					Buffer.from(await f.arrayBuffer()),
-				);
-				await db.file.create({
-					data: {
-						resourceId: existing.id,
-						filename: f.name,
-						role: "PRIMARY",
-						rawPath,
-						fileSize: f.size,
-					},
-				});
-			}
-
-			// Re-process
-			await db.resource.update({
-				where: { id: existing.id },
-				data: { isIndexed: false, isGraphIndexed: false },
-			});
-			enqueueProcessing(existing.id);
+			await saveFiles(sessionId, existing.id, allFiles, "PRIMARY");
+			await reprocessResource(existing.id);
 
 			const resource = await db.resource.findUnique({
 				where: { id: existing.id },
@@ -107,66 +138,19 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 		},
 	});
 
-	// Process files from form data
-	const primaryFiles = formData.getAll("files") as File[];
-	const singleFile = formData.get("file") as File | null;
-	const allPrimaryFiles = singleFile ? [singleFile, ...primaryFiles] : primaryFiles;
-
-	for (const f of allPrimaryFiles) {
-		const rawPath = await saveResourceRawFile(
-			sessionId,
-			resource.id,
-			f.name,
-			Buffer.from(await f.arrayBuffer()),
-		);
-		await db.file.create({
-			data: {
-				resourceId: resource.id,
-				filename: f.name,
-				role: "PRIMARY",
-				rawPath,
-				fileSize: f.size,
-			},
-		});
-	}
+	// Process primary files from form data
+	const allPrimaryFiles = collectFormFiles(formData);
+	await saveFiles(sessionId, resource.id, allPrimaryFiles, "PRIMARY");
 
 	// Optional mark scheme / solutions file
 	const markSchemeFile = formData.get("markScheme") as File | null;
 	if (markSchemeFile) {
-		const rawPath = await saveResourceRawFile(
-			sessionId,
-			resource.id,
-			markSchemeFile.name,
-			Buffer.from(await markSchemeFile.arrayBuffer()),
-		);
-		await db.file.create({
-			data: {
-				resourceId: resource.id,
-				filename: markSchemeFile.name,
-				role: "MARK_SCHEME",
-				rawPath,
-				fileSize: markSchemeFile.size,
-			},
-		});
+		await saveFiles(sessionId, resource.id, [markSchemeFile], "MARK_SCHEME");
 	}
 
 	const solutionsFile = formData.get("solutions") as File | null;
 	if (solutionsFile) {
-		const rawPath = await saveResourceRawFile(
-			sessionId,
-			resource.id,
-			solutionsFile.name,
-			Buffer.from(await solutionsFile.arrayBuffer()),
-		);
-		await db.file.create({
-			data: {
-				resourceId: resource.id,
-				filename: solutionsFile.name,
-				role: "SOLUTIONS",
-				rawPath,
-				fileSize: solutionsFile.size,
-			},
-		});
+		await saveFiles(sessionId, resource.id, [solutionsFile], "SOLUTIONS");
 	}
 
 	enqueueProcessing(resource.id);
@@ -321,25 +305,8 @@ resourcesRoutes.delete("/:id", async (c) => {
 		return c.json({ error: "Resource not found" }, 404);
 	}
 
-	// Clean up relationships referencing this resource or its chunks
-	const chunkIds = (
-		await db.chunk.findMany({
-			where: { resourceId: resource.id },
-			select: { id: true },
-		})
-	).map((c) => c.id);
-
-	const sourceIds = [resource.id, ...chunkIds];
-	await db.relationship.deleteMany({
-		where: {
-			OR: [{ sourceId: { in: sourceIds } }, { targetId: { in: sourceIds } }],
-		},
-	});
-
-	// Delete resource directory from disk
+	await deleteResourceRelationships(resource.id);
 	await deleteResourceDir(resource.sessionId, resource.id);
-
-	// Delete resource (cascades to files + chunks)
 	await db.resource.delete({ where: { id: resource.id } });
 
 	log.info(`DELETE /resources/${resource.id} — deleted "${resource.name}"`);
@@ -358,38 +325,14 @@ resourcesRoutes.post("/:id/files", async (c) => {
 
 	const formData = await c.req.formData();
 	const role = (formData.get("role") as string) || "PRIMARY";
-	const files = formData.getAll("files") as File[];
-	const singleFile = formData.get("file") as File | null;
-	const allFiles = singleFile ? [singleFile, ...files] : files;
+	const allFiles = collectFormFiles(formData);
 
 	if (allFiles.length === 0) {
 		return c.json({ error: "No files provided" }, 400);
 	}
 
-	for (const f of allFiles) {
-		const rawPath = await saveResourceRawFile(
-			resource.sessionId,
-			resourceId,
-			f.name,
-			Buffer.from(await f.arrayBuffer()),
-		);
-		await db.file.create({
-			data: {
-				resourceId,
-				filename: f.name,
-				role: role as "PRIMARY" | "MARK_SCHEME" | "SOLUTIONS" | "SUPPLEMENT",
-				rawPath,
-				fileSize: f.size,
-			},
-		});
-	}
-
-	// Re-process
-	await db.resource.update({
-		where: { id: resourceId },
-		data: { isIndexed: false, isGraphIndexed: false },
-	});
-	enqueueProcessing(resourceId);
+	await saveFiles(resource.sessionId, resourceId, allFiles, role);
+	await reprocessResource(resourceId);
 
 	const result = await db.resource.findUnique({
 		where: { id: resourceId },
@@ -416,22 +359,8 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 	// Check if resource still has files
 	const remainingFiles = await db.file.count({ where: { resourceId } });
 	if (remainingFiles === 0) {
-		// Clean up relationships referencing this resource or its chunks
-		const chunkIds = (
-			await db.chunk.findMany({
-				where: { resourceId },
-				select: { id: true },
-			})
-		).map((c) => c.id);
+		await deleteResourceRelationships(resourceId);
 
-		const entityIds = [resourceId, ...chunkIds];
-		await db.relationship.deleteMany({
-			where: {
-				OR: [{ sourceId: { in: entityIds } }, { targetId: { in: entityIds } }],
-			},
-		});
-
-		// Delete the entire resource if no files left
 		const parentResource = await db.resource.findUnique({ where: { id: resourceId } });
 		if (!parentResource) {
 			return c.json({ error: "Resource not found" }, 404);
@@ -444,12 +373,7 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 		return c.json({ ok: true, resourceDeleted: true });
 	}
 
-	// Re-process
-	await db.resource.update({
-		where: { id: resourceId },
-		data: { isIndexed: false, isGraphIndexed: false },
-	});
-	enqueueProcessing(resourceId);
+	await reprocessResource(resourceId);
 
 	log.info(`DELETE /resources/${resourceId}/files/${fileId} — file removed, re-processing`);
 	return c.json({ ok: true });

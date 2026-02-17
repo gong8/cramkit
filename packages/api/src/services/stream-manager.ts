@@ -35,6 +35,189 @@ const CLEANUP_DELAY_MS = 60_000;
 
 const activeStreams = new Map<string, ActiveStream>();
 
+/** Persist the assistant message and update the conversation timestamp */
+async function persistMessage(
+	db: PrismaClient,
+	conversationId: string,
+	content: string,
+	toolCallsData: ToolCallData[],
+): Promise<void> {
+	await db.message.create({
+		data: {
+			conversationId,
+			role: "assistant",
+			content: stripToolCallXml(content),
+			toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
+		},
+	});
+	await db.conversation.update({
+		where: { id: conversationId },
+		data: { updatedAt: new Date() },
+	});
+}
+
+/** Safely persist, swallowing errors (e.g. if the conversation was deleted) */
+async function safePersist(
+	db: PrismaClient,
+	conversationId: string,
+	stream: ActiveStream,
+): Promise<void> {
+	if (!stream.fullContent && stream.toolCallsData.length === 0) return;
+	try {
+		await persistMessage(db, conversationId, stream.fullContent, stream.toolCallsData);
+	} catch (e) {
+		log.warn(
+			`Failed to persist assistant message — conversation ${conversationId} may have been deleted`,
+			e,
+		);
+	}
+}
+
+/** Dispatch a parsed SSE data payload, updating stream state and re-emitting */
+function dispatchEvent(
+	stream: ActiveStream,
+	toolCallIndex: Map<string, number>,
+	emit: (event: string, data: string) => void,
+	eventType: string,
+	parsed: Record<string, unknown>,
+): void {
+	switch (eventType) {
+		case "content": {
+			if (parsed.content) {
+				stream.fullContent += parsed.content;
+				emit("content", JSON.stringify({ content: parsed.content }));
+			}
+			break;
+		}
+
+		case "tool_call_start": {
+			const { toolCallId, toolName } = parsed as { toolCallId: string; toolName: string };
+			const idx = stream.toolCallsData.length;
+			stream.toolCallsData.push({ toolCallId, toolName, args: {} });
+			toolCallIndex.set(toolCallId, idx);
+			emit("tool_call_start", JSON.stringify({ toolCallId, toolName }));
+			break;
+		}
+
+		case "tool_call_args": {
+			const { toolCallId, toolName, args } = parsed as {
+				toolCallId: string;
+				toolName: string;
+				args: Record<string, unknown>;
+			};
+			const idx = toolCallIndex.get(toolCallId);
+			if (idx !== undefined) {
+				stream.toolCallsData[idx].args = args;
+			}
+			emit("tool_call_args", JSON.stringify({ toolCallId, toolName, args }));
+			break;
+		}
+
+		case "tool_result": {
+			const { toolCallId, result, isError } = parsed as {
+				toolCallId: string;
+				result: string;
+				isError: boolean;
+			};
+			const idx = toolCallIndex.get(toolCallId);
+			if (idx !== undefined) {
+				stream.toolCallsData[idx].result = result;
+				stream.toolCallsData[idx].isError = isError;
+			}
+			emit("tool_result", JSON.stringify({ toolCallId, result, isError }));
+			break;
+		}
+
+		case "thinking_start": {
+			emit("thinking_start", JSON.stringify({}));
+			break;
+		}
+
+		case "thinking_delta": {
+			emit("thinking_delta", JSON.stringify({ text: parsed.text }));
+			break;
+		}
+
+		case "error": {
+			if (parsed.error) {
+				emit("error", JSON.stringify({ error: parsed.error }));
+			}
+			break;
+		}
+	}
+}
+
+/** Read the CLI stream, dispatch events, and persist on completion */
+async function consumeStream(
+	stream: ActiveStream,
+	cliStream: ReadableStream<Uint8Array>,
+	db: PrismaClient,
+	emit: (event: string, data: string) => void,
+): Promise<void> {
+	const reader = cliStream.getReader();
+	const decoder = new TextDecoder();
+	const toolCallIndex = new Map<string, number>();
+	let buffer = "";
+	let currentEventType = "content";
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split("\n");
+			buffer = lines.pop() || "";
+
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (!trimmed) continue;
+
+				if (trimmed.startsWith("event: ")) {
+					currentEventType = trimmed.slice(7);
+					continue;
+				}
+
+				if (!trimmed.startsWith("data: ")) continue;
+				const data = trimmed.slice(6);
+
+				if (data === "[DONE]") {
+					await safePersist(db, stream.conversationId, stream);
+					stream.status = "complete";
+					emit("done", "[DONE]");
+					return;
+				}
+
+				try {
+					const parsed = JSON.parse(data);
+					dispatchEvent(stream, toolCallIndex, emit, currentEventType, parsed);
+				} catch {
+					// Skip unparseable
+				}
+
+				currentEventType = "content";
+			}
+		}
+
+		// Stream ended without [DONE]
+		await safePersist(db, stream.conversationId, stream);
+		stream.status = "complete";
+		emit("done", "[DONE]");
+	} catch (error) {
+		log.error("stream-manager — streaming error", error);
+		await safePersist(db, stream.conversationId, stream);
+		stream.status = "error";
+		emit("error", JSON.stringify({ error: "Stream failed" }));
+		emit("done", "[DONE]");
+	} finally {
+		reader.releaseLock();
+		setTimeout(() => {
+			activeStreams.delete(stream.conversationId);
+			log.info(`stream-manager — cleaned up stream for ${stream.conversationId}`);
+		}, CLEANUP_DELAY_MS);
+	}
+}
+
 /**
  * Start a background stream consumer that reads from a CLI ReadableStream,
  * buffers SSE events, persists the result to DB on completion, and notifies
@@ -62,8 +245,6 @@ export function startStream(
 		done: Promise.resolve(), // replaced below
 	};
 
-	const toolCallIndex = new Map<string, number>();
-
 	function emit(event: string, data: string): void {
 		stream.events.push({ event, data });
 		for (const cb of stream.subscribers) {
@@ -75,184 +256,7 @@ export function startStream(
 		}
 	}
 
-	stream.done = (async () => {
-		const reader = cliStream.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-		let currentEventType = "content";
-
-		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-
-				for (const line of lines) {
-					const trimmed = line.trim();
-					if (!trimmed) continue;
-
-					if (trimmed.startsWith("event: ")) {
-						currentEventType = trimmed.slice(7);
-						continue;
-					}
-
-					if (trimmed.startsWith("data: ")) {
-						const data = trimmed.slice(6);
-
-						if (data === "[DONE]") {
-							// Persist assistant message
-							if (stream.fullContent || stream.toolCallsData.length > 0) {
-								try {
-									await db.message.create({
-										data: {
-											conversationId,
-											role: "assistant",
-											content: stripToolCallXml(stream.fullContent),
-											toolCalls:
-												stream.toolCallsData.length > 0
-													? JSON.stringify(stream.toolCallsData)
-													: null,
-										},
-									});
-									await db.conversation.update({
-										where: { id: conversationId },
-										data: { updatedAt: new Date() },
-									});
-								} catch (e) {
-									log.warn(
-										`Failed to persist assistant message — conversation ${conversationId} may have been deleted`,
-										e,
-									);
-								}
-							}
-							stream.status = "complete";
-							emit("done", "[DONE]");
-							return;
-						}
-
-						try {
-							const parsed = JSON.parse(data);
-
-							switch (currentEventType) {
-								case "content": {
-									if (parsed.content) {
-										stream.fullContent += parsed.content;
-										emit("content", JSON.stringify({ content: parsed.content }));
-									}
-									break;
-								}
-
-								case "tool_call_start": {
-									const { toolCallId, toolName } = parsed;
-									const idx = stream.toolCallsData.length;
-									stream.toolCallsData.push({ toolCallId, toolName, args: {} });
-									toolCallIndex.set(toolCallId, idx);
-									emit("tool_call_start", JSON.stringify({ toolCallId, toolName }));
-									break;
-								}
-
-								case "tool_call_args": {
-									const { toolCallId, toolName, args } = parsed;
-									const idx = toolCallIndex.get(toolCallId);
-									if (idx !== undefined) {
-										stream.toolCallsData[idx].args = args;
-									}
-									emit("tool_call_args", JSON.stringify({ toolCallId, toolName, args }));
-									break;
-								}
-
-								case "tool_result": {
-									const { toolCallId, result, isError } = parsed;
-									const idx = toolCallIndex.get(toolCallId);
-									if (idx !== undefined) {
-										stream.toolCallsData[idx].result = result;
-										stream.toolCallsData[idx].isError = isError;
-									}
-									emit("tool_result", JSON.stringify({ toolCallId, result, isError }));
-									break;
-								}
-
-								case "thinking_start": {
-									emit("thinking_start", JSON.stringify({}));
-									break;
-								}
-
-								case "thinking_delta": {
-									emit("thinking_delta", JSON.stringify({ text: parsed.text }));
-									break;
-								}
-
-								case "error": {
-									if (parsed.error) {
-										emit("error", JSON.stringify({ error: parsed.error }));
-									}
-									break;
-								}
-							}
-						} catch {
-							// Skip unparseable
-						}
-
-						currentEventType = "content";
-					}
-				}
-			}
-
-			// Stream ended without [DONE] — persist partial content
-			if (stream.fullContent || stream.toolCallsData.length > 0) {
-				try {
-					await db.message.create({
-						data: {
-							conversationId,
-							role: "assistant",
-							content: stripToolCallXml(stream.fullContent),
-							toolCalls:
-								stream.toolCallsData.length > 0 ? JSON.stringify(stream.toolCallsData) : null,
-						},
-					});
-					await db.conversation.update({
-						where: { id: conversationId },
-						data: { updatedAt: new Date() },
-					});
-				} catch {
-					// conversation deleted
-				}
-			}
-			stream.status = "complete";
-			emit("done", "[DONE]");
-		} catch (error) {
-			log.error("stream-manager — streaming error", error);
-			// Persist partial content on error
-			if (stream.fullContent || stream.toolCallsData.length > 0) {
-				try {
-					await db.message.create({
-						data: {
-							conversationId,
-							role: "assistant",
-							content: stripToolCallXml(stream.fullContent),
-							toolCalls:
-								stream.toolCallsData.length > 0 ? JSON.stringify(stream.toolCallsData) : null,
-						},
-					});
-				} catch {
-					// ignore
-				}
-			}
-			stream.status = "error";
-			emit("error", JSON.stringify({ error: "Stream failed" }));
-			emit("done", "[DONE]");
-		} finally {
-			reader.releaseLock();
-			// Clean up from map after a delay
-			setTimeout(() => {
-				activeStreams.delete(conversationId);
-				log.info(`stream-manager — cleaned up stream for ${conversationId}`);
-			}, CLEANUP_DELAY_MS);
-		}
-	})();
+	stream.done = consumeStream(stream, cliStream, db, emit);
 
 	activeStreams.set(conversationId, stream);
 	log.info(`stream-manager — started stream for ${conversationId}`);

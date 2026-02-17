@@ -1,7 +1,7 @@
 import { getDb } from "@cramkit/shared";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanDb } from "../fixtures/helpers";
+import { cleanDb } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),

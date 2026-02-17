@@ -60,8 +60,7 @@ export async function amortiseSearchResults(
 		const existingSet = new Set(existing.map((r) => `${r.sourceId}:${r.targetId}`));
 		const chunkTitleMap = new Map(chunks.map((c) => [c.id, c.title]));
 
-		type RelData = Parameters<typeof db.relationship.create>[0]["data"];
-		const toCreate: RelData[] = [];
+		const toCreate: Prisma.RelationshipCreateManyInput[] = [];
 
 		for (const result of contentResults) {
 			if (toCreate.length >= MAX_NEW_RELATIONSHIPS) break;
@@ -85,9 +84,7 @@ export async function amortiseSearchResults(
 		}
 
 		if (toCreate.length > 0) {
-			await db.relationship.createMany({
-				data: toCreate as Prisma.RelationshipCreateManyInput[],
-			});
+			await db.relationship.createMany({ data: toCreate });
 			log.info(
 				`amortiseSearchResults — created ${toCreate.length} new relationships` +
 					` for query "${query}"`,

@@ -12,6 +12,16 @@ const log = createLogger("api");
 
 export const graphRoutes = new Hono();
 
+function conceptRelationshipWhere(sessionId: string, conceptId: string) {
+	return {
+		sessionId,
+		OR: [
+			{ sourceType: "concept" as const, sourceId: conceptId },
+			{ targetType: "concept" as const, targetId: conceptId },
+		],
+	};
+}
+
 // List concepts for session
 graphRoutes.get("/sessions/:sessionId/concepts", async (c) => {
 	const db = getDb();
@@ -37,13 +47,7 @@ graphRoutes.get("/concepts/:id", async (c) => {
 	}
 
 	const relationships = await db.relationship.findMany({
-		where: {
-			sessionId: concept.sessionId,
-			OR: [
-				{ sourceType: "concept", sourceId: id },
-				{ targetType: "concept", targetId: id },
-			],
-		},
+		where: conceptRelationshipWhere(concept.sessionId, id),
 	});
 
 	log.info(`GET /graph/concepts/${id} — "${concept.name}", ${relationships.length} relationships`);
@@ -60,15 +64,8 @@ graphRoutes.delete("/concepts/:id", async (c) => {
 		return c.json({ error: "Concept not found" }, 404);
 	}
 
-	// Delete relationships involving this concept
 	await db.relationship.deleteMany({
-		where: {
-			sessionId: concept.sessionId,
-			OR: [
-				{ sourceType: "concept", sourceId: id },
-				{ targetType: "concept", targetId: id },
-			],
-		},
+		where: conceptRelationshipWhere(concept.sessionId, id),
 	});
 
 	await db.concept.delete({ where: { id } });
@@ -137,26 +134,21 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 		// No body or invalid JSON — default to non-reindex
 	}
 
-	let resourceIds: string[];
-	if (reindex) {
-		// Include already-indexed resources; reset their isGraphIndexed flag
-		const resources = await db.resource.findMany({
-			where: { sessionId, isIndexed: true },
-			select: { id: true },
+	const resources = await db.resource.findMany({
+		where: {
+			sessionId,
+			isIndexed: true,
+			...(reindex ? {} : { isGraphIndexed: false }),
+		},
+		select: { id: true },
+	});
+	const resourceIds = resources.map((r) => r.id);
+
+	if (reindex && resourceIds.length > 0) {
+		await db.resource.updateMany({
+			where: { id: { in: resourceIds } },
+			data: { isGraphIndexed: false, graphIndexDurationMs: null },
 		});
-		resourceIds = resources.map((r) => r.id);
-		if (resourceIds.length > 0) {
-			await db.resource.updateMany({
-				where: { id: { in: resourceIds } },
-				data: { isGraphIndexed: false, graphIndexDurationMs: null },
-			});
-		}
-	} else {
-		const resources = await db.resource.findMany({
-			where: { sessionId, isIndexed: true, isGraphIndexed: false },
-			select: { id: true },
-		});
-		resourceIds = resources.map((r) => r.id);
 	}
 
 	await enqueueSessionGraphIndexing(sessionId, resourceIds);

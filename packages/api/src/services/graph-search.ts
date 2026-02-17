@@ -15,6 +15,54 @@ export interface GraphSearchResult {
 	relatedConcepts: Array<{ name: string; relationship: string }>;
 }
 
+interface ConceptRelEdge {
+	entityId: string;
+	entityType: string;
+	conceptName: string;
+	relationship: string;
+}
+
+function extractEdges(
+	relationships: Array<{
+		sourceType: string;
+		sourceId: string;
+		targetType: string;
+		targetId: string;
+		relationship: string;
+	}>,
+	conceptIds: string[],
+	conceptNames: Map<string, string>,
+): ConceptRelEdge[] {
+	const edges: ConceptRelEdge[] = [];
+	for (const rel of relationships) {
+		const isSourceConcept = rel.sourceType === "concept" && conceptIds.includes(rel.sourceId);
+		const isTargetConcept = rel.targetType === "concept" && conceptIds.includes(rel.targetId);
+		if (!isSourceConcept && !isTargetConcept) continue;
+
+		const conceptId = isSourceConcept ? rel.sourceId : rel.targetId;
+		const entityId = isSourceConcept ? rel.targetId : rel.sourceId;
+		const entityType = isSourceConcept ? rel.targetType : rel.sourceType;
+
+		edges.push({
+			entityId,
+			entityType,
+			conceptName: conceptNames.get(conceptId) || "",
+			relationship: rel.relationship,
+		});
+	}
+	return edges;
+}
+
+function appendConcept(
+	map: Map<string, Array<{ name: string; relationship: string }>>,
+	chunkId: string,
+	edge: { conceptName: string; relationship: string },
+) {
+	const list = map.get(chunkId) || [];
+	list.push({ name: edge.conceptName, relationship: edge.relationship });
+	map.set(chunkId, list);
+}
+
 export async function searchGraph(
 	sessionId: string,
 	query: string,
@@ -56,38 +104,18 @@ export async function searchGraph(
 		},
 	});
 
-	// Collect chunk IDs and resource IDs from relationships
+	const edges = extractEdges(relationships, conceptIds, conceptNames);
+
 	const chunkIds = new Set<string>();
 	const resourceIds = new Set<string>();
 	const chunkConceptMap = new Map<string, Array<{ name: string; relationship: string }>>();
 
-	for (const rel of relationships) {
-		let entityId: string | null = null;
-		let entityType: string | null = null;
-		let conceptId: string | null = null;
-
-		if (rel.sourceType === "concept" && conceptIds.includes(rel.sourceId)) {
-			entityId = rel.targetId;
-			entityType = rel.targetType;
-			conceptId = rel.sourceId;
-		} else if (rel.targetType === "concept" && conceptIds.includes(rel.targetId)) {
-			entityId = rel.sourceId;
-			entityType = rel.sourceType;
-			conceptId = rel.targetId;
-		}
-
-		if (!entityId || !entityType || !conceptId) continue;
-
-		if (entityType === "chunk") {
-			chunkIds.add(entityId);
-			const existing = chunkConceptMap.get(entityId) || [];
-			existing.push({
-				name: conceptNames.get(conceptId) || "",
-				relationship: rel.relationship,
-			});
-			chunkConceptMap.set(entityId, existing);
-		} else if (entityType === "resource") {
-			resourceIds.add(entityId);
+	for (const edge of edges) {
+		if (edge.entityType === "chunk") {
+			chunkIds.add(edge.entityId);
+			appendConcept(chunkConceptMap, edge.entityId, edge);
+		} else if (edge.entityType === "resource") {
+			resourceIds.add(edge.entityId);
 		}
 	}
 
@@ -99,19 +127,10 @@ export async function searchGraph(
 		});
 		for (const rc of resourceChunks) {
 			chunkIds.add(rc.id);
-			const resourceRels = relationships.filter(
-				(r) =>
-					(r.sourceType === "resource" && r.sourceId === rc.resourceId) ||
-					(r.targetType === "resource" && r.targetId === rc.resourceId),
-			);
-			for (const rel of resourceRels) {
-				const conceptId = rel.sourceType === "concept" ? rel.sourceId : rel.targetId;
-				const existing = chunkConceptMap.get(rc.id) || [];
-				existing.push({
-					name: conceptNames.get(conceptId) || "",
-					relationship: rel.relationship,
-				});
-				chunkConceptMap.set(rc.id, existing);
+			for (const edge of edges) {
+				if (edge.entityType === "resource" && edge.entityId === rc.resourceId) {
+					appendConcept(chunkConceptMap, rc.id, edge);
+				}
 			}
 		}
 	}
