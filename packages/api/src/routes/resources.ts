@@ -1,5 +1,7 @@
 import { createLogger, createResourceSchema, getDb, updateResourceSchema } from "@cramkit/shared";
 import { Hono } from "hono";
+import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { enqueueProcessing } from "../lib/queue.js";
 import { deleteResourceDir, readResourceContent, saveResourceRawFile } from "../services/storage.js";
 
@@ -394,4 +396,36 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 
 	log.info(`DELETE /resources/${resourceId}/files/${fileId} — file removed, re-processing`);
 	return c.json({ ok: true });
+});
+
+// Serve raw file (PDF, etc.)
+const MIME_TYPES: Record<string, string> = {
+	".pdf": "application/pdf",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".txt": "text/plain",
+};
+
+resourcesRoutes.get("/:id/files/:fileId/raw", async (c) => {
+	const db = getDb();
+	const file = await db.file.findUnique({ where: { id: c.req.param("fileId") } });
+	if (!file || file.resourceId !== c.req.param("id")) {
+		return c.json({ error: "File not found" }, 404);
+	}
+
+	try {
+		const data = await readFile(file.rawPath);
+		const ext = extname(file.filename).toLowerCase();
+		const contentType = MIME_TYPES[ext] || "application/octet-stream";
+		return new Response(data, {
+			headers: {
+				"Content-Type": contentType,
+				"Content-Disposition": `inline; filename="${file.filename}"`,
+			},
+		});
+	} catch {
+		log.error(`GET /resources/${c.req.param("id")}/files/${file.id}/raw — file not found on disk`);
+		return c.json({ error: "File not found on disk" }, 404);
+	}
 });

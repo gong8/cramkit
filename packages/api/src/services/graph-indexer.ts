@@ -219,77 +219,82 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 		return;
 	}
 
-	// Delete existing system-created relationships for this resource before re-indexing
-	const chunkIds = resource.chunks.map((c) => c.id);
-	const sourceIds = [resourceId, ...chunkIds];
-	await db.relationship.deleteMany({
-		where: {
-			sessionId: resource.sessionId,
-			createdBy: "system",
-			OR: [
-				{ sourceId: { in: sourceIds } },
-				{ sourceType: "resource", sourceId: resourceId },
-			],
-		},
-	});
-
-	// Upsert concepts
-	for (const concept of result.concepts) {
-		const name = toTitleCase(concept.name);
-		await db.concept.upsert({
+	// All DB writes happen atomically in a single transaction
+	await db.$transaction(async (tx) => {
+		// Delete existing system-created relationships for this resource before re-indexing
+		const chunkIds = resource.chunks.map((c) => c.id);
+		const sourceIds = [resourceId, ...chunkIds];
+		await tx.relationship.deleteMany({
 			where: {
-				sessionId_name: { sessionId: resource.sessionId, name },
-			},
-			update: {
-				description: concept.description || undefined,
-				aliases: concept.aliases || undefined,
-			},
-			create: {
 				sessionId: resource.sessionId,
-				name,
-				description: concept.description || null,
-				aliases: concept.aliases || null,
 				createdBy: "system",
+				OR: [
+					{ sourceId: { in: sourceIds } },
+					{ sourceType: "resource", sourceId: resourceId },
+				],
 			},
 		});
-	}
 
-	// Reload concepts to get IDs
-	const allConcepts = await db.concept.findMany({
-		where: { sessionId: resource.sessionId },
-		select: { id: true, name: true },
-	});
-	const conceptMap = new Map(allConcepts.map((c) => [c.name, c.id]));
-
-	// Build chunk lookup by title for targeted relationships
-	const chunkByTitle = new Map<string, string>();
-	for (const chunk of resource.chunks) {
-		if (chunk.title) {
-			chunkByTitle.set(chunk.title.toLowerCase(), chunk.id);
+		// Upsert concepts
+		for (const concept of result.concepts) {
+			const name = toTitleCase(concept.name);
+			await tx.concept.upsert({
+				where: {
+					sessionId_name: { sessionId: resource.sessionId, name },
+				},
+				update: {
+					description: concept.description || undefined,
+					aliases: concept.aliases || undefined,
+				},
+				create: {
+					sessionId: resource.sessionId,
+					name,
+					description: concept.description || null,
+					aliases: concept.aliases || null,
+					createdBy: "system",
+				},
+			});
 		}
-	}
 
-	// Create resource-concept relationships (point to specific chunks when possible)
-	for (const link of result.file_concept_links) {
-		const conceptName = toTitleCase(link.conceptName);
-		const conceptId = conceptMap.get(conceptName);
-		if (!conceptId) continue;
+		// Reload concepts to get IDs
+		const allConcepts = await tx.concept.findMany({
+			where: { sessionId: resource.sessionId },
+			select: { id: true, name: true },
+		});
+		const conceptMap = new Map(allConcepts.map((c) => [c.name, c.id]));
 
-		let sourceType = "resource";
-		let sourceId = resourceId;
-		let sourceLabel = resource.name;
-
-		if (link.chunkTitle) {
-			const chunkId = chunkByTitle.get(link.chunkTitle.toLowerCase());
-			if (chunkId) {
-				sourceType = "chunk";
-				sourceId = chunkId;
-				sourceLabel = link.chunkTitle;
+		// Build chunk lookup by title for targeted relationships
+		const chunkByTitle = new Map<string, string>();
+		for (const chunk of resource.chunks) {
+			if (chunk.title) {
+				chunkByTitle.set(chunk.title.toLowerCase(), chunk.id);
 			}
 		}
 
-		await db.relationship.create({
-			data: {
+		// Batch all relationship creates
+		type RelData = Parameters<typeof tx.relationship.create>[0]["data"];
+		const relationshipsToCreate: RelData[] = [];
+
+		// Resource-concept relationships (point to specific chunks when possible)
+		for (const link of result.file_concept_links) {
+			const conceptName = toTitleCase(link.conceptName);
+			const conceptId = conceptMap.get(conceptName);
+			if (!conceptId) continue;
+
+			let sourceType = "resource";
+			let sourceId = resourceId;
+			let sourceLabel = resource.name;
+
+			if (link.chunkTitle) {
+				const chunkId = chunkByTitle.get(link.chunkTitle.toLowerCase());
+				if (chunkId) {
+					sourceType = "chunk";
+					sourceId = chunkId;
+					sourceLabel = link.chunkTitle;
+				}
+			}
+
+			relationshipsToCreate.push({
 				sessionId: resource.sessionId,
 				sourceType,
 				sourceId,
@@ -300,18 +305,16 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 				relationship: link.relationship,
 				confidence: link.confidence ?? 0.8,
 				createdBy: "system",
-			},
-		});
-	}
+			});
+		}
 
-	// Create concept-concept relationships
-	for (const link of result.concept_concept_links) {
-		const sourceId = conceptMap.get(toTitleCase(link.sourceConcept));
-		const targetId = conceptMap.get(toTitleCase(link.targetConcept));
-		if (!sourceId || !targetId) continue;
+		// Concept-concept relationships
+		for (const link of result.concept_concept_links) {
+			const sourceId = conceptMap.get(toTitleCase(link.sourceConcept));
+			const targetId = conceptMap.get(toTitleCase(link.targetConcept));
+			if (!sourceId || !targetId) continue;
 
-		await db.relationship.create({
-			data: {
+			relationshipsToCreate.push({
 				sessionId: resource.sessionId,
 				sourceType: "concept",
 				sourceId,
@@ -322,22 +325,20 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 				relationship: link.relationship,
 				confidence: link.confidence ?? 0.7,
 				createdBy: "system",
-			},
-		});
-	}
+			});
+		}
 
-	// Create question-concept relationships
-	for (const link of result.question_concept_links) {
-		const conceptName = toTitleCase(link.conceptName);
-		const conceptId = conceptMap.get(conceptName);
-		if (!conceptId) continue;
+		// Question-concept relationships
+		for (const link of result.question_concept_links) {
+			const conceptName = toTitleCase(link.conceptName);
+			const conceptId = conceptMap.get(conceptName);
+			if (!conceptId) continue;
 
-		const matchingChunk = resource.chunks.find(
-			(c) => c.title?.includes(link.questionLabel) || c.content.includes(link.questionLabel),
-		);
+			const matchingChunk = resource.chunks.find(
+				(c) => c.title?.includes(link.questionLabel) || c.content.includes(link.questionLabel),
+			);
 
-		await db.relationship.create({
-			data: {
+			relationshipsToCreate.push({
 				sessionId: resource.sessionId,
 				sourceType: matchingChunk ? "chunk" : "resource",
 				sourceId: matchingChunk?.id || resourceId,
@@ -348,16 +349,21 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 				relationship: link.relationship,
 				confidence: link.confidence ?? 0.8,
 				createdBy: "system",
-			},
-		});
-	}
+			});
+		}
 
-	// Mark resource as graph-indexed with duration
-	const graphIndexDurationMs = Date.now() - startTime;
-	await db.resource.update({
-		where: { id: resourceId },
-		data: { isGraphIndexed: true, graphIndexDurationMs },
-	});
+		// Batch insert all relationships at once
+		if (relationshipsToCreate.length > 0) {
+			await tx.relationship.createMany({ data: relationshipsToCreate });
+		}
+
+		// Mark resource as graph-indexed with duration
+		const graphIndexDurationMs = Date.now() - startTime;
+		await tx.resource.update({
+			where: { id: resourceId },
+			data: { isGraphIndexed: true, graphIndexDurationMs },
+		});
+	}, { timeout: 30000 });
 
 	log.info(
 		`indexResourceGraph — completed "${resource.name}": ${result.concepts.length} concepts, ${result.file_concept_links.length + result.concept_concept_links.length + result.question_concept_links.length} relationships`,

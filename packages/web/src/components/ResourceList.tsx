@@ -295,7 +295,14 @@ export function ResourceList({
 									>
 										<div className="flex items-center gap-2">
 											<FileText className="h-3.5 w-3.5 text-muted-foreground" />
-											<span className="text-muted-foreground">{file.filename}</span>
+											<a
+												href={`/api/resources/${resource.id}/files/${file.id}/raw`}
+												target="_blank"
+												rel="noopener noreferrer"
+												className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+											>
+												{file.filename}
+											</a>
 											{file.role !== "PRIMARY" && (
 												<span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
 													{ROLE_LABELS[file.role] || file.role}

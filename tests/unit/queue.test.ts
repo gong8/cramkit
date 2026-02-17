@@ -64,7 +64,7 @@ describe("queue", () => {
 		expect(size).toBeGreaterThanOrEqual(1);
 	});
 
-	it("indexing queue concurrency is 2", async () => {
+	it("indexing queue concurrency is 1", async () => {
 		let concurrent = 0;
 		let maxConcurrent = 0;
 		const completed: string[] = [];
@@ -72,29 +72,25 @@ describe("queue", () => {
 		vi.mocked(indexResourceGraph).mockImplementation(async (resourceId: string) => {
 			concurrent++;
 			maxConcurrent = Math.max(maxConcurrent, concurrent);
-			await new Promise((resolve) => setTimeout(resolve, 50));
+			await new Promise((resolve) => setTimeout(resolve, 20));
 			concurrent--;
 			completed.push(resourceId);
 		});
 
-		const ids = ["conc-r1", "conc-r2", "conc-r3", "conc-r4", "conc-r5"];
+		const ids = ["conc-r1", "conc-r2", "conc-r3"];
 		for (const id of ids) {
 			enqueueGraphIndexing(id);
 		}
 
 		await vi.waitFor(
 			() => {
-				expect(completed.length).toBeGreaterThanOrEqual(5);
+				expect(completed).toEqual(expect.arrayContaining(ids));
 			},
 			{ timeout: 5000 },
 		);
 
-		// Verify all our IDs completed
-		for (const id of ids) {
-			expect(completed).toContain(id);
-		}
-
-		expect(maxConcurrent).toBe(2);
+		// Concurrency reduced to 1 to prevent SQLite write contention
+		expect(maxConcurrent).toBe(1);
 	});
 
 	it("processing and indexing queues are independent", async () => {
@@ -117,8 +113,8 @@ describe("queue", () => {
 
 		await vi.waitFor(
 			() => {
-				expect(processResource).toHaveBeenCalledTimes(1);
-				expect(indexResourceGraph).toHaveBeenCalledTimes(1);
+				expect(processResource).toHaveBeenCalledWith("resource-a");
+				expect(indexResourceGraph).toHaveBeenCalledWith("resource-b");
 			},
 			{ timeout: 2000 },
 		);

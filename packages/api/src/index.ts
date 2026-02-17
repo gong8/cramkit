@@ -1,4 +1,4 @@
-import { createLogger } from "@cramkit/shared";
+import { createLogger, initDb } from "@cramkit/shared";
 import { Hono } from "hono";
 import { cors } from "./middleware/cors.js";
 
@@ -10,6 +10,8 @@ import { relationshipsRoutes } from "./routes/relationships.js";
 import { resourcesRoutes } from "./routes/resources.js";
 import { searchRoutes } from "./routes/search.js";
 import { sessionsRoutes } from "./routes/sessions.js";
+
+await initDb();
 
 const app = new Hono();
 

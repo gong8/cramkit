@@ -68,6 +68,9 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 
 	const handleTypeSelect = (type: ResourceType) => {
 		setResourceType(type);
+		if (type === "LECTURE_NOTES") {
+			setSplitMode("split");
+		}
 		setStep("details");
 	};
 

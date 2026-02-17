@@ -5,7 +5,7 @@ import { indexResourceGraph } from "../services/graph-indexer.js";
 
 const log = createLogger("api");
 const queue = new PQueue({ concurrency: 1 });
-const indexingQueue = new PQueue({ concurrency: 2 });
+const indexingQueue = new PQueue({ concurrency: 1 });
 
 export function enqueueProcessing(resourceId: string): void {
 	queue.add(() => processResource(resourceId));
