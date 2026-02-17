@@ -123,7 +123,19 @@ export function createCramKitChatAdapter(
 			});
 
 			if (!response.ok) {
-				throw new Error(`Chat API error: ${response.status}`);
+				const errorText =
+					response.status === 404
+						? "This conversation no longer exists. Please start a new one."
+						: `Something went wrong (${response.status}). Please try again.`;
+				yield {
+					content: [{ type: "text", text: errorText }],
+					status: {
+						type: "incomplete",
+						reason: "error",
+						error: errorText,
+					},
+				} as ChatModelRunResult;
+				return;
 			}
 
 			const reader = response.body?.getReader();

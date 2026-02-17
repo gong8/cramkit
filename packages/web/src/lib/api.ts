@@ -154,13 +154,18 @@ export async function createSession(data: {
 
 export function updateSession(
 	id: string,
-	data: { scope?: string | null; notes?: string | null },
+	data: { name?: string; module?: string | null; scope?: string | null; notes?: string | null },
 ): Promise<Session> {
 	log.info(`updateSession — ${id}`);
 	return request(`/sessions/${id}`, {
 		method: "PATCH",
 		body: JSON.stringify(data),
 	});
+}
+
+export function deleteSession(id: string): Promise<void> {
+	log.info(`deleteSession — ${id}`);
+	return request(`/sessions/${id}`, { method: "DELETE" });
 }
 
 export function clearSessionGraph(sessionId: string): Promise<{ ok: boolean }> {
@@ -304,6 +309,7 @@ export interface ConversationSummary {
 	title: string;
 	createdAt: string;
 	updatedAt: string;
+	messageCount: number;
 }
 
 export interface ChatAttachment {

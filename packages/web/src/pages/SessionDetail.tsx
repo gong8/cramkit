@@ -12,8 +12,8 @@ import {
 	updateSession,
 } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, ChevronDown, ChevronRight, MessageSquare, Pencil } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -24,6 +24,8 @@ type Tab = "materials" | "index";
 export function SessionDetail() {
 	const { id } = useParams<{ id: string }>();
 	const sessionId = id as string;
+
+	const queryClient = useQueryClient();
 
 	const { data: session, isLoading } = useQuery({
 		queryKey: ["session", sessionId],
@@ -38,6 +40,11 @@ export function SessionDetail() {
 
 	// Tab state
 	const [activeTab, setActiveTab] = useState<Tab>("materials");
+
+	// Session name rename state
+	const [isRenamingSession, setIsRenamingSession] = useState(false);
+	const [sessionRenameValue, setSessionRenameValue] = useState("");
+	const sessionRenameRef = useRef<HTMLInputElement>(null);
 
 	// Collapsible details
 	const [detailsOpen, setDetailsOpen] = useState(false);
@@ -75,7 +82,7 @@ export function SessionDetail() {
 		};
 	}, []);
 
-	const queryClient = useQuery({ queryKey: ["session", sessionId], enabled: false }).refetch;
+	const refetchSession = useQuery({ queryKey: ["session", sessionId], enabled: false }).refetch;
 
 	const startPolling = useCallback(() => {
 		pollRef.current = setInterval(async () => {
@@ -93,13 +100,13 @@ export function SessionDetail() {
 					pollRef.current = null;
 					setIsIndexingAll(false);
 					setIndexStatus(null);
-					queryClient();
+					refetchSession();
 				}
 			} catch (err) {
 				log.error("polling index status failed", err);
 			}
 		}, 2000);
-	}, [sessionId, queryClient]);
+	}, [sessionId, refetchSession]);
 
 	// Restore indexing state on mount
 	useEffect(() => {
@@ -119,6 +126,26 @@ export function SessionDetail() {
 			cancelled = true;
 		};
 	}, [sessionId, startPolling]);
+
+	const startSessionRename = useCallback(() => {
+		if (!session) return;
+		setSessionRenameValue(session.name);
+		setIsRenamingSession(true);
+		setTimeout(() => sessionRenameRef.current?.select(), 0);
+	}, [session]);
+
+	const commitSessionRename = useCallback(async () => {
+		const trimmed = sessionRenameValue.trim();
+		setIsRenamingSession(false);
+		if (!trimmed || !session || session.name === trimmed) return;
+		try {
+			await updateSession(sessionId, { name: trimmed });
+			queryClient.invalidateQueries({ queryKey: ["sessions"] });
+			queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+		} catch (err) {
+			log.error("commitSessionRename — failed", err);
+		}
+	}, [sessionRenameValue, session, sessionId, queryClient]);
 
 	const handleIndexAll = useCallback(async () => {
 		log.info(`handleIndexAll — session ${sessionId}`);
@@ -172,8 +199,8 @@ export function SessionDetail() {
 
 	const handleClearGraph = useCallback(async () => {
 		await clearSessionGraph(sessionId);
-		queryClient();
-	}, [sessionId, queryClient]);
+		refetchSession();
+	}, [sessionId, refetchSession]);
 
 	const batch = indexStatus?.batch;
 
@@ -198,7 +225,29 @@ export function SessionDetail() {
 					>
 						<ArrowLeft className="h-4 w-4" />
 					</Link>
-					<h1 className="truncate text-lg font-semibold">{session.name}</h1>
+					{isRenamingSession ? (
+						<input
+							ref={sessionRenameRef}
+							type="text"
+							value={sessionRenameValue}
+							onChange={(e) => setSessionRenameValue(e.target.value)}
+							onBlur={() => commitSessionRename()}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") commitSessionRename();
+								if (e.key === "Escape") setIsRenamingSession(false);
+							}}
+							className="min-w-0 rounded border border-input bg-background px-1.5 py-0.5 text-lg font-semibold outline-none focus:ring-1 focus:ring-ring"
+						/>
+					) : (
+						<button
+							type="button"
+							onClick={startSessionRename}
+							className="group flex min-w-0 items-center gap-1.5"
+						>
+							<h1 className="truncate text-lg font-semibold">{session.name}</h1>
+							<Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
+						</button>
+					)}
 					{session.module && (
 						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
 							{session.module}

@@ -29,11 +29,17 @@ chatRoutes.get("/sessions/:sessionId/conversations", async (c) => {
 			title: true,
 			createdAt: true,
 			updatedAt: true,
+			_count: { select: { messages: true } },
 		},
 	});
 
-	log.info(`GET /chat/sessions/${sessionId}/conversations — ${conversations.length} found`);
-	return c.json(conversations);
+	const result = conversations.map(({ _count, ...rest }) => ({
+		...rest,
+		messageCount: _count.messages,
+	}));
+
+	log.info(`GET /chat/sessions/${sessionId}/conversations — ${result.length} found`);
+	return c.json(result);
 });
 
 // Create a new conversation

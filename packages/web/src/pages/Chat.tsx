@@ -813,10 +813,17 @@ function ConversationItem({
 	}
 
 	return (
-		<button
-			type="button"
+		<div
+			role="button"
+			tabIndex={0}
 			onClick={onSelect}
-			className={`group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onSelect();
+				}
+			}}
+			className={`group flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
 				isActive ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-accent/50"
 			}`}
 		>
@@ -845,7 +852,7 @@ function ConversationItem({
 					<Trash2 className="h-3 w-3" />
 				</button>
 			</div>
-		</button>
+		</div>
 	);
 }
 
@@ -957,8 +964,6 @@ export function Chat() {
 	const queryClient = useQueryClient();
 	// Use URL param or search param for conversation ID
 	const activeConversationId = paramConvId || searchParams.get("c");
-	const activeIdRef = useRef(activeConversationId);
-	activeIdRef.current = activeConversationId;
 
 	const { data: session, isLoading } = useQuery({
 		queryKey: ["session", sessionId],
@@ -966,44 +971,60 @@ export function Chat() {
 		enabled: !!sessionId,
 	});
 
-	const cleanupEmpty = useCallback(
-		async (convId: string | null) => {
-			if (!convId) return;
-			try {
-				// Don't delete if there's a draft with text or attachments
-				const saved = sessionStorage.getItem(`chat-draft::${convId}`);
-				if (saved) {
-					try {
-						const draft = JSON.parse(saved);
-						if (draft.text?.trim() || draft.attachments?.length > 0) return;
-					} catch {
-						// ignore parse errors
-					}
-				}
+	const { data: conversations = [] } = useQuery({
+		queryKey: ["conversations", sessionId],
+		queryFn: () => fetchConversations(sessionId),
+		enabled: !!sessionId,
+	});
 
-				const msgs = await fetchMessages(convId);
-				if (msgs.length === 0) {
-					await deleteConversation(convId);
-					queryClient.invalidateQueries({
-						queryKey: ["conversations", sessionId],
-					});
-				}
-			} catch {
-				// conversation may already be deleted
+	const navigate = useNavigate();
+
+	// Validate: if activeConversationId is not in the loaded list, clear it
+	useEffect(() => {
+		if (!activeConversationId) return;
+		const exists = conversations.some((c) => c.id === activeConversationId);
+		if (!exists) {
+			if (conversations.length > 0) {
+				setSearchParams({ c: conversations[0].id }, { replace: true });
+			} else {
+				navigate(`/session/${sessionId}/chat`, { replace: true });
 			}
-		},
-		[sessionId, queryClient],
-	);
+		}
+	}, [activeConversationId, conversations, sessionId, setSearchParams, navigate]);
+
+	// Proactive cleanup: delete empty conversations (messageCount === 0) that aren't active and have no draft
+	useEffect(() => {
+		if (conversations.length === 0) return;
+		const toDelete = conversations.filter((c) => {
+			if (c.messageCount !== 0) return false;
+			if (c.id === activeConversationId) return false;
+			// Grace period: don't delete conversations created in the last 10s
+			// (avoids race with "New chat" before the URL updates)
+			const ageMs = Date.now() - new Date(c.createdAt).getTime();
+			if (ageMs < 10_000) return false;
+			// Preserve if there's a draft with content
+			const saved = sessionStorage.getItem(`chat-draft::${c.id}`);
+			if (saved) {
+				try {
+					const draft = JSON.parse(saved);
+					if (draft.text?.trim() || draft.attachments?.length > 0) return false;
+				} catch {
+					// ignore
+				}
+			}
+			return true;
+		});
+		if (toDelete.length === 0) return;
+		Promise.all(toDelete.map((c) => deleteConversation(c.id).catch(() => {}))).then(() => {
+			queryClient.invalidateQueries({ queryKey: ["conversations", sessionId] });
+		});
+	}, [conversations, activeConversationId, sessionId, queryClient]);
 
 	const handleSelectConversation = useCallback(
 		(convId: string) => {
-			const prev = activeIdRef.current;
 			setSearchParams({ c: convId });
-			if (prev && prev !== convId) {
-				cleanupEmpty(prev);
-			}
 		},
-		[setSearchParams, cleanupEmpty],
+		[setSearchParams],
 	);
 
 	if (isLoading) {
