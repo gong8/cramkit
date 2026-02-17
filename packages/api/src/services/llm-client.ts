@@ -20,8 +20,6 @@ export async function chatCompletion(
 	options?: { model?: string; temperature?: number; maxTokens?: number },
 ): Promise<string> {
 	const model = getCliModel(options?.model || LLM_MODEL);
-	const maxTokens = options?.maxTokens ?? 4096;
-
 	log.info(`chatCompletion — model=${model}, messages=${messages.length}`);
 
 	// Strip null bytes from message content — PDF extraction can leave them in
@@ -66,8 +64,6 @@ export async function chatCompletion(
 		"--setting-sources",
 		"",
 		"--no-session-persistence",
-		"--max-tokens",
-		String(maxTokens),
 	];
 
 	if (systemParts.length > 0) {

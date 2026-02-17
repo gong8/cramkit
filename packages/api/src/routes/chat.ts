@@ -5,7 +5,7 @@ import { extname, join } from "node:path";
 import { chatStreamRequestSchema, createLogger, getDb } from "@cramkit/shared";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { streamCliChat } from "../services/cli-chat.js";
+import { type ToolCallData, streamCliChat } from "../services/cli-chat.js";
 
 const log = createLogger("api");
 
@@ -67,6 +67,7 @@ chatRoutes.get("/conversations/:id/messages", async (c) => {
 			id: true,
 			role: true,
 			content: true,
+			toolCalls: true,
 			createdAt: true,
 			attachments: {
 				select: { id: true, filename: true, contentType: true },
@@ -201,7 +202,7 @@ chatRoutes.post("/stream", async (c) => {
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
-	const { sessionId, conversationId, message, attachmentIds } = parsed.data;
+	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId } = parsed.data;
 	const db = getDb();
 
 	// Verify conversation exists and belongs to session
@@ -213,18 +214,48 @@ chatRoutes.post("/stream", async (c) => {
 		return c.json({ error: "Conversation not found" }, 404);
 	}
 
-	// Save user message
-	const userMessage = await db.message.create({
-		data: { conversationId, role: "user", content: message },
-	});
-
-	// Link attachments to the user message
-	let imagePaths: string[] = [];
-	if (attachmentIds && attachmentIds.length > 0) {
-		await db.chatAttachment.updateMany({
-			where: { id: { in: attachmentIds }, messageId: null },
-			data: { messageId: userMessage.id },
+	// Handle rewind (retry/edit)
+	if (rewindToMessageId) {
+		const targetMessage = await db.message.findUnique({
+			where: { id: rewindToMessageId },
 		});
+		if (!targetMessage || targetMessage.conversationId !== conversationId) {
+			return c.json({ error: "Rewind target message not found" }, 404);
+		}
+
+		// Delete all messages after the target
+		await db.message.deleteMany({
+			where: {
+				conversationId,
+				createdAt: { gt: targetMessage.createdAt },
+			},
+		});
+
+		// If the content differs, update the target message (edit case)
+		if (targetMessage.content !== message) {
+			await db.message.update({
+				where: { id: rewindToMessageId },
+				data: { content: message },
+			});
+		}
+	} else {
+		// Save new user message
+		const userMessage = await db.message.create({
+			data: { conversationId, role: "user", content: message },
+		});
+
+		// Link attachments to the user message
+		if (attachmentIds && attachmentIds.length > 0) {
+			await db.chatAttachment.updateMany({
+				where: { id: { in: attachmentIds }, messageId: null },
+				data: { messageId: userMessage.id },
+			});
+		}
+	}
+
+	// Resolve image paths for any attachments on the last user message
+	let imagePaths: string[] = [];
+	if (!rewindToMessageId && attachmentIds && attachmentIds.length > 0) {
 		const attachments = await db.chatAttachment.findMany({
 			where: { id: { in: attachmentIds } },
 			select: { diskPath: true },
@@ -241,7 +272,7 @@ chatRoutes.post("/stream", async (c) => {
 
 	// Auto-title on first user message
 	if (history.length === 1) {
-		const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
+		const title = message.length > 50 ? `${message.slice(0, 50)}…` : message;
 		await db.conversation.update({
 			where: { id: conversationId },
 			data: { title },
@@ -372,6 +403,9 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 		const decoder = new TextDecoder();
 		let buffer = "";
 		let fullAssistantContent = "";
+		const toolCallsData: ToolCallData[] = [];
+		// Map toolCallId -> index in toolCallsData for quick lookup
+		const toolCallIndex = new Map<string, number>();
 
 		try {
 			while (true) {
@@ -382,17 +416,31 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 				const lines = buffer.split("\n");
 				buffer = lines.pop() || "";
 
+				let currentEventType = "content";
+
 				for (const line of lines) {
 					const trimmed = line.trim();
 					if (!trimmed) continue;
 
-					// Parse SSE lines from the CLI stream
+					// Parse SSE event type
+					if (trimmed.startsWith("event: ")) {
+						currentEventType = trimmed.slice(7);
+						continue;
+					}
+
 					if (trimmed.startsWith("data: ")) {
 						const data = trimmed.slice(6);
+
 						if (data === "[DONE]") {
-							if (fullAssistantContent) {
+							// Persist assistant message
+							if (fullAssistantContent || toolCallsData.length > 0) {
 								await db.message.create({
-									data: { conversationId, role: "assistant", content: fullAssistantContent },
+									data: {
+										conversationId,
+										role: "assistant",
+										content: fullAssistantContent,
+										toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
+									},
 								});
 								await db.conversation.update({
 									where: { id: conversationId },
@@ -404,31 +452,108 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 						}
 
 						try {
-							const parsed = JSON.parse(data) as { content?: string; error?: string };
-							if (parsed.content) {
-								fullAssistantContent += parsed.content;
-								await stream.writeSSE({
-									data: JSON.stringify({ content: parsed.content }),
-									event: "content",
-								});
-							}
-							if (parsed.error) {
-								await stream.writeSSE({
-									data: JSON.stringify({ error: parsed.error }),
-									event: "error",
-								});
+							const parsed = JSON.parse(data);
+
+							switch (currentEventType) {
+								case "content": {
+									if (parsed.content) {
+										fullAssistantContent += parsed.content;
+										await stream.writeSSE({
+											data: JSON.stringify({ content: parsed.content }),
+											event: "content",
+										});
+									}
+									break;
+								}
+
+								case "tool_call_start": {
+									const { toolCallId, toolName } = parsed;
+									const idx = toolCallsData.length;
+									toolCallsData.push({
+										toolCallId,
+										toolName,
+										args: {},
+									});
+									toolCallIndex.set(toolCallId, idx);
+									await stream.writeSSE({
+										data: JSON.stringify({ toolCallId, toolName }),
+										event: "tool_call_start",
+									});
+									break;
+								}
+
+								case "tool_call_args": {
+									const { toolCallId, toolName, args } = parsed;
+									const idx = toolCallIndex.get(toolCallId);
+									if (idx !== undefined) {
+										toolCallsData[idx].args = args;
+									}
+									await stream.writeSSE({
+										data: JSON.stringify({ toolCallId, toolName, args }),
+										event: "tool_call_args",
+									});
+									break;
+								}
+
+								case "tool_result": {
+									const { toolCallId, result, isError } = parsed;
+									const idx = toolCallIndex.get(toolCallId);
+									if (idx !== undefined) {
+										toolCallsData[idx].result = result;
+										toolCallsData[idx].isError = isError;
+									}
+									await stream.writeSSE({
+										data: JSON.stringify({ toolCallId, result, isError }),
+										event: "tool_result",
+									});
+									break;
+								}
+
+								case "thinking_start": {
+									await stream.writeSSE({
+										data: JSON.stringify({}),
+										event: "thinking_start",
+									});
+									break;
+								}
+
+								case "thinking_delta": {
+									await stream.writeSSE({
+										data: JSON.stringify({ text: parsed.text }),
+										event: "thinking_delta",
+									});
+									break;
+								}
+
+								case "error": {
+									if (parsed.error) {
+										await stream.writeSSE({
+											data: JSON.stringify({ error: parsed.error }),
+											event: "error",
+										});
+									}
+									break;
+								}
 							}
 						} catch {
 							// Skip unparseable
 						}
+
+						// Reset event type after data line
+						currentEventType = "content";
 					}
 				}
 			}
 
 			// Stream ended — persist if we got content
-			if (fullAssistantContent) {
+			if (fullAssistantContent || toolCallsData.length > 0) {
 				await db.message.create({
-					data: { conversationId, role: "assistant", content: fullAssistantContent },
+					data: {
+						conversationId,
+						role: "assistant",
+						content: fullAssistantContent,
+						toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
+					},
 				});
 				await db.conversation.update({
 					where: { id: conversationId },
@@ -438,10 +563,15 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 			await stream.writeSSE({ data: "[DONE]", event: "done" });
 		} catch (error) {
 			log.error("POST /chat/stream — streaming error", error);
-			if (fullAssistantContent) {
+			if (fullAssistantContent || toolCallsData.length > 0) {
 				await db.message
 					.create({
-						data: { conversationId, role: "assistant", content: fullAssistantContent },
+						data: {
+							conversationId,
+							role: "assistant",
+							content: fullAssistantContent,
+							toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
+						},
 					})
 					.catch(() => {});
 			}

@@ -237,6 +237,17 @@ export function removeFileFromResource(resourceId: string, fileId: string): Prom
 	return request(`/resources/${resourceId}/files/${fileId}`, { method: "DELETE" });
 }
 
+export function updateResource(
+	resourceId: string,
+	data: { name?: string; label?: string | null },
+): Promise<Resource> {
+	log.info(`updateResource — ${resourceId}`, data);
+	return request(`/resources/${resourceId}`, {
+		method: "PATCH",
+		body: JSON.stringify(data),
+	});
+}
+
 export function deleteResource(resourceId: string): Promise<void> {
 	log.info(`deleteResource — ${resourceId}`);
 	return request(`/resources/${resourceId}`, { method: "DELETE" });
@@ -301,10 +312,19 @@ export interface ChatAttachment {
 	contentType: string;
 }
 
+export interface ToolCallData {
+	toolCallId: string;
+	toolName: string;
+	args: Record<string, unknown>;
+	result?: string;
+	isError?: boolean;
+}
+
 export interface ChatMessage {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
+	toolCalls?: string | null;
 	createdAt: string;
 	attachments?: ChatAttachment[];
 }

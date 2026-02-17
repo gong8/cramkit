@@ -158,6 +158,7 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           String
   content        String
+  toolCalls      String?
   createdAt      DateTime     @default(now())
 
   attachments ChatAttachment[]

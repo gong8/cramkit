@@ -73,4 +73,5 @@ export const chatStreamRequestSchema = z.object({
 	conversationId: z.string(),
 	message: z.string().min(1),
 	attachmentIds: z.array(z.string()).optional(),
+	rewindToMessageId: z.string().optional(),
 });

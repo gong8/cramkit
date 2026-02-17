@@ -1,4 +1,4 @@
-import type { AttachmentAdapter, ChatModelAdapter } from "@assistant-ui/react";
+import type { AttachmentAdapter, ChatModelAdapter, ChatModelRunResult } from "@assistant-ui/react";
 
 const BASE_URL = "/api";
 
@@ -6,6 +6,20 @@ export const chatAttachmentAdapter: AttachmentAdapter = {
 	accept: "image/jpeg,image/png,image/gif,image/webp",
 
 	async add({ file }) {
+		// Restore a draft attachment without re-uploading
+		const restoreMatch = file.name.match(/^__restore__([^_]+)__(.+)$/);
+		if (restoreMatch) {
+			const [, id, originalName] = restoreMatch;
+			return {
+				id,
+				type: "image" as const,
+				name: originalName,
+				contentType: file.type,
+				file,
+				status: { type: "requires-action" as const, reason: "composer-send" as const },
+			};
+		}
+
 		const formData = new FormData();
 		formData.append("file", file);
 		const res = await fetch(`${BASE_URL}/chat/attachments`, {
@@ -51,6 +65,14 @@ export const chatAttachmentAdapter: AttachmentAdapter = {
 	},
 };
 
+interface ToolCallState {
+	toolCallId: string;
+	toolName: string;
+	args?: Record<string, unknown>;
+	result?: string;
+	isError?: boolean;
+}
+
 export function createCramKitChatAdapter(
 	sessionId: string,
 	conversationId: string,
@@ -75,6 +97,18 @@ export function createCramKitChatAdapter(
 				})
 				.filter((id): id is string => !!id);
 
+			// Detect retry: check if the last user message has an existing ID (from history)
+			const lastUserMsg = lastMessage;
+			let rewindToMessageId: string | undefined;
+			if (lastUserMsg && "id" in lastUserMsg && lastUserMsg.id) {
+				// This is a retry/edit — the message already exists in history
+				// Check if it's a real DB ID (not a generated one)
+				const msgId = lastUserMsg.id as string;
+				if (!msgId.startsWith("__")) {
+					rewindToMessageId = msgId;
+				}
+			}
+
 			const response = await fetch(`${BASE_URL}/chat/stream`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -83,6 +117,7 @@ export function createCramKitChatAdapter(
 					conversationId,
 					message: userText,
 					attachmentIds: attachmentIds?.length ? attachmentIds : undefined,
+					rewindToMessageId,
 				}),
 				signal: abortSignal,
 			});
@@ -96,9 +131,52 @@ export function createCramKitChatAdapter(
 
 			const decoder = new TextDecoder();
 			let buffer = "";
-			let fullContent = "";
+			let textContent = "";
+			let thinkingText = "";
+			const toolCalls = new Map<string, ToolCallState>();
+
+			function buildContentParts() {
+				const parts: Array<
+					| { type: "reasoning"; text: string }
+					| {
+							type: "tool-call";
+							toolCallId: string;
+							toolName: string;
+							args: Record<string, unknown>;
+							argsText: string;
+							result?: unknown;
+							isError?: boolean;
+					  }
+					| { type: "text"; text: string }
+				> = [];
+
+				// Thinking/reasoning block
+				if (thinkingText) {
+					parts.push({ type: "reasoning", text: thinkingText });
+				}
+
+				// Tool calls
+				for (const tc of toolCalls.values()) {
+					parts.push({
+						type: "tool-call",
+						toolCallId: tc.toolCallId,
+						toolName: tc.toolName,
+						args: tc.args ?? {},
+						argsText: JSON.stringify(tc.args ?? {}),
+						result: tc.result,
+						isError: tc.isError,
+					});
+				}
+
+				// Text content
+				parts.push({ type: "text", text: textContent });
+
+				return parts;
+			}
 
 			try {
+				let currentEventType = "content";
+
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
@@ -111,26 +189,81 @@ export function createCramKitChatAdapter(
 						const trimmed = line.trim();
 						if (!trimmed) continue;
 
+						// Parse SSE event type
+						if (trimmed.startsWith("event: ")) {
+							currentEventType = trimmed.slice(7);
+							continue;
+						}
+
 						if (trimmed.startsWith("data: ")) {
 							const data = trimmed.slice(6);
 							if (data === "[DONE]") {
-								yield {
-									content: [{ type: "text" as const, text: fullContent }],
-								};
+								yield { content: buildContentParts() } as ChatModelRunResult;
 								return;
 							}
 
 							try {
-								const parsed = JSON.parse(data) as { content?: string };
-								if (parsed.content) {
-									fullContent += parsed.content;
-									yield {
-										content: [{ type: "text" as const, text: fullContent }],
-									};
+								const parsed = JSON.parse(data);
+
+								switch (currentEventType) {
+									case "content": {
+										if (parsed.content) {
+											textContent += parsed.content;
+											yield { content: buildContentParts() } as ChatModelRunResult;
+										}
+										break;
+									}
+
+									case "tool_call_start": {
+										const { toolCallId, toolName } = parsed;
+										toolCalls.set(toolCallId, {
+											toolCallId,
+											toolName,
+										});
+										yield { content: buildContentParts() } as ChatModelRunResult;
+										break;
+									}
+
+									case "tool_call_args": {
+										const { toolCallId, args } = parsed;
+										const tc = toolCalls.get(toolCallId);
+										if (tc) {
+											tc.args = args;
+										}
+										yield { content: buildContentParts() } as ChatModelRunResult;
+										break;
+									}
+
+									case "tool_result": {
+										const { toolCallId, result, isError } = parsed;
+										const tc = toolCalls.get(toolCallId);
+										if (tc) {
+											tc.result = result;
+											tc.isError = isError;
+										}
+										yield { content: buildContentParts() } as ChatModelRunResult;
+										break;
+									}
+
+									case "thinking_delta": {
+										if (parsed.text) {
+											thinkingText += parsed.text;
+											yield { content: buildContentParts() } as ChatModelRunResult;
+										}
+										break;
+									}
+
+									case "thinking_start": {
+										// Just mark that thinking has started, text comes via deltas
+										break;
+									}
 								}
 							} catch {
 								// Skip unparseable
 							}
+
+							// Reset event type after data line
+							currentEventType = "content";
 						}
 					}
 				}
@@ -138,10 +271,8 @@ export function createCramKitChatAdapter(
 				reader.releaseLock();
 			}
 
-			if (fullContent) {
-				yield {
-					content: [{ type: "text" as const, text: fullContent }],
-				};
+			if (textContent || toolCalls.size > 0 || thinkingText) {
+				yield { content: buildContentParts() } as ChatModelRunResult;
 			}
 		},
 	};
