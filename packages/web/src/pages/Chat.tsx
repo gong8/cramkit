@@ -1288,15 +1288,16 @@ export function Chat() {
 		navigate,
 	]);
 
-	// Proactive cleanup: on initial load only, delete empty conversations that aren't active and have no draft.
-	// Runs once per page visit — re-running on every query change causes races with "New chat".
-	const cleanupRanRef = useRef(false);
+	// Proactive cleanup: delete empty conversations that aren't active and have no draft.
+	// Uses a grace period to avoid racing with "New chat" before the URL updates.
 	useEffect(() => {
-		if (conversations.length === 0 || conversationsFetching || cleanupRanRef.current) return;
-		cleanupRanRef.current = true;
+		if (conversations.length === 0 || conversationsFetching) return;
 		const toDelete = conversations.filter((c) => {
 			if (c.messageCount !== 0) return false;
 			if (c.id === activeConversationId) return false;
+			// Grace period: don't delete conversations created in the last 10s
+			const ageMs = Date.now() - new Date(c.createdAt).getTime();
+			if (ageMs < 10_000) return false;
 			// Preserve if there's a draft with content
 			const saved = sessionStorage.getItem(`chat-draft::${c.id}`);
 			if (saved) {
