@@ -214,11 +214,8 @@ export async function importSession(zipBuffer: ArrayBuffer | Buffer): Promise<Im
 					? (chunkMap.get(chunkEntry.parentId) ?? null)
 					: null;
 
-				// Update diskPath to point to new resource directory
-				let newDiskPath: string | null = null;
-				if (chunkEntry.diskPath) {
-					newDiskPath = join(newResourceDir, chunkEntry.diskPath);
-				}
+				// diskPath is stored as relative (e.g. "tree/slug/01-intro.md") — keep as-is
+				const newDiskPath = chunkEntry.diskPath ?? null;
 
 				const chunk = await db.chunk.create({
 					data: {

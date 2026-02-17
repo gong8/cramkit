@@ -5,7 +5,8 @@ import { extname, join } from "node:path";
 import { chatStreamRequestSchema, createLogger, getDb } from "@cramkit/shared";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { type ToolCallData, streamCliChat } from "../services/cli-chat.js";
+import { streamCliChat } from "../services/cli-chat.js";
+import { getStream, startStream, subscribe } from "../services/stream-manager.js";
 
 const log = createLogger("api");
 
@@ -198,6 +199,18 @@ chatRoutes.delete("/attachments/:id", async (c) => {
 	return c.json({ ok: true });
 });
 
+// Check if a conversation has an active stream
+chatRoutes.get("/conversations/:id/stream-status", async (c) => {
+	const { id } = c.req.param();
+	const existing = getStream(id);
+
+	if (!existing) {
+		return c.json({ active: false, status: null });
+	}
+
+	return c.json({ active: true, status: existing.status });
+});
+
 // Stream chat — persists messages to DB
 chatRoutes.post("/stream", async (c) => {
 	const body = await c.req.json();
@@ -218,6 +231,29 @@ chatRoutes.post("/stream", async (c) => {
 
 	if (!conversation || conversation.sessionId !== sessionId) {
 		return c.json({ error: "Conversation not found" }, 404);
+	}
+
+	// Check for active stream — reconnection case
+	const existingStream = getStream(conversationId);
+	if (existingStream) {
+		log.info(`POST /chat/stream — reconnecting to active stream for ${conversationId}`);
+		return streamSSE(c, async (sseStream) => {
+			const unsub = subscribe(conversationId, async (event, data) => {
+				try {
+					await sseStream.writeSSE({ data, event });
+				} catch {
+					// Client disconnected during write, ignore
+				}
+			});
+
+			if (!unsub) {
+				await sseStream.writeSSE({ data: "[DONE]", event: "done" });
+				return;
+			}
+
+			// Wait for the background stream to finish
+			await existingStream.done;
+		});
 	}
 
 	// Handle rewind (retry/edit)
@@ -395,207 +431,32 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 		`POST /chat/stream — session=${sessionId}, conversation=${conversationId}, history=${history.length} messages`,
 	);
 
-	// Spawn CLI with streaming
+	// Spawn CLI without HTTP signal — stream runs independently of client connection
 	const cliStream = streamCliChat({
 		messages: history as Array<{ role: "system" | "user" | "assistant"; content: string }>,
 		systemPrompt,
-		signal: c.req.raw.signal,
 		images: imagePaths.length > 0 ? imagePaths : undefined,
 	});
 
-	// Strip leaked <tool_call>/<tool_result> XML from text content before persisting
-	function stripToolCallXml(text: string): string {
-		return text
-			.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-			.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
-			.replace(/\n{3,}/g, "\n\n")
-			.trim();
-	}
+	// Register with stream manager — background consumer handles persistence
+	const activeStream = startStream(conversationId, cliStream, db);
 
-	// Forward CLI SSE stream to client, accumulate for persistence
-	return streamSSE(c, async (stream) => {
-		const reader = cliStream.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-		let fullAssistantContent = "";
-		const toolCallsData: ToolCallData[] = [];
-		// Map toolCallId -> index in toolCallsData for quick lookup
-		const toolCallIndex = new Map<string, number>();
-
-		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-
-				let currentEventType = "content";
-
-				for (const line of lines) {
-					const trimmed = line.trim();
-					if (!trimmed) continue;
-
-					// Parse SSE event type
-					if (trimmed.startsWith("event: ")) {
-						currentEventType = trimmed.slice(7);
-						continue;
-					}
-
-					if (trimmed.startsWith("data: ")) {
-						const data = trimmed.slice(6);
-
-						if (data === "[DONE]") {
-							// Persist assistant message (conversation may have been deleted mid-stream)
-							if (fullAssistantContent || toolCallsData.length > 0) {
-								try {
-									await db.message.create({
-										data: {
-											conversationId,
-											role: "assistant",
-											content: stripToolCallXml(fullAssistantContent),
-											toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
-										},
-									});
-									await db.conversation.update({
-										where: { id: conversationId },
-										data: { updatedAt: new Date() },
-									});
-								} catch (e) {
-									log.warn(`Failed to persist assistant message — conversation ${conversationId} may have been deleted`, e);
-								}
-							}
-							await stream.writeSSE({ data: "[DONE]", event: "done" });
-							return;
-						}
-
-						try {
-							const parsed = JSON.parse(data);
-
-							switch (currentEventType) {
-								case "content": {
-									if (parsed.content) {
-										fullAssistantContent += parsed.content;
-										await stream.writeSSE({
-											data: JSON.stringify({ content: parsed.content }),
-											event: "content",
-										});
-									}
-									break;
-								}
-
-								case "tool_call_start": {
-									const { toolCallId, toolName } = parsed;
-									const idx = toolCallsData.length;
-									toolCallsData.push({
-										toolCallId,
-										toolName,
-										args: {},
-									});
-									toolCallIndex.set(toolCallId, idx);
-									await stream.writeSSE({
-										data: JSON.stringify({ toolCallId, toolName }),
-										event: "tool_call_start",
-									});
-									break;
-								}
-
-								case "tool_call_args": {
-									const { toolCallId, toolName, args } = parsed;
-									const idx = toolCallIndex.get(toolCallId);
-									if (idx !== undefined) {
-										toolCallsData[idx].args = args;
-									}
-									await stream.writeSSE({
-										data: JSON.stringify({ toolCallId, toolName, args }),
-										event: "tool_call_args",
-									});
-									break;
-								}
-
-								case "tool_result": {
-									const { toolCallId, result, isError } = parsed;
-									const idx = toolCallIndex.get(toolCallId);
-									if (idx !== undefined) {
-										toolCallsData[idx].result = result;
-										toolCallsData[idx].isError = isError;
-									}
-									await stream.writeSSE({
-										data: JSON.stringify({ toolCallId, result, isError }),
-										event: "tool_result",
-									});
-									break;
-								}
-
-								case "thinking_start": {
-									await stream.writeSSE({
-										data: JSON.stringify({}),
-										event: "thinking_start",
-									});
-									break;
-								}
-
-								case "thinking_delta": {
-									await stream.writeSSE({
-										data: JSON.stringify({ text: parsed.text }),
-										event: "thinking_delta",
-									});
-									break;
-								}
-
-								case "error": {
-									if (parsed.error) {
-										await stream.writeSSE({
-											data: JSON.stringify({ error: parsed.error }),
-											event: "error",
-										});
-									}
-									break;
-								}
-							}
-						} catch {
-							// Skip unparseable
-						}
-
-						// Reset event type after data line
-						currentEventType = "content";
-					}
-				}
+	// Subscribe this SSE connection to the stream
+	return streamSSE(c, async (sseStream) => {
+		const unsub = subscribe(conversationId, async (event, data) => {
+			try {
+				await sseStream.writeSSE({ data, event });
+			} catch {
+				// Client disconnected during write, ignore
 			}
+		});
 
-			// Stream ended — persist if we got content
-			if (fullAssistantContent || toolCallsData.length > 0) {
-				await db.message.create({
-					data: {
-						conversationId,
-						role: "assistant",
-						content: stripToolCallXml(fullAssistantContent),
-						toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
-					},
-				});
-				await db.conversation.update({
-					where: { id: conversationId },
-					data: { updatedAt: new Date() },
-				});
-			}
-			await stream.writeSSE({ data: "[DONE]", event: "done" });
-		} catch (error) {
-			log.error("POST /chat/stream — streaming error", error);
-			if (fullAssistantContent || toolCallsData.length > 0) {
-				await db.message
-					.create({
-						data: {
-							conversationId,
-							role: "assistant",
-							content: stripToolCallXml(fullAssistantContent),
-							toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
-						},
-					})
-					.catch(() => {});
-			}
-		} finally {
-			reader.releaseLock();
+		if (!unsub) {
+			await sseStream.writeSSE({ data: "[DONE]", event: "done" });
+			return;
 		}
+
+		// Wait for the background stream to finish
+		await activeStream.done;
 	});
 });

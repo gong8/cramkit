@@ -6,6 +6,7 @@ import {
 	fetchConversations,
 	fetchMessages,
 	fetchSession,
+	fetchStreamStatus,
 	renameConversation,
 } from "@/lib/api";
 import { chatAttachmentAdapter, createCramKitChatAdapter } from "@/lib/chat-adapter";
@@ -436,11 +437,7 @@ function ComposerImageAttachment() {
 		<AttachmentPrimitive.Root className="relative inline-block m-2">
 			<div className="h-16 w-16 overflow-hidden rounded-lg border border-border bg-muted">
 				{previewUrl ? (
-					<img
-						src={previewUrl}
-						alt={state.name}
-						className="h-full w-full object-cover"
-					/>
+					<img src={previewUrl} alt={state.name} className="h-full w-full object-cover" />
 				) : (
 					<div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
 						{state.name?.split(".").pop()?.toUpperCase() || "IMG"}
@@ -592,7 +589,9 @@ function ChatThread({
 							try {
 								const parsed = JSON.parse(rm[1]);
 								xmlCalls.push({ name: parsed.name, args: parsed.arguments || {} });
-							} catch { /* skip */ }
+							} catch {
+								/* skip */
+							}
 						}
 						while ((rm = resultRe.exec(m.content)) !== null) {
 							xmlResults.push(rm[1].trim());
@@ -1023,7 +1022,14 @@ export function Chat() {
 				navigate(`/session/${sessionId}/chat`, { replace: true });
 			}
 		}
-	}, [activeConversationId, conversations, conversationsFetching, sessionId, setSearchParams, navigate]);
+	}, [
+		activeConversationId,
+		conversations,
+		conversationsFetching,
+		sessionId,
+		setSearchParams,
+		navigate,
+	]);
 
 	// Proactive cleanup: on initial load only, delete empty conversations that aren't active and have no draft.
 	// Runs once per page visit — re-running on every query change causes races with "New chat".
@@ -1051,6 +1057,43 @@ export function Chat() {
 			queryClient.invalidateQueries({ queryKey: ["conversations", sessionId] });
 		});
 	}, [conversations, conversationsFetching, activeConversationId, sessionId, queryClient]);
+
+	// Poll background stream status — when a stream completes, bump the key
+	// to remount ChatThread so it loads the new assistant message from DB.
+	const [threadReloadKey, setThreadReloadKey] = useState(0);
+	const [bgStreaming, setBgStreaming] = useState(false);
+	useEffect(() => {
+		if (!activeConversationId) return;
+		const convId = activeConversationId;
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout>;
+
+		async function check() {
+			try {
+				const status = await fetchStreamStatus(convId);
+				if (cancelled) return;
+				if (status.active && status.status === "streaming") {
+					setBgStreaming(true);
+					timer = setTimeout(check, 1500);
+				} else if (status.active && status.status === "complete") {
+					setBgStreaming(false);
+					// Stream completed while we were away — remount ChatThread
+					setThreadReloadKey((k) => k + 1);
+				} else {
+					setBgStreaming(false);
+				}
+			} catch {
+				if (!cancelled) setBgStreaming(false);
+			}
+		}
+
+		check();
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+			setBgStreaming(false);
+		};
+	}, [activeConversationId]);
 
 	const handleSelectConversation = useCallback(
 		(convId: string) => {
@@ -1093,12 +1136,31 @@ export function Chat() {
 
 				<div className="min-h-0 flex-1 overflow-hidden">
 					{activeConversationId ? (
-						<ChatThread
-							key={activeConversationId}
-							sessionId={sessionId}
-							conversationId={activeConversationId}
-							sessionName={session?.name || "Chat"}
-						/>
+						bgStreaming ? (
+							<div className="flex h-full flex-col">
+								<ChatThread
+									key={`${activeConversationId}-${threadReloadKey}`}
+									sessionId={sessionId}
+									conversationId={activeConversationId}
+									sessionName={session?.name || "Chat"}
+								/>
+								<div className="shrink-0 border-t border-border px-4 py-3">
+									<div className="flex items-center gap-2 justify-center">
+										<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+										<span className="text-sm text-muted-foreground">
+											Generating response in background...
+										</span>
+									</div>
+								</div>
+							</div>
+						) : (
+							<ChatThread
+								key={`${activeConversationId}-${threadReloadKey}`}
+								sessionId={sessionId}
+								conversationId={activeConversationId}
+								sessionName={session?.name || "Chat"}
+							/>
+						)
 					) : (
 						<EmptyState sessionId={sessionId} onCreated={handleSelectConversation} />
 					)}

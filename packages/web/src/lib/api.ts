@@ -366,6 +366,15 @@ export function deleteConversation(conversationId: string): Promise<void> {
 	return request(`/chat/conversations/${conversationId}`, { method: "DELETE" });
 }
 
+export interface StreamStatus {
+	active: boolean;
+	status: "streaming" | "complete" | "error" | null;
+}
+
+export function fetchStreamStatus(conversationId: string): Promise<StreamStatus> {
+	return request(`/chat/conversations/${conversationId}/stream-status`);
+}
+
 // Import/Export operations
 export async function exportSession(sessionId: string): Promise<void> {
 	log.info(`exportSession — ${sessionId}`);
