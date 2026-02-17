@@ -8,44 +8,6 @@ import { getResourceDir } from "./storage.js";
 
 const log = createLogger("export");
 
-interface ConceptExport {
-	id: string;
-	name: string;
-	description: string | null;
-	aliases: string | null;
-	createdBy: string;
-}
-
-interface RelationshipExport {
-	id: string;
-	sourceType: string;
-	sourceId: string;
-	sourceLabel: string | null;
-	targetType: string;
-	targetId: string;
-	targetLabel: string | null;
-	relationship: string;
-	confidence: number;
-	createdBy: string;
-}
-
-interface ConversationExport {
-	id: string;
-	title: string;
-	messages: Array<{
-		id: string;
-		role: string;
-		content: string;
-		toolCalls?: string | null;
-		attachments?: Array<{
-			id: string;
-			filename: string;
-			contentType: string;
-			fileSize: number;
-		}>;
-	}>;
-}
-
 function sumBy<T>(arr: T[], fn: (item: T) => number): number {
 	return arr.reduce((sum, item) => sum + fn(item), 0);
 }
@@ -107,8 +69,31 @@ export async function exportSession(sessionId: string): Promise<Buffer> {
 
 	appendJson(archive, manifest, "manifest.json");
 	await addResourcesToArchive(archive, sessionId, session.resources);
-	appendJson(archive, session.concepts.map(mapConcept), "concepts.json");
-	appendJson(archive, session.relationships.map(mapRelationship), "relationships.json");
+	appendJson(
+		archive,
+		session.concepts.map((c: Record<string, unknown>) =>
+			pick(c, ["id", "name", "description", "aliases", "createdBy"]),
+		),
+		"concepts.json",
+	);
+	appendJson(
+		archive,
+		session.relationships.map((r: Record<string, unknown>) =>
+			pick(r, [
+				"id",
+				"sourceType",
+				"sourceId",
+				"sourceLabel",
+				"targetType",
+				"targetId",
+				"targetLabel",
+				"relationship",
+				"confidence",
+				"createdBy",
+			]),
+		),
+		"relationships.json",
+	);
 	await addConversationsToArchive(archive, session.conversations);
 	archive.append(buildReadme(session.name, manifest), { name: "README.txt" });
 
@@ -214,10 +199,7 @@ async function addResourcesToArchive(
 // biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 function mapMessage(m: any) {
 	return {
-		id: m.id,
-		role: m.role,
-		content: m.content,
-		toolCalls: m.toolCalls,
+		...pick(m, ["id", "role", "content", "toolCalls"]),
 		attachments: m.attachments
 			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 			.filter((a: any) => a.messageId !== null)
@@ -232,43 +214,22 @@ async function addConversationsToArchive(
 	conversations: any[],
 ): Promise<void> {
 	for (const conv of conversations) {
-		const convExport: ConversationExport = {
-			id: conv.id,
-			title: conv.title,
-			messages: conv.messages.map(mapMessage),
-		};
+		appendJson(
+			archive,
+			{ id: conv.id, title: conv.title, messages: conv.messages.map(mapMessage) },
+			`conversations/${conv.id}.json`,
+		);
 
-		appendJson(archive, convExport, `conversations/${conv.id}.json`);
-
-		for (const msg of conv.messages) {
-			for (const att of msg.attachments) {
-				if (att.messageId === null) continue;
-				const ext = att.filename.split(".").pop() ?? "bin";
-				await appendFileIfExists(archive, att.diskPath, `attachments/${att.id}.${ext}`);
-			}
+		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+		const attachments = conv.messages.flatMap((m: any) =>
+			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
+			m.attachments.filter((a: any) => a.messageId !== null),
+		);
+		for (const att of attachments) {
+			const ext = att.filename.split(".").pop() ?? "bin";
+			await appendFileIfExists(archive, att.diskPath, `attachments/${att.id}.${ext}`);
 		}
 	}
-}
-
-// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-function mapConcept(c: any): ConceptExport {
-	return pick(c, ["id", "name", "description", "aliases", "createdBy"]);
-}
-
-// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-function mapRelationship(r: any): RelationshipExport {
-	return pick(r, [
-		"id",
-		"sourceType",
-		"sourceId",
-		"sourceLabel",
-		"targetType",
-		"targetId",
-		"targetLabel",
-		"relationship",
-		"confidence",
-		"createdBy",
-	]);
 }
 
 /**

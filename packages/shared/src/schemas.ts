@@ -14,6 +14,13 @@ export const FileRoleEnum = z.enum(["PRIMARY", "MARK_SCHEME", "SOLUTIONS", "SUPP
 
 export const SplitModeEnum = z.enum(["auto", "split", "single"]);
 
+const sessionOptionalFields = {
+	module: nopt(z.string()),
+	examDate: nopt(z.string().date()),
+	scope: nopt(z.string()),
+	notes: nopt(z.string()),
+};
+
 export const createSessionSchema = z.object({
 	name: z.string().min(1),
 	module: z.string().optional(),
@@ -24,10 +31,7 @@ export const createSessionSchema = z.object({
 
 export const updateSessionSchema = z.object({
 	name: z.string().min(1).optional(),
-	module: nopt(z.string()),
-	examDate: nopt(z.string().date()),
-	scope: nopt(z.string()),
-	notes: nopt(z.string()),
+	...sessionOptionalFields,
 });
 
 export const createResourceSchema = z.object({
@@ -42,14 +46,20 @@ export const updateResourceSchema = z.object({
 	label: nopt(z.string()),
 });
 
-export const createRelationshipSchema = z.object({
+const relationshipFields = {
 	sourceType: z.string(),
 	sourceId: z.string(),
-	sourceLabel: z.string().optional(),
+	sourceLabel: nopt(z.string()),
 	targetType: z.string(),
 	targetId: z.string(),
-	targetLabel: z.string().optional(),
+	targetLabel: nopt(z.string()),
 	relationship: z.string(),
+};
+
+export const createRelationshipSchema = z.object({
+	...relationshipFields,
+	sourceLabel: z.string().optional(),
+	targetLabel: z.string().optional(),
 	confidence: z.number().min(0).max(1).optional(),
 });
 
@@ -135,13 +145,7 @@ export const conceptExportSchema = z.object({
 
 export const relationshipExportSchema = z.object({
 	id: z.string(),
-	sourceType: z.string(),
-	sourceId: z.string(),
-	sourceLabel: nopt(z.string()),
-	targetType: z.string(),
-	targetId: z.string(),
-	targetLabel: nopt(z.string()),
-	relationship: z.string(),
+	...relationshipFields,
 	confidence: z.number().min(0).max(1),
 	createdBy: z.string(),
 });
@@ -169,25 +173,24 @@ export const conversationExportSchema = z.object({
 	messages: z.array(messageExportSchema),
 });
 
+const exportStatsSchema = z.object({
+	resourceCount: z.number().int(),
+	fileCount: z.number().int(),
+	chunkCount: z.number().int(),
+	conceptCount: z.number().int(),
+	relationshipCount: z.number().int(),
+	conversationCount: z.number().int(),
+	messageCount: z.number().int(),
+});
+
 export const exportManifestSchema = z.object({
 	version: z.number().int(),
 	exportedAt: z.string(),
 	session: z.object({
 		name: z.string(),
-		module: nopt(z.string()),
-		examDate: nopt(z.string()),
-		scope: nopt(z.string()),
-		notes: nopt(z.string()),
+		...sessionOptionalFields,
 	}),
 	resourceIds: z.array(z.string()),
 	conversationIds: z.array(z.string()),
-	stats: z.object({
-		resourceCount: z.number().int(),
-		fileCount: z.number().int(),
-		chunkCount: z.number().int(),
-		conceptCount: z.number().int(),
-		relationshipCount: z.number().int(),
-		conversationCount: z.number().int(),
-		messageCount: z.number().int(),
-	}),
+	stats: exportStatsSchema,
 });

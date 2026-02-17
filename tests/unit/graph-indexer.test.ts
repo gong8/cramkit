@@ -1,5 +1,4 @@
-import { getDb } from "@cramkit/shared";
-import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
+import { mockLlmByResourceType, seedPdeSession, useTestDb } from "../fixtures/helpers.js";
 import {
 	lectureNotesResponse,
 	pastPaperResponse,
@@ -14,16 +13,19 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 
-const db = getDb();
+const db = useTestDb();
 
-beforeEach(async () => {
-	await cleanDb(db);
+beforeEach(() => {
 	vi.mocked(chatCompletion).mockReset();
 });
 
+function mockLlm(response: object) {
+	vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(response));
+}
+
 describe("indexResourceGraph", () => {
 	it("indexes lecture notes → creates concepts", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
@@ -44,7 +46,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("indexes lecture notes → creates resource-concept relationships", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
@@ -66,7 +68,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("indexes past paper → creates question-concept links", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(pastPaperResponse));
+		mockLlm(pastPaperResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[6].id);
@@ -80,7 +82,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("indexes problem sheet → creates concept-concept links", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(problemSheetResponse));
+		mockLlm(problemSheetResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[2].id);
@@ -98,14 +100,12 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("normalizes concept names to Title Case", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(
-			JSON.stringify({
-				concepts: [{ name: "heat equation", description: "test" }],
-				file_concept_links: [],
-				concept_concept_links: [],
-				question_concept_links: [],
-			}),
-		);
+		mockLlm({
+			concepts: [{ name: "heat equation", description: "test" }],
+			file_concept_links: [],
+			concept_concept_links: [],
+			question_concept_links: [],
+		});
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
@@ -119,7 +119,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("reuses existing concepts (no duplicates)", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
@@ -136,7 +136,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("re-indexing deletes old system relationships", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
@@ -145,21 +145,23 @@ describe("indexResourceGraph", () => {
 		});
 		expect(relsAfterFirst).toBeGreaterThan(0);
 
-		vi.mocked(chatCompletion).mockResolvedValue(
-			JSON.stringify({
-				concepts: [{ name: "New Concept Only", description: "test" }],
-				file_concept_links: [
-					{ conceptName: "New Concept Only", relationship: "covers", confidence: 0.9 },
-				],
-				concept_concept_links: [],
-				question_concept_links: [],
-			}),
-		);
+		mockLlm({
+			concepts: [{ name: "New Concept Only", description: "test" }],
+			file_concept_links: [
+				{ conceptName: "New Concept Only", relationship: "covers", confidence: 0.9 },
+			],
+			concept_concept_links: [],
+			question_concept_links: [],
+		});
 
 		await indexResourceGraph(resources[0].id);
 
 		const systemRels = await db.relationship.findMany({
-			where: { sessionId: resources[0].sessionId, sourceId: resources[0].id, createdBy: "system" },
+			where: {
+				sessionId: resources[0].sessionId,
+				sourceId: resources[0].id,
+				createdBy: "system",
+			},
 		});
 
 		expect(systemRels.length).toBe(1);
@@ -167,7 +169,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("re-indexing preserves non-system relationships", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources, chunks } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
@@ -197,7 +199,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("sets isGraphIndexed = true on completion", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
@@ -207,7 +209,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("skips resource not yet content-indexed", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { session } = await seedPdeSession(db);
 
 		const unindexedResource = await db.resource.create({
@@ -257,7 +259,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("handles LLM returning unknown concept names in links", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(responseWithUnknownConcepts));
+		mockLlm(responseWithUnknownConcepts);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);

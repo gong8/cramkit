@@ -1,6 +1,9 @@
-import { getDb } from "@cramkit/shared";
-import { Hono } from "hono";
-import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
+import {
+	createRouteApp,
+	mockLlmByResourceType,
+	seedPdeSession,
+	useTestDb,
+} from "../fixtures/helpers.js";
 import { lectureNotesResponse } from "../fixtures/llm-responses.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
@@ -26,25 +29,22 @@ import { graphRoutes } from "../../packages/api/src/routes/graph.js";
 import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 
-const db = getDb();
+const db = useTestDb();
+const app = createRouteApp("/graph", graphRoutes);
 
-function getApp() {
-	const app = new Hono();
-	app.route("/graph", graphRoutes);
-	return app;
-}
-
-beforeEach(async () => {
-	await cleanDb(db);
+beforeEach(() => {
 	vi.mocked(chatCompletion).mockReset();
 	vi.mocked(enqueueGraphIndexing).mockClear();
 	vi.mocked(enqueueSessionGraphIndexing).mockClear();
 });
 
+function mockLlm(response: object) {
+	vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(response));
+}
+
 describe("graph routes", () => {
 	it("GET /graph/sessions/:id/concepts — empty session", async () => {
 		const session = await db.session.create({ data: { name: "Empty" } });
-		const app = getApp();
 
 		const res = await app.request(`/graph/sessions/${session.id}/concepts`);
 
@@ -53,12 +53,11 @@ describe("graph routes", () => {
 	});
 
 	it("GET /graph/sessions/:id/concepts — after indexing", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { session, resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
 
-		const app = getApp();
 		const res = await app.request(`/graph/sessions/${session.id}/concepts`);
 
 		expect(res.status).toBe(200);
@@ -71,13 +70,12 @@ describe("graph routes", () => {
 	});
 
 	it("GET /graph/concepts/:id — returns concept + relationships", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
-		const app = getApp();
 		const res = await app.request(`/graph/concepts/${concept?.id}`);
 
 		expect(res.status).toBe(200);
@@ -88,20 +86,18 @@ describe("graph routes", () => {
 	});
 
 	it("GET /graph/concepts/:id — 404 for missing concept", async () => {
-		const app = getApp();
 		const res = await app.request("/graph/concepts/nonexistent");
 
 		expect(res.status).toBe(404);
 	});
 
 	it("DELETE /graph/concepts/:id — removes concept + relationships", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources, session } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
-		const app = getApp();
 		const res = await app.request(`/graph/concepts/${concept?.id}`, { method: "DELETE" });
 
 		expect(res.status).toBe(200);
@@ -121,13 +117,12 @@ describe("graph routes", () => {
 	});
 
 	it("GET /graph/related — by concept", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
-		const app = getApp();
 		const res = await app.request(`/graph/related?type=concept&id=${concept?.id}`);
 
 		expect(res.status).toBe(200);
@@ -136,7 +131,6 @@ describe("graph routes", () => {
 	});
 
 	it("GET /graph/related — missing params → 400", async () => {
-		const app = getApp();
 		const res = await app.request("/graph/related");
 
 		expect(res.status).toBe(400);
@@ -147,7 +141,6 @@ describe("graph routes", () => {
 	it("POST /graph/sessions/:id/index-resource — queues indexing", async () => {
 		const { session, resources } = await seedPdeSession(db);
 
-		const app = getApp();
 		const res = await app.request(`/graph/sessions/${session.id}/index-resource`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -163,7 +156,6 @@ describe("graph routes", () => {
 
 	it("POST /graph/sessions/:id/index-resource — invalid body → 400", async () => {
 		const session = await db.session.create({ data: { name: "Test" } });
-		const app = getApp();
 
 		const res = await app.request(`/graph/sessions/${session.id}/index-resource`, {
 			method: "POST",
@@ -177,7 +169,6 @@ describe("graph routes", () => {
 	it("POST /graph/sessions/:id/index-all — queues unindexed resources", async () => {
 		const { session } = await seedPdeSession(db);
 
-		const app = getApp();
 		const res = await app.request(`/graph/sessions/${session.id}/index-all`, {
 			method: "POST",
 		});
@@ -190,12 +181,11 @@ describe("graph routes", () => {
 	});
 
 	it("GET /graph/sessions/:id/index-status — returns progress", async () => {
-		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
+		mockLlm(lectureNotesResponse);
 		const { session, resources } = await seedPdeSession(db);
 
 		await indexResourceGraph(resources[0].id);
 
-		const app = getApp();
 		const res = await app.request(`/graph/sessions/${session.id}/index-status`);
 
 		expect(res.status).toBe(200);
@@ -217,8 +207,6 @@ describe("graph routes", () => {
 		for (const resource of resources) {
 			await indexResourceGraph(resource.id);
 		}
-
-		const app = getApp();
 
 		const statusRes = await app.request(`/graph/sessions/${session.id}/index-status`);
 		const status = (await statusRes.json()) as Record<string, unknown>;

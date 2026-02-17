@@ -129,6 +129,10 @@ export function preprocessPdfMarkdown(markdown: string): string {
 		return lines.filter((line) => !PAGE_SEPARATOR_REGEX.test(line.trim())).join("\n");
 	}
 
+	return convertSectionLines(lines).join("\n");
+}
+
+function convertSectionLines(lines: string[]): string[] {
 	const output: string[] = [];
 	let i = 0;
 	while (i < lines.length) {
@@ -146,29 +150,18 @@ export function preprocessPdfMarkdown(markdown: string): string {
 			continue;
 		}
 
-		const sectionHeading = tryParseSectionHeading(trimmed);
-		if (sectionHeading) {
-			output.push(sectionHeading);
-			i++;
-			continue;
-		}
-
-		output.push(lines[i]);
+		output.push(tryParseSectionHeading(trimmed) ?? lines[i]);
 		i++;
 	}
-
-	return output.join("\n");
+	return output;
 }
 
 /**
  * Parse markdown into a tree based on heading structure.
  * Pure function, no LLM or I/O.
  */
-export function parseMarkdownTree(markdown: string, filename: string): TreeNode {
-	const processed = preprocessPdfMarkdown(markdown);
-	const lines = processed.split("\n");
-
-	const root: TreeNode = {
+function createRootNode(filename: string, processed: string): TreeNode {
+	return {
 		title: filename.replace(/\.[^.]+$/, ""),
 		content: "",
 		depth: 0,
@@ -178,8 +171,12 @@ export function parseMarkdownTree(markdown: string, filename: string): TreeNode 
 		startPage: extractPageNumber(processed, "first"),
 		endPage: extractPageNumber(processed),
 	};
+}
 
-	const segments = parseSegments(lines, root);
+export function parseMarkdownTree(markdown: string, filename: string): TreeNode {
+	const processed = preprocessPdfMarkdown(markdown);
+	const root = createRootNode(filename, processed);
+	const segments = parseSegments(processed.split("\n"), root);
 
 	if (segments.length === 0) {
 		root.nodeType = inferNodeType(root.title, 0);
@@ -188,7 +185,6 @@ export function parseMarkdownTree(markdown: string, filename: string): TreeNode 
 
 	buildTreeFromSegments(root, segments);
 	mergeShortLeaves(root);
-
 	return root;
 }
 

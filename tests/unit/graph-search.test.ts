@@ -1,12 +1,7 @@
-import { getDb } from "@cramkit/shared";
 import { searchGraph } from "../../packages/api/src/services/graph-search.js";
-import { cleanDb, seedGraphData } from "../fixtures/helpers.js";
+import { seedGraphData, useTestDb } from "../fixtures/helpers.js";
 
-const db = getDb();
-
-beforeEach(async () => {
-	await cleanDb(db);
-});
+const db = useTestDb();
 
 describe("searchGraph", () => {
 	it("finds chunks via concept name match", async () => {

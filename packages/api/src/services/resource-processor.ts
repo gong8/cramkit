@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
 import { MarkItDown } from "markitdown-ts";
@@ -60,6 +61,16 @@ function buildMappingLookup(mappings: DiskMapping[]): Map<TreeNode, DiskMapping>
 	return lookup;
 }
 
+async function writeTreeAndBuildLookup(
+	sessionId: string,
+	resourceId: string,
+	name: string,
+	tree: TreeNode,
+): Promise<Map<TreeNode, DiskMapping>> {
+	const mappings = await writeResourceTreeToDisk(sessionId, resourceId, slugify(name), tree);
+	return buildMappingLookup(mappings);
+}
+
 async function createChunkTree(
 	tx: Prisma.TransactionClient,
 	resourceId: string,
@@ -114,7 +125,6 @@ type ChunkPlan =
 	  };
 
 async function convertFileToMarkdown(rawPath: string, filename: string): Promise<string> {
-	const { readFile } = await import("node:fs/promises");
 	const ext = filename.split(".").pop()?.toLowerCase() ?? "";
 
 	if (TEXT_EXTS.has(ext)) {
@@ -128,33 +138,36 @@ async function convertFileToMarkdown(rawPath: string, filename: string): Promise
 	);
 }
 
+async function convertOneFile(
+	db: ReturnType<typeof getDb>,
+	sessionId: string,
+	resourceId: string,
+	file: { id: string; filename: string; rawPath: string },
+): Promise<FileTree> {
+	const rawContent = await convertFileToMarkdown(file.rawPath, file.filename);
+	log.debug(`processResource — converted "${file.filename}" (${rawContent.length} chars)`);
+
+	const processedPath = await saveResourceProcessedFile(
+		sessionId,
+		resourceId,
+		file.filename,
+		rawContent,
+	);
+	await db.file.update({ where: { id: file.id }, data: { processedPath } });
+
+	const tree = parseMarkdownTree(rawContent, file.filename);
+	return { fileId: file.id, tree, rawContent };
+}
+
 async function convertAndSaveFiles(
 	db: ReturnType<typeof getDb>,
 	resource: { sessionId: string; files: Array<{ id: string; filename: string; rawPath: string }> },
 	resourceId: string,
 ): Promise<FileTree[]> {
 	const fileTrees: FileTree[] = [];
-
 	for (const file of resource.files) {
-		const rawContent = await convertFileToMarkdown(file.rawPath, file.filename);
-		log.debug(`processResource — converted "${file.filename}" (${rawContent.length} chars)`);
-
-		const processedPath = await saveResourceProcessedFile(
-			resource.sessionId,
-			resourceId,
-			file.filename,
-			rawContent,
-		);
-
-		await db.file.update({
-			where: { id: file.id },
-			data: { processedPath },
-		});
-
-		const tree = parseMarkdownTree(rawContent, file.filename);
-		fileTrees.push({ fileId: file.id, tree, rawContent });
+		fileTrees.push(await convertOneFile(db, resource.sessionId, resourceId, file));
 	}
-
 	return fileTrees;
 }
 
@@ -172,25 +185,15 @@ function buildCombinedRoot(
 	fileTrees: FileTree[],
 	roles: Array<{ role: string }>,
 ): TreeNode {
-	const combinedRoot: TreeNode = {
-		title: name,
-		content: "",
-		depth: 0,
-		order: 0,
-		nodeType: "section",
-		children: [],
-	};
-
-	for (let i = 0; i < fileTrees.length; i++) {
-		const { tree } = fileTrees[i];
+	const children = fileTrees.map(({ tree }, i) => {
 		tree.order = i;
 		if (tree.depth === 0) tree.depth = 1;
 		const prefix = ROLE_PREFIXES[roles[i].role];
 		if (prefix) tree.title = `${prefix}: ${tree.title}`;
-		combinedRoot.children.push(tree);
-	}
+		return tree;
+	});
 
-	return combinedRoot;
+	return { title: name, content: "", depth: 0, order: 0, nodeType: "section", children };
 }
 
 async function buildChunkPlan(
@@ -205,35 +208,37 @@ async function buildChunkPlan(
 	resourceId: string,
 ): Promise<ChunkPlan> {
 	const splitMode = resource.splitMode || "auto";
+	const wantSplit = shouldSplit(splitMode, resource.type, fileTrees[0]?.rawContent);
+
+	if (fileTrees.length === 1 && wantSplit) {
+		const { fileId, tree } = fileTrees[0];
+		const mappingLookup = await writeTreeAndBuildLookup(
+			resource.sessionId,
+			resourceId,
+			resource.name,
+			tree,
+		);
+		return { type: "split-single", fileId, tree, mappingLookup };
+	}
 
 	if (fileTrees.length === 1) {
-		const { fileId, tree, rawContent } = fileTrees[0];
-
-		if (shouldSplit(splitMode, resource.type, rawContent)) {
-			const mappings = await writeResourceTreeToDisk(
-				resource.sessionId,
-				resourceId,
-				slugify(resource.name),
-				tree,
-			);
-			return { type: "split-single", fileId, tree, mappingLookup: buildMappingLookup(mappings) };
-		}
+		const { fileId, rawContent } = fileTrees[0];
 		return { type: "flat", fileId, title: resource.name, content: rawContent };
 	}
 
 	if (shouldSplit(splitMode, resource.type)) {
 		const combinedRoot = buildCombinedRoot(resource.name, fileTrees, resource.files);
-		const mappings = await writeResourceTreeToDisk(
+		const mappingLookup = await writeTreeAndBuildLookup(
 			resource.sessionId,
 			resourceId,
-			slugify(resource.name),
+			resource.name,
 			combinedRoot,
 		);
 		return {
 			type: "split-multi",
 			combinedRoot,
 			fileTrees: fileTrees.map((ft) => ({ fileId: ft.fileId, tree: ft.tree })),
-			mappingLookup: buildMappingLookup(mappings),
+			mappingLookup,
 		};
 	}
 
@@ -293,8 +298,7 @@ async function executeChunkPlan(
 				),
 			});
 
-			for (let i = 0; i < plan.fileTrees.length; i++) {
-				const { fileId, tree } = plan.fileTrees[i];
+			for (const { fileId, tree } of plan.fileTrees) {
 				await createChunkTree(
 					tx,
 					resourceId,

@@ -38,17 +38,11 @@ import type {
 const log = createLogger("web");
 const BASE_URL = "/api";
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function rawFetch(path: string, options?: RequestInit): Promise<Response> {
 	const method = options?.method || "GET";
 	log.debug(`${method} ${BASE_URL}${path}`);
 
-	const response = await fetch(`${BASE_URL}${path}`, {
-		...options,
-		headers: {
-			"Content-Type": "application/json",
-			...options?.headers,
-		},
-	});
+	const response = await fetch(`${BASE_URL}${path}`, options);
 
 	if (!response.ok) {
 		log.error(`${method} ${path} — ${response.status}`);
@@ -56,7 +50,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 	}
 
 	log.debug(`${method} ${path} — ${response.status} OK`);
-	return response.json() as Promise<T>;
+	return response;
+}
+
+function request<T>(path: string, options?: RequestInit): Promise<T> {
+	return rawFetch(path, {
+		...options,
+		headers: { "Content-Type": "application/json", ...options?.headers },
+	}).then((r) => r.json() as Promise<T>);
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {
@@ -67,28 +68,15 @@ function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 function patch<T>(path: string, body: unknown): Promise<T> {
-	return request(path, {
-		method: "PATCH",
-		body: JSON.stringify(body),
-	});
+	return request(path, { method: "PATCH", body: JSON.stringify(body) });
 }
 
 function del<T = void>(path: string): Promise<T> {
 	return request(path, { method: "DELETE" });
 }
 
-async function uploadFormData<T>(path: string, formData: FormData): Promise<T> {
-	const response = await fetch(`${BASE_URL}${path}`, {
-		method: "POST",
-		body: formData,
-	});
-
-	if (!response.ok) {
-		log.error(`POST ${path} — ${response.status}`);
-		throw new Error(`Upload error: ${response.status}`);
-	}
-
-	return response.json() as Promise<T>;
+function uploadFormData<T>(path: string, formData: FormData): Promise<T> {
+	return rawFetch(path, { method: "POST", body: formData }).then((r) => r.json() as Promise<T>);
 }
 
 function buildFormData(fields: Record<string, string | undefined>, files?: File[]): FormData {
@@ -103,13 +91,7 @@ function buildFormData(fields: Record<string, string | undefined>, files?: File[
 }
 
 async function downloadFile(path: string, fallbackFilename: string): Promise<void> {
-	const response = await fetch(`${BASE_URL}${path}`);
-
-	if (!response.ok) {
-		log.error(`GET ${path} — ${response.status}`);
-		throw new Error(`Download error: ${response.status}`);
-	}
-
+	const response = await rawFetch(path);
 	const blob = await response.blob();
 	const disposition = response.headers.get("Content-Disposition");
 	const filenameMatch = disposition?.match(/filename="?(.+?)"?$/);

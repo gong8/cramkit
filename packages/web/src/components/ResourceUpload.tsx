@@ -235,6 +235,28 @@ function TypeStep({
 	);
 }
 
+function CheckboxField({
+	checked,
+	onChange,
+	label,
+}: {
+	checked: boolean;
+	onChange: (checked: boolean) => void;
+	label: string;
+}) {
+	return (
+		<label className="flex items-center gap-2 text-sm">
+			<input
+				type="checkbox"
+				checked={checked}
+				onChange={(e) => onChange(e.target.checked)}
+				className="h-4 w-4 rounded border-input"
+			/>
+			{label}
+		</label>
+	);
+}
+
 function DetailsStep({
 	form,
 	dispatch,
@@ -284,44 +306,27 @@ function DetailsStep({
 				)}
 
 				{showMarkScheme && (
-					<label className="flex items-center gap-2 text-sm">
-						<input
-							type="checkbox"
-							checked={form.hasMarkScheme}
-							onChange={(e) => dispatch({ type: "setHasMarkScheme", value: e.target.checked })}
-							className="h-4 w-4 rounded border-input"
-						/>
-						PDF includes mark scheme
-					</label>
+					<CheckboxField
+						checked={form.hasMarkScheme}
+						onChange={(v) => dispatch({ type: "setHasMarkScheme", value: v })}
+						label="PDF includes mark scheme"
+					/>
 				)}
 
 				{showSolutions && (
-					<label className="flex items-center gap-2 text-sm">
-						<input
-							type="checkbox"
-							checked={form.hasSolutions}
-							onChange={(e) => dispatch({ type: "setHasSolutions", value: e.target.checked })}
-							className="h-4 w-4 rounded border-input"
-						/>
-						PDF includes solutions
-					</label>
+					<CheckboxField
+						checked={form.hasSolutions}
+						onChange={(v) => dispatch({ type: "setHasSolutions", value: v })}
+						label="PDF includes solutions"
+					/>
 				)}
 
 				{showSplitMode && (
-					<label className="flex items-center gap-2 text-sm">
-						<input
-							type="checkbox"
-							checked={form.splitMode === "split"}
-							onChange={(e) =>
-								dispatch({
-									type: "setSplitMode",
-									value: e.target.checked ? "split" : "auto",
-								})
-							}
-							className="h-4 w-4 rounded border-input"
-						/>
-						Split into chunks for indexing
-					</label>
+					<CheckboxField
+						checked={form.splitMode === "split"}
+						onChange={(v) => dispatch({ type: "setSplitMode", value: v ? "split" : "auto" })}
+						label="Split into chunks for indexing"
+					/>
 				)}
 
 				<FilePicker

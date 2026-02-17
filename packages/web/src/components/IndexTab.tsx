@@ -28,9 +28,6 @@ export function IndexTab({
 	onClearGraph,
 	onRetryFailed,
 }: IndexTabProps) {
-	const [showClearGraphModal, setShowClearGraphModal] = useState(false);
-	const [isClearingGraph, setIsClearingGraph] = useState(false);
-
 	const indexedCount = resources.filter((r) => r.isIndexed).length;
 	const graphIndexedCount = resources.filter((r) => r.isGraphIndexed).length;
 	const hasUnindexed = resources.some((r) => r.isIndexed && !r.isGraphIndexed);
@@ -41,49 +38,37 @@ export function IndexTab({
 	const batchFailed = batch?.batchFailed ?? 0;
 	const hasBatchFailures = batchFailed > 0;
 
-	const actionButtons: ActionButtonProps[] = [];
-	if (isIndexingAll) {
-		actionButtons.push({
+	const actionButtons: ActionButtonProps[] = [
+		isIndexingAll && {
 			onClick: onCancel,
 			className: "bg-destructive/10 text-destructive hover:bg-destructive/20",
 			icon: <X className="h-4 w-4" />,
 			label: "Cancel",
-		});
-	} else {
-		if (hasUnindexed) {
-			actionButtons.push({
+		},
+		!isIndexingAll &&
+			hasUnindexed && {
 				onClick: onIndexAll,
 				className: "bg-primary text-primary-foreground hover:bg-primary/90",
 				icon: <BrainCircuit className="h-4 w-4" />,
 				label: "Index All",
-			});
-		} else if (allGraphIndexed && hasIndexed) {
-			actionButtons.push({
+			},
+		!isIndexingAll &&
+			!hasUnindexed &&
+			allGraphIndexed &&
+			hasIndexed && {
 				onClick: onReindexAll,
 				className: "bg-violet-500/10 text-violet-600 hover:bg-violet-500/20",
 				icon: <RefreshCw className="h-4 w-4" />,
 				label: "Reindex All",
-			});
-		}
-		if (hasBatchFailures) {
-			actionButtons.push({
+			},
+		!isIndexingAll &&
+			hasBatchFailures && {
 				onClick: onRetryFailed,
 				className: "bg-destructive/10 text-destructive hover:bg-destructive/20",
 				icon: <RefreshCw className="h-4 w-4" />,
 				label: `Retry Failed (${batchFailed})`,
-			});
-		}
-	}
-
-	const handleClearGraph = async () => {
-		setIsClearingGraph(true);
-		try {
-			await onClearGraph();
-			setShowClearGraphModal(false);
-		} finally {
-			setIsClearingGraph(false);
-		}
-	};
+			},
+	].filter(Boolean) as ActionButtonProps[];
 
 	return (
 		<div className="space-y-6">
@@ -109,27 +94,58 @@ export function IndexTab({
 				<BatchFailuresSection resources={batch.resources} failedCount={batchFailed} />
 			)}
 
-			<div className="space-y-3">
-				<h3 className="text-sm font-semibold uppercase text-muted-foreground">Knowledge Graph</h3>
-				<div className="flex gap-2">
-					<Link
-						to={`/session/${sessionId}/graph`}
-						className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent"
+			<KnowledgeGraphSection
+				sessionId={sessionId}
+				hasIndexed={hasIndexed}
+				onClearGraph={onClearGraph}
+			/>
+		</div>
+	);
+}
+
+function KnowledgeGraphSection({
+	sessionId,
+	hasIndexed,
+	onClearGraph,
+}: {
+	sessionId: string;
+	hasIndexed: boolean;
+	onClearGraph: () => Promise<void>;
+}) {
+	const [showClearGraphModal, setShowClearGraphModal] = useState(false);
+	const [isClearingGraph, setIsClearingGraph] = useState(false);
+
+	const handleClearGraph = async () => {
+		setIsClearingGraph(true);
+		try {
+			await onClearGraph();
+			setShowClearGraphModal(false);
+		} finally {
+			setIsClearingGraph(false);
+		}
+	};
+
+	return (
+		<div className="space-y-3">
+			<h3 className="text-sm font-semibold uppercase text-muted-foreground">Knowledge Graph</h3>
+			<div className="flex gap-2">
+				<Link
+					to={`/session/${sessionId}/graph`}
+					className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent"
+				>
+					<Network className="h-4 w-4" />
+					View Knowledge Graph
+				</Link>
+				{hasIndexed && (
+					<button
+						type="button"
+						onClick={() => setShowClearGraphModal(true)}
+						className="flex items-center gap-2 rounded-md border border-destructive/30 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10"
 					>
-						<Network className="h-4 w-4" />
-						View Knowledge Graph
-					</Link>
-					{hasIndexed && (
-						<button
-							type="button"
-							onClick={() => setShowClearGraphModal(true)}
-							className="flex items-center gap-2 rounded-md border border-destructive/30 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10"
-						>
-							<Trash2 className="h-4 w-4" />
-							Clear Graph
-						</button>
-					)}
-				</div>
+						<Trash2 className="h-4 w-4" />
+						Clear Graph
+					</button>
+				)}
 			</div>
 
 			{showClearGraphModal && (

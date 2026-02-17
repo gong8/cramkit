@@ -5,7 +5,6 @@ import { LineBuffer } from "./line-buffer.js";
 
 const log = createLogger("api");
 
-/** A single SSE event to buffer for reconnection */
 interface BufferedEvent {
 	event: string;
 	data: string;
@@ -23,7 +22,6 @@ export interface ActiveStream {
 	done: Promise<void>;
 }
 
-/** Strip leaked <tool_call>/<tool_result> XML from text content */
 function stripToolCallXml(text: string): string {
 	return text
 		.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
@@ -36,7 +34,6 @@ const CLEANUP_DELAY_MS = 60_000;
 
 const activeStreams = new Map<string, ActiveStream>();
 
-/** Persist the assistant message and update the conversation timestamp */
 async function persistMessage(
 	db: PrismaClient,
 	conversationId: string,
@@ -57,7 +54,6 @@ async function persistMessage(
 	});
 }
 
-/** Safely persist, swallowing errors (e.g. if the conversation was deleted) */
 async function safePersist(
 	db: PrismaClient,
 	conversationId: string,
@@ -74,11 +70,9 @@ async function safePersist(
 	}
 }
 
-/** Update stream state from a parsed event and re-emit to subscribers */
-function dispatchEvent(
+function updateStreamState(
 	stream: ActiveStream,
 	toolCallIndex: Map<string, number>,
-	emit: (event: string, data: string) => void,
 	eventType: string,
 	parsed: Record<string, unknown>,
 ): void {
@@ -86,7 +80,6 @@ function dispatchEvent(
 		case "content":
 			if (parsed.content) stream.fullContent += parsed.content;
 			break;
-
 		case "tool_call_start": {
 			const idx = stream.toolCallsData.length;
 			stream.toolCallsData.push({
@@ -97,7 +90,6 @@ function dispatchEvent(
 			toolCallIndex.set(parsed.toolCallId as string, idx);
 			break;
 		}
-
 		case "tool_call_args": {
 			const idx = toolCallIndex.get(parsed.toolCallId as string);
 			if (idx !== undefined) {
@@ -105,7 +97,6 @@ function dispatchEvent(
 			}
 			break;
 		}
-
 		case "tool_result": {
 			const idx = toolCallIndex.get(parsed.toolCallId as string);
 			if (idx !== undefined) {
@@ -115,13 +106,8 @@ function dispatchEvent(
 			break;
 		}
 	}
-
-	// All event types (including thinking_start, thinking_delta, error) are
-	// forwarded as-is. State updates above only apply to the relevant types.
-	emit(eventType, JSON.stringify(parsed));
 }
 
-/** Parse a single SSE line pair, returning the event type and data, or null */
 function parseSSELine(
 	line: string,
 	currentEventType: { value: string },
@@ -141,7 +127,27 @@ function parseSSELine(
 	return { type, data };
 }
 
-/** Read the CLI stream, dispatch events, and persist on completion */
+async function finalizeStream(
+	stream: ActiveStream,
+	db: PrismaClient,
+	emit: (event: string, data: string) => void,
+	status: "complete" | "error",
+): Promise<void> {
+	await safePersist(db, stream.conversationId, stream);
+	stream.status = status;
+	if (status === "error") {
+		emit("error", JSON.stringify({ error: "Stream failed" }));
+	}
+	emit("done", "[DONE]");
+}
+
+function scheduleCleanup(conversationId: string): void {
+	setTimeout(() => {
+		activeStreams.delete(conversationId);
+		log.info(`stream-manager — cleaned up stream for ${conversationId}`);
+	}, CLEANUP_DELAY_MS);
+}
+
 async function consumeStream(
 	stream: ActiveStream,
 	cliStream: ReadableStream<Uint8Array>,
@@ -164,45 +170,43 @@ async function consumeStream(
 				if (!parsed) continue;
 
 				if (parsed.data === "[DONE]") {
-					await safePersist(db, stream.conversationId, stream);
-					stream.status = "complete";
-					emit("done", "[DONE]");
+					await finalizeStream(stream, db, emit, "complete");
 					return;
 				}
 
 				try {
 					const obj = JSON.parse(parsed.data);
-					dispatchEvent(stream, toolCallIndex, emit, parsed.type, obj);
+					updateStreamState(stream, toolCallIndex, parsed.type, obj);
+					emit(parsed.type, JSON.stringify(obj));
 				} catch {
 					// Skip unparseable
 				}
 			}
 		}
 
-		// Stream ended without [DONE]
-		await safePersist(db, stream.conversationId, stream);
-		stream.status = "complete";
-		emit("done", "[DONE]");
+		await finalizeStream(stream, db, emit, "complete");
 	} catch (error) {
 		log.error("stream-manager — streaming error", error);
-		await safePersist(db, stream.conversationId, stream);
-		stream.status = "error";
-		emit("error", JSON.stringify({ error: "Stream failed" }));
-		emit("done", "[DONE]");
+		await finalizeStream(stream, db, emit, "error");
 	} finally {
 		reader.releaseLock();
-		setTimeout(() => {
-			activeStreams.delete(stream.conversationId);
-			log.info(`stream-manager — cleaned up stream for ${stream.conversationId}`);
-		}, CLEANUP_DELAY_MS);
+		scheduleCleanup(stream.conversationId);
 	}
 }
 
-/**
- * Start a background stream consumer that reads from a CLI ReadableStream,
- * buffers SSE events, persists the result to DB on completion, and notifies
- * any subscribed SSE clients.
- */
+function createEmitter(stream: ActiveStream): (event: string, data: string) => void {
+	return (event, data) => {
+		stream.events.push({ event, data });
+		for (const cb of stream.subscribers) {
+			try {
+				cb(event, data);
+			} catch {
+				// subscriber errored, ignore
+			}
+		}
+	};
+}
+
 export function startStream(
 	conversationId: string,
 	cliStream: ReadableStream<Uint8Array>,
@@ -224,40 +228,22 @@ export function startStream(
 		done: Promise.resolve(),
 	};
 
-	function emit(event: string, data: string): void {
-		stream.events.push({ event, data });
-		for (const cb of stream.subscribers) {
-			try {
-				cb(event, data);
-			} catch {
-				// subscriber errored, ignore
-			}
-		}
-	}
-
-	stream.done = consumeStream(stream, cliStream, db, emit);
+	stream.done = consumeStream(stream, cliStream, db, createEmitter(stream));
 
 	activeStreams.set(conversationId, stream);
 	log.info(`stream-manager — started stream for ${conversationId}`);
 	return stream;
 }
 
-/** Get an active stream if one exists */
 export function getStream(conversationId: string): ActiveStream | undefined {
 	return activeStreams.get(conversationId);
 }
 
 export interface SubscribeHandle {
-	/** Unsubscribe from the stream */
 	unsubscribe: () => void;
-	/** Resolves when all events (replay + live) have been delivered to the callback */
 	delivered: Promise<void>;
 }
 
-/**
- * Ordered async event delivery queue.
- * Ensures events are delivered sequentially even when the callback is async.
- */
 function createEventQueue(cb: Subscriber, onDrained: () => void) {
 	const queue: BufferedEvent[] = [];
 	let draining = false;
@@ -293,11 +279,6 @@ function createEventQueue(cb: Subscriber, onDrained: () => void) {
 	};
 }
 
-/**
- * Subscribe to a stream. Sends all buffered events first, then live events.
- * Uses an internal queue to ensure ordered delivery even when the callback is async.
- * Returns a handle with unsubscribe + delivered promise, or null if no stream exists.
- */
 export function subscribe(conversationId: string, cb: Subscriber): SubscribeHandle | null {
 	const stream = activeStreams.get(conversationId);
 	if (!stream) return null;
@@ -313,12 +294,10 @@ export function subscribe(conversationId: string, cb: Subscriber): SubscribeHand
 		}
 	});
 
-	// Replay buffered events
 	for (const { event, data } of stream.events) {
 		eq.enqueue(event, data);
 	}
 
-	// If already complete, just let the queue drain
 	if (stream.status !== "streaming") {
 		return {
 			unsubscribe: () => {
@@ -329,7 +308,6 @@ export function subscribe(conversationId: string, cb: Subscriber): SubscribeHand
 		};
 	}
 
-	// Live subscriber goes through the queue for ordered delivery
 	stream.subscribers.add(eq.enqueue);
 	return {
 		unsubscribe: () => {

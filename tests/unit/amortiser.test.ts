@@ -1,12 +1,7 @@
-import { getDb } from "@cramkit/shared";
 import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
-import { cleanDb, seedSessionWithChunks, seedSessionWithConcept } from "../fixtures/helpers.js";
+import { seedSessionWithChunks, seedSessionWithConcept, useTestDb } from "../fixtures/helpers.js";
 
-const db = getDb();
-
-beforeEach(async () => {
-	await cleanDb(db);
-});
+const db = useTestDb();
 
 describe("amortiseSearchResults", () => {
 	it("creates chunk-concept relationships", async () => {

@@ -4,16 +4,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { chatStreamRequestSchema, createLogger, getDb } from "@cramkit/shared";
 import { Hono } from "hono";
-import { streamCliChat } from "../services/cli-chat.js";
-import { getStream, startStream } from "../services/stream-manager.js";
-import {
-	autoTitleConversation,
-	collectImagePaths,
-	loadConversationHistory,
-	loadSessionWithPrompt,
-	persistUserMessage,
-	pipeStreamToSSE,
-} from "./chat-helpers.js";
+import { getStream } from "../services/stream-manager.js";
+import { launchChatStream, pipeStreamToSSE } from "./chat-helpers.js";
 
 const log = createLogger("api");
 
@@ -210,12 +202,9 @@ chatRoutes.delete("/attachments/:id", async (c) => {
 chatRoutes.get("/conversations/:id/stream-status", async (c) => {
 	const { id } = c.req.param();
 	const existing = getStream(id);
-
-	if (!existing) {
-		return c.json({ active: false, status: null });
-	}
-
-	return c.json({ active: true, status: existing.status });
+	return c.json(
+		existing ? { active: true, status: existing.status } : { active: false, status: null },
+	);
 });
 
 // Reconnect to an active background stream
@@ -241,7 +230,7 @@ chatRoutes.post("/stream", async (c) => {
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
-	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId } = parsed.data;
+	const { sessionId, conversationId } = parsed.data;
 	const db = getDb();
 
 	const conversation = await db.conversation.findUnique({
@@ -258,35 +247,5 @@ chatRoutes.post("/stream", async (c) => {
 		return pipeStreamToSSE(c, conversationId);
 	}
 
-	const persistResult = await persistUserMessage(db, {
-		conversationId,
-		message,
-		attachmentIds,
-		rewindToMessageId,
-	});
-	if (persistResult.error) {
-		return c.json({ error: persistResult.error }, 404);
-	}
-
-	const history = await loadConversationHistory(db, conversationId);
-	const imagePaths = collectImagePaths(history);
-	await autoTitleConversation(db, conversationId, history.length, message);
-
-	const sessionResult = await loadSessionWithPrompt(db, sessionId);
-	if ("error" in sessionResult) {
-		return c.json({ error: sessionResult.error }, 404);
-	}
-
-	log.info(
-		`POST /chat/stream — session=${sessionId}, conversation=${conversationId}, history=${history.length} messages`,
-	);
-
-	const cliStream = streamCliChat({
-		messages: history as Array<{ role: "system" | "user" | "assistant"; content: string }>,
-		systemPrompt: sessionResult.systemPrompt,
-		images: imagePaths.length > 0 ? imagePaths : undefined,
-	});
-	startStream(conversationId, cliStream, db);
-
-	return pipeStreamToSSE(c, conversationId);
+	return launchChatStream(c, db, parsed.data);
 });

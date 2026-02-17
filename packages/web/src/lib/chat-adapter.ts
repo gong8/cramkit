@@ -92,32 +92,18 @@ interface SseState {
 }
 
 function parseTextToolCalls(text: string) {
-	const callRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
-	const resultRegex = /<tool_result>\s*([\s\S]*?)\s*<\/tool_result>/g;
-
-	const calls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
-	const results: string[] = [];
-
-	let m: RegExpExecArray | null;
-	m = callRegex.exec(text);
-	while (m !== null) {
+	const calls = [...text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)].flatMap((m) => {
 		try {
 			const parsed = JSON.parse(m[1]);
-			calls.push({
-				toolName: parsed.name || "unknown",
-				args: parsed.arguments || {},
-			});
+			return [{ toolName: parsed.name || "unknown", args: parsed.arguments || {} }];
 		} catch {
-			// Skip unparseable
+			return [];
 		}
-		m = callRegex.exec(text);
-	}
+	});
 
-	m = resultRegex.exec(text);
-	while (m !== null) {
-		results.push(m[1].trim());
-		m = resultRegex.exec(text);
-	}
+	const results = [...text.matchAll(/<tool_result>\s*([\s\S]*?)\s*<\/tool_result>/g)].map((m) =>
+		m[1].trim(),
+	);
 
 	const parsedCalls = calls.map((call, i) => ({
 		id: `text_tc_${i}`,
@@ -137,41 +123,35 @@ function parseTextToolCalls(text: string) {
 	return { cleanText, parsedCalls };
 }
 
+function toToolCallPart(
+	id: string,
+	name: string,
+	args: Record<string, unknown>,
+	result?: string,
+	isError?: boolean,
+): ContentPart {
+	return {
+		type: "tool-call",
+		toolCallId: id,
+		toolName: name,
+		args,
+		argsText: JSON.stringify(args),
+		result,
+		isError,
+	};
+}
+
 function buildContentParts(state: SseState): ContentPart[] {
-	const parts: ContentPart[] = [];
-
-	if (state.thinkingText) {
-		parts.push({ type: "reasoning", text: state.thinkingText });
-	}
-
-	for (const tc of state.toolCalls.values()) {
-		parts.push({
-			type: "tool-call",
-			toolCallId: tc.toolCallId,
-			toolName: tc.toolName,
-			args: tc.args ?? {},
-			argsText: JSON.stringify(tc.args ?? {}),
-			result: tc.result,
-			isError: tc.isError,
-		});
-	}
-
 	const { cleanText, parsedCalls } = parseTextToolCalls(state.textContent);
-	for (const pc of parsedCalls) {
-		parts.push({
-			type: "tool-call",
-			toolCallId: pc.id,
-			toolName: pc.toolName,
-			args: pc.args,
-			argsText: JSON.stringify(pc.args),
-			result: pc.result,
-			isError: false,
-		});
-	}
 
-	parts.push({ type: "text", text: cleanText });
-
-	return parts;
+	return [
+		...(state.thinkingText ? [{ type: "reasoning" as const, text: state.thinkingText }] : []),
+		...[...state.toolCalls.values()].map((tc) =>
+			toToolCallPart(tc.toolCallId, tc.toolName, tc.args ?? {}, tc.result, tc.isError),
+		),
+		...parsedCalls.map((pc) => toToolCallPart(pc.id, pc.toolName, pc.args, pc.result, false)),
+		{ type: "text" as const, text: cleanText },
+	];
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: assistant-ui message types are loosely typed
@@ -261,8 +241,8 @@ async function* readSseStream(
 ): AsyncGenerator<ChatModelRunResult> {
 	const decoder = new TextDecoder();
 	let buffer = "";
-	let currentEventType = "content";
-	const yieldContent = () => ({ content: buildContentParts(state) }) as ChatModelRunResult;
+	let eventType = "content";
+	const snapshot = () => ({ content: buildContentParts(state) }) as ChatModelRunResult;
 
 	try {
 		while (true) {
@@ -273,32 +253,22 @@ async function* readSseStream(
 			const lines = buffer.split("\n");
 			buffer = lines.pop() || "";
 
-			for (const line of lines) {
-				const trimmed = line.trim();
-				if (!trimmed) continue;
+			for (const raw of lines) {
+				const line = raw.trim();
+				if (!line) continue;
 
-				if (trimmed.startsWith("event: ")) {
-					currentEventType = trimmed.slice(7);
-					continue;
-				}
-
-				if (trimmed.startsWith("data: ")) {
-					const data = trimmed.slice(6);
+				if (line.startsWith("event: ")) {
+					eventType = line.slice(7);
+				} else if (line.startsWith("data: ")) {
+					const data = line.slice(6);
 					if (data === "[DONE]") {
-						yield yieldContent();
+						yield snapshot();
 						return;
 					}
-
 					try {
-						const parsed = JSON.parse(data);
-						if (handleSseEvent(currentEventType, parsed, state)) {
-							yield yieldContent();
-						}
-					} catch {
-						// Skip unparseable
-					}
-
-					currentEventType = "content";
+						if (handleSseEvent(eventType, JSON.parse(data), state)) yield snapshot();
+					} catch {}
+					eventType = "content";
 				}
 			}
 		}
@@ -307,7 +277,7 @@ async function* readSseStream(
 	}
 
 	if (state.textContent || state.toolCalls.size > 0 || state.thinkingText) {
-		yield yieldContent();
+		yield snapshot();
 	}
 }
 

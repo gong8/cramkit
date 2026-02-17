@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiClient } from "../lib/api-client.js";
+import { resourceId, sessionId } from "./params.js";
 
 interface ResourceInfo {
 	id: string;
@@ -26,26 +27,20 @@ function listResourcesByType(type: string, companionLabel: string, companionRole
 export const paperTools = {
 	list_past_papers: {
 		description: "List all past paper resources and whether they have mark schemes for a session.",
-		parameters: z.object({
-			sessionId: z.string().describe("The session ID"),
-		}),
+		parameters: z.object({ sessionId }),
 		execute: listResourcesByType("PAST_PAPER", "includes_mark_scheme", "MARK_SCHEME"),
 	},
 
 	get_past_paper: {
 		description: "Get a specific past paper's content.",
-		parameters: z.object({
-			resourceId: z.string().describe("The resource ID of the past paper"),
-		}),
+		parameters: z.object({ resourceId }),
 		execute: async ({ resourceId }: { resourceId: string }) =>
 			apiClient.getResourceContent(resourceId),
 	},
 
 	list_problem_sheets: {
 		description: "List all problem sheet resources and whether they have solutions for a session.",
-		parameters: z.object({
-			sessionId: z.string().describe("The session ID"),
-		}),
+		parameters: z.object({ sessionId }),
 		execute: listResourcesByType("PROBLEM_SHEET", "includes_solutions", "SOLUTIONS"),
 	},
 };

@@ -38,7 +38,6 @@ export async function amortiseSearchResults(
 		const chunkIds = contentResults.map((r) => r.chunkId);
 		const conceptIds = matchingConcepts.map((c) => c.id);
 
-		// Batch fetch: existing relationships + chunk titles
 		const [existing, chunks] = await Promise.all([
 			db.relationship.findMany({
 				where: {

@@ -30,37 +30,30 @@ async function runIndexJob(jobId: string): Promise<void> {
 	});
 	if (!job) return;
 
-	// If the batch was cancelled, mark this job cancelled and stop
 	if (job.batch.status === "cancelled") {
 		await db.indexJob.update({ where: { id: jobId }, data: { status: "cancelled" } });
 		return;
 	}
 
-	// Mark job as running
 	await db.indexJob.update({
 		where: { id: jobId },
 		data: { status: "running", startedAt: new Date(), attempts: { increment: 1 } },
 	});
 
-	const startTime = Date.now();
 	try {
+		const startTime = Date.now();
 		await indexResourceGraph(job.resourceId);
-
-		// Success
-		const durationMs = Date.now() - startTime;
 		await db.indexJob.update({
 			where: { id: jobId },
-			data: { status: "completed", completedAt: new Date(), durationMs },
+			data: { status: "completed", completedAt: new Date(), durationMs: Date.now() - startTime },
 		});
 		await db.indexBatch.update({
 			where: { id: job.batchId },
 			data: { completed: { increment: 1 } },
 		});
 	} catch (error) {
-		// Failure
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		const errorType = error instanceof GraphIndexError ? error.errorType : ("unknown" as const);
-
 		await db.indexJob.update({
 			where: { id: jobId },
 			data: { status: "failed", errorMessage, errorType },
@@ -72,7 +65,6 @@ async function runIndexJob(jobId: string): Promise<void> {
 		log.error(`runIndexJob — job ${jobId} failed: ${errorMessage}`);
 	}
 
-	// Check if the batch is done (all jobs terminal)
 	const batch = await db.indexBatch.findUnique({ where: { id: job.batchId } });
 	if (batch && batch.completed + batch.failed >= batch.total) {
 		await db.indexBatch.update({
@@ -159,40 +151,34 @@ export interface BatchStatusResult {
 export async function getSessionBatchStatus(sessionId: string): Promise<BatchStatusResult | null> {
 	const db = getDb();
 
-	const include = { jobs: { orderBy: { sortOrder: "asc" as const } } };
+	const jobsInclude = { jobs: { orderBy: { sortOrder: "asc" as const } } };
 	const batch =
 		(await db.indexBatch.findFirst({
 			where: { sessionId, status: "running" },
-			include,
+			include: jobsInclude,
 		})) ??
 		(await db.indexBatch.findFirst({
 			where: { sessionId },
 			orderBy: { startedAt: "desc" },
-			include,
+			include: jobsInclude,
 		}));
 	if (!batch) return null;
 
-	// Load resource metadata for the batch
-	const resourceIds = batch.jobs.map((j) => j.resourceId);
 	const batchResources = await db.resource.findMany({
-		where: { id: { in: resourceIds } },
+		where: { id: { in: batch.jobs.map((j) => j.resourceId) } },
 		select: { id: true, name: true, type: true },
 	});
 	const resourceMap = new Map(batchResources.map((r) => [r.id, r]));
 
-	const currentRunning = batch.jobs.find((j) => j.status === "running");
-
 	const resources = batch.jobs.map((j) => {
 		const r = resourceMap.get(j.resourceId);
-		const status =
-			j.status === "running"
-				? ("indexing" as const)
-				: (j.status as "pending" | "completed" | "cancelled" | "failed");
 		return {
 			id: j.resourceId,
 			name: r?.name ?? "Unknown",
 			type: r?.type ?? "OTHER",
-			status,
+			status: (j.status === "running"
+				? "indexing"
+				: j.status) as BatchStatusResult["resources"][0]["status"],
 			durationMs: j.durationMs,
 			errorMessage: j.errorMessage,
 			errorType: j.errorType,
@@ -205,7 +191,7 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 		batchTotal: batch.total,
 		batchCompleted: batch.completed,
 		batchFailed: batch.failed,
-		currentResourceId: currentRunning?.resourceId ?? null,
+		currentResourceId: batch.jobs.find((j) => j.status === "running")?.resourceId ?? null,
 		startedAt: batch.startedAt.getTime(),
 		cancelled: batch.status === "cancelled",
 		resources,
@@ -225,7 +211,6 @@ export async function resumeInterruptedBatches(): Promise<void> {
 	log.info(`resumeInterruptedBatches — found ${interrupted.length} interrupted batch(es)`);
 
 	for (const batch of interrupted) {
-		// Reset any "running" jobs back to "pending" (they were interrupted mid-execution)
 		await db.indexJob.updateMany({
 			where: { batchId: batch.id, status: "running" },
 			data: { status: "pending" },
@@ -259,26 +244,19 @@ export async function retryFailedJobs(sessionId: string): Promise<number> {
 
 	const failedJobIds = batch.jobs.map((j) => j.id);
 
-	// Reset failed jobs to pending
 	await db.indexJob.updateMany({
 		where: { id: { in: failedJobIds } },
 		data: { status: "pending", errorMessage: null, errorType: null },
 	});
 
-	// If batch was completed/cancelled, set it back to running and recalculate failed count
-	if (batch.status !== "running") {
-		await db.indexBatch.update({
-			where: { id: batch.id },
-			data: { status: "running", failed: 0, completedAt: null },
-		});
-	} else {
-		await db.indexBatch.update({
-			where: { id: batch.id },
-			data: { failed: { decrement: failedJobIds.length } },
-		});
-	}
+	await db.indexBatch.update({
+		where: { id: batch.id },
+		data:
+			batch.status !== "running"
+				? { status: "running", failed: 0, completedAt: null }
+				: { failed: { decrement: failedJobIds.length } },
+	});
 
-	// Re-enqueue
 	for (const job of batch.jobs) {
 		indexingQueue.add(() => runIndexJob(job.id));
 	}

@@ -15,6 +15,25 @@ export interface GraphSearchResult {
 	relatedConcepts: Array<{ name: string; relationship: string }>;
 }
 
+interface RelSides {
+	conceptId: string;
+	entityId: string;
+	entityType: string;
+}
+
+function resolveRelSides(
+	rel: { sourceType: string; sourceId: string; targetType: string; targetId: string },
+	conceptIds: string[],
+): RelSides | null {
+	if (rel.sourceType === "concept" && conceptIds.includes(rel.sourceId)) {
+		return { conceptId: rel.sourceId, entityId: rel.targetId, entityType: rel.targetType };
+	}
+	if (rel.targetType === "concept" && conceptIds.includes(rel.targetId)) {
+		return { conceptId: rel.targetId, entityId: rel.sourceId, entityType: rel.sourceType };
+	}
+	return null;
+}
+
 export async function searchGraph(
 	sessionId: string,
 	query: string,
@@ -59,23 +78,24 @@ export async function searchGraph(
 	const chunkConceptMap = new Map<string, Array<{ name: string; relationship: string }>>();
 
 	const addConcept = (chunkId: string, name: string, relationship: string) => {
-		const list = chunkConceptMap.get(chunkId);
-		if (list) list.push({ name, relationship });
-		else chunkConceptMap.set(chunkId, [{ name, relationship }]);
+		let list = chunkConceptMap.get(chunkId);
+		if (!list) {
+			list = [];
+			chunkConceptMap.set(chunkId, list);
+		}
+		list.push({ name, relationship });
 	};
 
 	for (const rel of relationships) {
-		const isSource = rel.sourceType === "concept" && conceptIds.includes(rel.sourceId);
-		const conceptId = isSource ? rel.sourceId : rel.targetId;
-		const entityId = isSource ? rel.targetId : rel.sourceId;
-		const entityType = isSource ? rel.targetType : rel.sourceType;
-		const name = conceptNames.get(conceptId) || "";
+		const sides = resolveRelSides(rel, conceptIds);
+		if (!sides) continue;
+		const name = conceptNames.get(sides.conceptId) || "";
 
-		if (entityType === "chunk") {
-			chunkIds.add(entityId);
-			addConcept(entityId, name, rel.relationship);
-		} else if (entityType === "resource") {
-			resourceIds.add(entityId);
+		if (sides.entityType === "chunk") {
+			chunkIds.add(sides.entityId);
+			addConcept(sides.entityId, name, rel.relationship);
+		} else if (sides.entityType === "resource") {
+			resourceIds.add(sides.entityId);
 		}
 	}
 
@@ -87,13 +107,9 @@ export async function searchGraph(
 		for (const rc of resourceChunks) {
 			chunkIds.add(rc.id);
 			for (const rel of relationships) {
-				const isSource = rel.sourceType === "concept" && conceptIds.includes(rel.sourceId);
-				const entityId = isSource ? rel.targetId : rel.sourceId;
-				const entityType = isSource ? rel.targetType : rel.sourceType;
-				if (entityType === "resource" && entityId === rc.resourceId) {
-					const conceptId = isSource ? rel.sourceId : rel.targetId;
-					addConcept(rc.id, conceptNames.get(conceptId) || "", rel.relationship);
-				}
+				const sides = resolveRelSides(rel, conceptIds);
+				if (!sides || sides.entityType !== "resource" || sides.entityId !== rc.resourceId) continue;
+				addConcept(rc.id, conceptNames.get(sides.conceptId) || "", rel.relationship);
 			}
 		}
 	}

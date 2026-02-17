@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { apiClient } from "../lib/api-client.js";
+import { conceptId, sessionId } from "./params.js";
 
 export const graphTools = {
 	create_link: {
 		description:
 			"Create a relationship link between two entities in the knowledge graph. Entities can be resources, chunks, or concepts.",
 		parameters: z.object({
-			sessionId: z.string().describe("The session ID"),
+			sessionId,
 			sourceType: z
 				.string()
 				.describe("Type of the source entity: 'resource', 'chunk', or 'concept'"),
@@ -50,18 +51,14 @@ export const graphTools = {
 	list_concepts: {
 		description:
 			"List all concepts extracted from study materials in a session. Returns an array of concepts, each with: id, name, description, aliases (comma-separated alternate names), sessionId, and timestamps. Use this to discover what topics and ideas the knowledge graph has identified across all resources.",
-		parameters: z.object({
-			sessionId: z.string().describe("The session ID"),
-		}),
+		parameters: z.object({ sessionId }),
 		execute: async ({ sessionId }: { sessionId: string }) => apiClient.listConcepts(sessionId),
 	},
 
 	get_concept: {
 		description:
 			"Get a concept's full details and all its knowledge graph relationships. Returns the concept (id, name, description, aliases) plus all relationships where this concept is source or target — linking it to other concepts, chunks, and resources. Use this for concept-centric graph exploration: start from a concept and discover what material covers it, what prerequisites it has, and what other concepts it relates to.",
-		parameters: z.object({
-			conceptId: z.string().describe("The concept ID (from list_concepts or get_related)"),
-		}),
+		parameters: z.object({ conceptId }),
 		execute: async ({ conceptId }: { conceptId: string }) => apiClient.getConcept(conceptId),
 	},
 };

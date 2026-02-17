@@ -26,7 +26,6 @@ async function findConcept(id: string) {
 	return getDb().concept.findUnique({ where: { id } });
 }
 
-// List concepts for session
 graphRoutes.get("/sessions/:sessionId/concepts", async (c) => {
 	const sessionId = c.req.param("sessionId");
 	const concepts = await getDb().concept.findMany({
@@ -37,7 +36,6 @@ graphRoutes.get("/sessions/:sessionId/concepts", async (c) => {
 	return c.json(concepts);
 });
 
-// Get concept detail with relationships
 graphRoutes.get("/concepts/:id", async (c) => {
 	const id = c.req.param("id");
 	const concept = await findConcept(id);
@@ -50,7 +48,6 @@ graphRoutes.get("/concepts/:id", async (c) => {
 	return c.json({ ...concept, relationships });
 });
 
-// Delete concept + its relationships
 graphRoutes.delete("/concepts/:id", async (c) => {
 	const db = getDb();
 	const id = c.req.param("id");
@@ -65,7 +62,6 @@ graphRoutes.delete("/concepts/:id", async (c) => {
 	return c.json({ ok: true });
 });
 
-// Get related items for an entity
 graphRoutes.get("/related", async (c) => {
 	const type = c.req.query("type");
 	const id = c.req.query("id");
@@ -85,7 +81,6 @@ graphRoutes.get("/related", async (c) => {
 	return c.json(relationships);
 });
 
-// Trigger graph indexing for one resource
 graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 	const sessionId = c.req.param("sessionId");
 	const body = await c.req.json();
@@ -103,18 +98,14 @@ graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 	return c.json({ ok: true, resourceId: parsed.data.resourceId });
 });
 
-// Trigger graph indexing for all resources in session
 graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 
-	let reindex = false;
-	try {
-		const body = await c.req.json();
-		reindex = body?.reindex === true;
-	} catch {
-		// No body or invalid JSON — default to non-reindex
-	}
+	const reindex = await c.req
+		.json()
+		.then((b) => b?.reindex === true)
+		.catch(() => false);
 
 	const resources = await db.resource.findMany({
 		where: {
@@ -140,7 +131,6 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 	return c.json({ ok: true, queued: resourceIds.length });
 });
 
-// Cancel indexing for a session
 graphRoutes.post("/sessions/:sessionId/cancel-indexing", async (c) => {
 	const sessionId = c.req.param("sessionId");
 	const cancelled = await cancelSessionIndexing(sessionId);
@@ -148,14 +138,12 @@ graphRoutes.post("/sessions/:sessionId/cancel-indexing", async (c) => {
 	return c.json({ ok: true, cancelled });
 });
 
-// Retry failed indexing jobs for a session
 graphRoutes.post("/sessions/:sessionId/retry-failed", async (c) => {
 	const sessionId = c.req.param("sessionId");
 	const retried = await retryFailedJobs(sessionId);
 	return c.json({ ok: true, retried });
 });
 
-// Get full graph data (concepts + relationships) for a session
 graphRoutes.get("/sessions/:sessionId/full", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
@@ -175,7 +163,6 @@ graphRoutes.get("/sessions/:sessionId/full", async (c) => {
 	return c.json({ concepts, relationships, resources });
 });
 
-// Get indexing progress
 graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");

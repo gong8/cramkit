@@ -1,5 +1,4 @@
-import { getDb } from "@cramkit/shared";
-import { cleanDb, mockLlmByResourceType, seedPdeSession } from "../fixtures/helpers.js";
+import { mockLlmByResourceType, seedPdeSession, useTestDb } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -10,10 +9,9 @@ import { indexResourceGraph } from "../../packages/api/src/services/graph-indexe
 import { searchGraph } from "../../packages/api/src/services/graph-search.js";
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 
-const db = getDb();
+const db = useTestDb();
 
-beforeEach(async () => {
-	await cleanDb(db);
+beforeEach(() => {
 	vi.mocked(chatCompletion).mockReset();
 });
 

@@ -65,7 +65,9 @@ function IndexStatus({
 	isBusy: boolean;
 	onIndex: () => void;
 }) {
-	if (resource.isGraphIndexed && !isBusy) {
+	if (isBusy || (!resource.isIndexed && !resource.isGraphIndexed)) return null;
+
+	if (resource.isGraphIndexed) {
 		return (
 			<>
 				<span className="text-xs text-violet-600">Indexed</span>
@@ -82,21 +84,17 @@ function IndexStatus({
 		);
 	}
 
-	if (resource.isIndexed && !resource.isGraphIndexed && !isBusy) {
-		return (
-			<button
-				type="button"
-				onClick={onIndex}
-				className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
-				title="Index for knowledge graph"
-			>
-				<BrainCircuit className="h-3.5 w-3.5" />
-				Index
-			</button>
-		);
-	}
-
-	return null;
+	return (
+		<button
+			type="button"
+			onClick={onIndex}
+			className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
+			title="Index for knowledge graph"
+		>
+			<BrainCircuit className="h-3.5 w-3.5" />
+			Index
+		</button>
+	);
 }
 
 function BatchStatus({ status }: { status?: BatchResource["status"] }) {
@@ -239,26 +237,24 @@ function ResourceRow({
 		}
 	};
 
+	const expandProps = canExpand
+		? {
+				className: "flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-accent/50",
+				role: "button" as const,
+				tabIndex: 0,
+				onClick: onToggleExpand,
+				onKeyDown: (e: React.KeyboardEvent) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						onToggleExpand();
+					}
+				},
+			}
+		: { className: "flex items-center justify-between px-3 py-2" };
+
 	return (
 		<div className="rounded-md border border-border">
-			<div
-				className={`flex items-center justify-between px-3 py-2 ${
-					canExpand ? "cursor-pointer hover:bg-accent/50" : ""
-				}`}
-				role={canExpand ? "button" : undefined}
-				tabIndex={canExpand ? 0 : undefined}
-				onClick={canExpand ? onToggleExpand : undefined}
-				onKeyDown={
-					canExpand
-						? (e) => {
-								if (e.key === "Enter" || e.key === " ") {
-									e.preventDefault();
-									onToggleExpand();
-								}
-							}
-						: undefined
-				}
-			>
+			<div {...expandProps}>
 				<div className="flex items-center gap-3">
 					{canExpand &&
 						(isExpanded ? (
@@ -357,12 +353,7 @@ export function ResourceList({
 	const queryClient = useQueryClient();
 	const [expandedResourceId, setExpandedResourceId] = useState<string | null>(null);
 
-	const batchStatusMap = new Map<string, BatchResource["status"]>();
-	if (batchResources) {
-		for (const br of batchResources) {
-			batchStatusMap.set(br.id, br.status);
-		}
-	}
+	const batchStatusMap = new Map(batchResources?.map((br) => [br.id, br.status]) ?? []);
 
 	const invalidateSession = () => {
 		queryClient.invalidateQueries({ queryKey: ["session", sessionId] });

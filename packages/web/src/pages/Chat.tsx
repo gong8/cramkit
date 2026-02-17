@@ -1,58 +1,13 @@
-import {
-	createConversation,
-	deleteConversation,
-	fetchConversations,
-	fetchSession,
-} from "@/lib/api";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { fetchConversations, fetchSession } from "@/lib/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import "katex/dist/katex.min.css";
 import { ChatThread } from "@/components/chat/ChatThread.js";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar.js";
-import { ArrowLeft, MessageSquare, Plus } from "lucide-react";
+import { EmptyState } from "@/components/chat/EmptyState.js";
+import { useConversationCleanup } from "@/hooks/useConversationCleanup.js";
+import { ArrowLeft } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-
-// ─── Empty State ───
-
-function EmptyState({
-	sessionId,
-	onCreated,
-}: {
-	sessionId: string;
-	onCreated: (id: string) => void;
-}) {
-	const queryClient = useQueryClient();
-
-	const createMutation = useMutation({
-		mutationFn: () => createConversation(sessionId),
-		onSuccess: (conv) => {
-			queryClient.invalidateQueries({
-				queryKey: ["conversations", sessionId],
-			});
-			onCreated(conv.id);
-		},
-	});
-
-	return (
-		<div className="flex h-full flex-col items-center justify-center gap-4">
-			<MessageSquare className="h-12 w-12 text-muted-foreground/40" />
-			<div className="text-center">
-				<p className="text-sm text-muted-foreground">Select a conversation or start a new one</p>
-			</div>
-			<button
-				type="button"
-				onClick={() => createMutation.mutate()}
-				disabled={createMutation.isPending}
-				className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-			>
-				<Plus className="h-4 w-4" />
-				New chat
-			</button>
-		</div>
-	);
-}
-
-// ─── Main Chat Page ───
 
 export function Chat() {
 	useEffect(() => {
@@ -107,29 +62,13 @@ export function Chat() {
 		navigate,
 	]);
 
-	useEffect(() => {
-		if (conversations.length === 0 || conversationsFetching) return;
-		const toDelete = conversations.filter((c) => {
-			if (c.messageCount !== 0) return false;
-			if (c.id === activeConversationId) return false;
-			const ageMs = Date.now() - new Date(c.createdAt).getTime();
-			if (ageMs < 10_000) return false;
-			const saved = sessionStorage.getItem(`chat-draft::${c.id}`);
-			if (saved) {
-				try {
-					const draft = JSON.parse(saved);
-					if (draft.text?.trim() || draft.attachments?.length > 0) return false;
-				} catch {
-					// ignore
-				}
-			}
-			return true;
-		});
-		if (toDelete.length === 0) return;
-		Promise.all(toDelete.map((c) => deleteConversation(c.id).catch(() => {}))).then(() => {
-			queryClient.invalidateQueries({ queryKey: ["conversations", sessionId] });
-		});
-	}, [conversations, conversationsFetching, activeConversationId, sessionId, queryClient]);
+	useConversationCleanup(
+		conversations,
+		conversationsFetching,
+		activeConversationId,
+		sessionId,
+		queryClient,
+	);
 
 	const [threadReloadKey, setThreadReloadKey] = useState(0);
 	const handleStreamReconnected = useCallback(() => {

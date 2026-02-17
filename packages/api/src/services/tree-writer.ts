@@ -25,15 +25,17 @@ function zeroPad(n: number): string {
 }
 
 function buildFrontmatter(node: TreeNode): string {
-	const lines = ["---"];
-	lines.push(`title: "${node.title.replace(/"/g, '\\"')}"`);
-	lines.push(`nodeType: ${node.nodeType}`);
-	lines.push(`depth: ${node.depth}`);
-	lines.push(`order: ${node.order}`);
-	if (node.startPage !== undefined) lines.push(`startPage: ${node.startPage}`);
-	if (node.endPage !== undefined) lines.push(`endPage: ${node.endPage}`);
-	lines.push("---");
-	return lines.join("\n");
+	const fields: Array<[string, string | number]> = [
+		["title", `"${node.title.replace(/"/g, '\\"')}"`],
+		["nodeType", node.nodeType],
+		["depth", node.depth],
+		["order", node.order],
+	];
+	if (node.startPage !== undefined) fields.push(["startPage", node.startPage]);
+	if (node.endPage !== undefined) fields.push(["endPage", node.endPage]);
+
+	const body = fields.map(([k, v]) => `${k}: ${v}`).join("\n");
+	return `---\n${body}\n---`;
 }
 
 async function writeMarkdownFile(filePath: string, node: TreeNode): Promise<void> {
@@ -51,16 +53,26 @@ interface NodeLayout {
 
 function computeNodeLayout(baseDir: string, relativeBase: string, node: TreeNode): NodeLayout {
 	const isRoot = node.order === 0 && node.depth === 0;
-	const isLeaf = node.children.length === 0;
-	const nodeSlug = isRoot ? "" : `${zeroPad(node.order)}-${slugify(node.title)}`;
+	if (isRoot) {
+		return {
+			dirPath: baseDir,
+			relDir: relativeBase,
+			fileName: "_index.md",
+			slug: "_index",
+			needsDir: true,
+		};
+	}
 
-	const isBranch = !isRoot && !isLeaf;
-	const dirPath = isBranch ? join(baseDir, nodeSlug) : baseDir;
-	const relDir = isBranch ? join(relativeBase, nodeSlug) : relativeBase;
-	const fileName = isLeaf && !isRoot ? `${nodeSlug}.md` : "_index.md";
-	const slug = isRoot ? "_index" : nodeSlug;
+	const nodeSlug = `${zeroPad(node.order)}-${slugify(node.title)}`;
+	const hasChildren = node.children.length > 0;
 
-	return { dirPath, relDir, fileName, slug, needsDir: !isLeaf || isRoot };
+	return {
+		dirPath: hasChildren ? join(baseDir, nodeSlug) : baseDir,
+		relDir: hasChildren ? join(relativeBase, nodeSlug) : relativeBase,
+		fileName: hasChildren ? "_index.md" : `${nodeSlug}.md`,
+		slug: nodeSlug,
+		needsDir: hasChildren,
+	};
 }
 
 async function writeNodeToDisk(

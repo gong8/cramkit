@@ -53,21 +53,15 @@ function getCliModel(model: string): string {
 	return "sonnet";
 }
 
-/** Max image dimension for vision — balances quality vs token cost */
 const CLI_IMAGE_MAX_DIM = 1536;
 const CLI_IMAGE_QUALITY = 80;
 
-/** Create a per-invocation temp directory so concurrent streams never share files */
 function createInvocationDir(): string {
 	const dir = join(BASE_TEMP_DIR, randomUUID().slice(0, 12));
 	mkdirSync(dir, { recursive: true });
 	return dir;
 }
 
-/**
- * Resize images so the CLI's Read tool can process them (25k token limit).
- * Returns paths to resized copies in the invocation temp directory.
- */
 async function resizeImagesForCli(images: string[], dir: string): Promise<string[]> {
 	const resized: string[] = [];
 	for (let i = 0; i < images.length; i++) {
@@ -92,12 +86,6 @@ function writeTempFile(dir: string, filename: string, content: string): string {
 	return filePath;
 }
 
-/**
- * Generate a minimal MCP stdio server script that serves image files.
- * Only allows reading files whose paths are in the provided allowlist.
- * This is used instead of unblocking the Read tool, which the agent abuses
- * to read arbitrary files (including CLI overflow dumps).
- */
 function writeImageViewerMcp(dir: string, allowedPaths: string[]): string {
 	const allowedJson = JSON.stringify(allowedPaths);
 	const script = `#!/usr/bin/env node
@@ -278,39 +266,46 @@ type BlockType = "text" | "tool_use" | "thinking";
 
 type SSEEmitter = (event: string, data: string) => void;
 
-/** Extract tool_result blocks from a message's content array and emit them */
-function emitToolResults(
+function extractToolResultText(
+	blockContent: string | Array<Record<string, unknown>> | undefined,
+): string {
+	if (typeof blockContent === "string") return blockContent;
+	if (Array.isArray(blockContent)) {
+		return blockContent.map((c) => (c.text as string) || "").join("");
+	}
+	return "";
+}
+
+function emitToolResultsFromContent(
 	content: Array<Record<string, unknown>> | undefined,
 	emitSSE: SSEEmitter,
 ): void {
 	if (!content) return;
 	for (const block of content) {
 		if (block.type !== "tool_result") continue;
-		const toolUseId = block.tool_use_id as string;
-		const isError = block.is_error === true;
-		const blockContent = block.content as string | Array<Record<string, unknown>> | undefined;
-		let resultText = "";
-		if (typeof blockContent === "string") {
-			resultText = blockContent;
-		} else if (Array.isArray(blockContent)) {
-			resultText = blockContent.map((c) => (c.text as string) || "").join("");
-		}
-		emitSSE("tool_result", JSON.stringify({ toolCallId: toolUseId, result: resultText, isError }));
+		emitSSE(
+			"tool_result",
+			JSON.stringify({
+				toolCallId: block.tool_use_id as string,
+				result: extractToolResultText(
+					block.content as string | Array<Record<string, unknown>> | undefined,
+				),
+				isError: block.is_error === true,
+			}),
+		);
 	}
 }
 
-/** Extract tool_result blocks from user-role messages */
 function emitUserToolResults(msg: Record<string, unknown>, emitSSE: SSEEmitter): void {
 	const message = msg.message as Record<string, unknown> | undefined;
 	if (message?.role === "user") {
-		emitToolResults(message.content as Array<Record<string, unknown>> | undefined, emitSSE);
+		emitToolResultsFromContent(
+			message.content as Array<Record<string, unknown>> | undefined,
+			emitSSE,
+		);
 	}
 }
 
-/**
- * Creates a stateful stream parser that handles content_block_start/delta/stop
- * events for text, tool_use, and thinking blocks.
- */
 function createStreamParser(emitSSE: SSEEmitter) {
 	const blockTypes = new Map<number, BlockType>();
 	const toolCalls = new Map<number, { id: string; name: string; argsJson: string }>();
@@ -393,7 +388,6 @@ function createStreamParser(emitSSE: SSEEmitter) {
 	};
 }
 
-/** Prepare all temp files and CLI args needed for a chat invocation */
 async function prepareInvocation(options: CliChatOptions): Promise<{
 	invocationDir: string;
 	args: string[];
@@ -417,7 +411,6 @@ async function prepareInvocation(options: CliChatOptions): Promise<{
 	return { invocationDir, args, model };
 }
 
-/** Spawn the Claude CLI process */
 function spawnCli(args: string[], cwd: string): ChildProcessWithoutNullStreams {
 	return spawn("claude", args, {
 		cwd,
@@ -431,7 +424,6 @@ function spawnCli(args: string[], cwd: string): ChildProcessWithoutNullStreams {
 	});
 }
 
-/** Process stdout JSON lines through the parser, logging result summaries */
 function pipeStdout(
 	proc: ChildProcessWithoutNullStreams,
 	parser: ReturnType<typeof createStreamParser>,
@@ -462,23 +454,75 @@ function pipeStdout(
 	});
 }
 
-/**
- * Spawn the Claude CLI with MCP tools and stream the response.
- * Emits structured SSE events for text, tool calls, thinking, and results.
- */
+function cleanupDir(dir: string): void {
+	try {
+		rmSync(dir, { recursive: true, force: true });
+	} catch {
+		// best-effort cleanup
+	}
+}
+
+function wireProcessLifecycle(
+	proc: ChildProcessWithoutNullStreams,
+	emitSSE: SSEEmitter,
+	parser: ReturnType<typeof createStreamParser>,
+	startMs: number,
+	invocationDir: string,
+	signal?: AbortSignal,
+): void {
+	proc.stdin?.end();
+	log.info(`cli-chat PID: ${proc.pid}`);
+
+	if (signal) {
+		signal.addEventListener("abort", () => {
+			log.info(`cli-chat abort signal, killing PID ${proc.pid}`);
+			proc.kill("SIGTERM");
+		});
+	}
+
+	let closed = false;
+	const finalize = (emitError?: string): void => {
+		if (closed) return;
+		closed = true;
+		if (emitError) emitSSE("error", JSON.stringify({ error: emitError }));
+		emitSSE("done", "[DONE]");
+	};
+
+	pipeStdout(proc, parser, startMs);
+
+	proc.stderr?.on("data", (chunk: Buffer) => {
+		const text = chunk.toString().trim();
+		if (text) log.warn(`cli-chat stderr: ${text.slice(0, 300)}`);
+	});
+
+	proc.on("close", (code) => {
+		const elapsed = (performance.now() - startMs).toFixed(0);
+		log.info(`cli-chat process exited code=${code} elapsed=${elapsed}ms`);
+		finalize();
+		cleanupDir(invocationDir);
+	});
+
+	proc.on("error", (err) => {
+		log.error(`cli-chat process error: ${err.message}`);
+		finalize(err.message);
+		cleanupDir(invocationDir);
+	});
+}
+
 export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Array> {
+	const encoder = new TextEncoder();
+
 	return new ReadableStream({
 		async start(controller) {
-			const encoder = new TextEncoder();
+			const emitSSE: SSEEmitter = (event, data) => {
+				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+			};
+
 			const { invocationDir, args, model } = await prepareInvocation(options);
 			const startMs = performance.now();
 			log.info(
 				`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${args[args.length - 1].length} chars`,
 			);
-
-			const emitSSE: SSEEmitter = (event, data) => {
-				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
-			};
 
 			let proc: ChildProcessWithoutNullStreams;
 			try {
@@ -492,53 +536,12 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 				return;
 			}
 
-			proc.stdin?.end();
-			log.info(`cli-chat PID: ${proc.pid}`);
-
-			if (options.signal) {
-				options.signal.addEventListener("abort", () => {
-					log.info(`cli-chat abort signal, killing PID ${proc.pid}`);
-					proc.kill("SIGTERM");
-				});
-			}
-
-			let closed = false;
-			const tryClose = (): void => {
-				if (closed) return;
-				closed = true;
-				emitSSE("done", "[DONE]");
-				controller.close();
-			};
-
-			const cleanup = (): void => {
-				try {
-					rmSync(invocationDir, { recursive: true, force: true });
-				} catch {
-					// best-effort cleanup
-				}
-			};
-
 			const parser = createStreamParser(emitSSE);
-			pipeStdout(proc, parser, startMs);
 
-			proc.stderr?.on("data", (chunk: Buffer) => {
-				const text = chunk.toString().trim();
-				if (text) log.warn(`cli-chat stderr: ${text.slice(0, 300)}`);
-			});
+			proc.on("close", () => controller.close());
+			proc.on("error", () => controller.close());
 
-			proc.on("close", (code) => {
-				const elapsed = (performance.now() - startMs).toFixed(0);
-				log.info(`cli-chat process exited code=${code} elapsed=${elapsed}ms`);
-				tryClose();
-				cleanup();
-			});
-
-			proc.on("error", (err) => {
-				log.error(`cli-chat process error: ${err.message}`);
-				emitSSE("error", JSON.stringify({ error: err.message }));
-				tryClose();
-				cleanup();
-			});
+			wireProcessLifecycle(proc, emitSSE, parser, startMs, invocationDir, options.signal);
 		},
 	});
 }

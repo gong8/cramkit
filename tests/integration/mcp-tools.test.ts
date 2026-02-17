@@ -10,9 +10,9 @@ import { apiClient } from "../../packages/mcp/src/lib/api-client.js";
 import { graphTools } from "../../packages/mcp/src/tools/graph.js";
 
 beforeEach(() => {
-	vi.mocked(apiClient.createRelationship).mockClear();
-	vi.mocked(apiClient.getRelated).mockClear();
-	vi.mocked(apiClient.listConcepts).mockClear();
+	for (const method of ["createRelationship", "getRelated", "listConcepts"] as const) {
+		vi.mocked(apiClient[method]).mockClear();
+	}
 });
 
 describe("MCP graph tools", () => {

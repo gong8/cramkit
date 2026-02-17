@@ -22,22 +22,18 @@ export async function chatCompletion(
 	const model = getCliModel(options?.model || LLM_MODEL);
 	log.info(`chatCompletion — model=${model}, messages=${messages.length}`);
 
-	// Strip null bytes from message content — PDF extraction can leave them in
-	const sanitizedMessages = messages.map((m) => ({
-		...m,
-		content: m.content.replaceAll("\0", ""),
-	}));
+	const clean = messages.map((m) => ({ ...m, content: m.content.replaceAll("\0", "") }));
 
-	const systemParts = sanitizedMessages.filter((m) => m.role === "system").map((m) => m.content);
-	const promptParts = sanitizedMessages
+	const systemParts = clean.filter((m) => m.role === "system").map((m) => m.content);
+	const prompt = clean
 		.filter((m) => m.role !== "system")
 		.map((m) =>
 			m.role === "assistant"
 				? `<previous_response>\n${m.content}\n</previous_response>`
 				: m.content,
-		);
-
-	const prompt = promptParts.join("\n\n").trim();
+		)
+		.join("\n\n")
+		.trim();
 	if (!prompt) {
 		throw new Error("No user prompt found in messages");
 	}
@@ -70,14 +66,10 @@ export async function chatCompletion(
 	args.push(prompt);
 
 	return new Promise<string>((resolve, reject) => {
+		const { PATH, HOME, SHELL, TERM } = process.env;
 		const proc = spawn("claude", args, {
 			cwd: tempDir,
-			env: {
-				PATH: process.env.PATH,
-				HOME: process.env.HOME,
-				SHELL: process.env.SHELL,
-				TERM: process.env.TERM,
-			},
+			env: { PATH, HOME, SHELL, TERM },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 

@@ -1,7 +1,11 @@
+import { createLogger } from "@cramkit/shared";
 import type { PrismaClient } from "@prisma/client";
 import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
-import { subscribe } from "../services/stream-manager.js";
+import { streamCliChat } from "../services/cli-chat.js";
+import { startStream, subscribe } from "../services/stream-manager.js";
+
+const log = createLogger("api");
 
 /**
  * Pipe a stream-manager subscription into an SSE response.
@@ -89,13 +93,9 @@ export async function persistUserMessage(
 export function collectImagePaths(
 	history: Array<{ attachments: Array<{ diskPath: string | null }> }>,
 ): string[] {
-	const paths: string[] = [];
-	for (const msg of history) {
-		for (const att of msg.attachments) {
-			if (att.diskPath) paths.push(att.diskPath);
-		}
-	}
-	return paths;
+	return history.flatMap((msg) =>
+		msg.attachments.map((att) => att.diskPath).filter((p): p is string => p !== null),
+	);
 }
 
 interface SessionWithResources {
@@ -253,4 +253,50 @@ export async function autoTitleConversation(
 		where: { id: conversationId },
 		data: { title },
 	});
+}
+
+export async function launchChatStream(
+	c: Context,
+	db: PrismaClient,
+	opts: {
+		sessionId: string;
+		conversationId: string;
+		message: string;
+		attachmentIds?: string[];
+		rewindToMessageId?: string;
+	},
+) {
+	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId } = opts;
+
+	const persistResult = await persistUserMessage(db, {
+		conversationId,
+		message,
+		attachmentIds,
+		rewindToMessageId,
+	});
+	if (persistResult.error) {
+		return c.json({ error: persistResult.error }, 404);
+	}
+
+	const history = await loadConversationHistory(db, conversationId);
+	const imagePaths = collectImagePaths(history);
+	await autoTitleConversation(db, conversationId, history.length, message);
+
+	const sessionResult = await loadSessionWithPrompt(db, sessionId);
+	if ("error" in sessionResult) {
+		return c.json({ error: sessionResult.error }, 404);
+	}
+
+	log.info(
+		`POST /chat/stream — session=${sessionId}, conversation=${conversationId}, history=${history.length} messages`,
+	);
+
+	const cliStream = streamCliChat({
+		messages: history as Array<{ role: "system" | "user" | "assistant"; content: string }>,
+		systemPrompt: sessionResult.systemPrompt,
+		images: imagePaths.length > 0 ? imagePaths : undefined,
+	});
+	startStream(conversationId, cliStream, db);
+
+	return pipeStreamToSSE(c, conversationId);
 }

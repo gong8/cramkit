@@ -32,8 +32,7 @@ beforeEach(async () => {
 	vi.mocked(indexResourceGraph).mockReset().mockResolvedValue(undefined);
 	vi.mocked(processResource).mockReset().mockResolvedValue(undefined);
 	await initDb();
-	const db = getDb();
-	await cleanDb(db);
+	await cleanDb(getDb());
 });
 
 describe("queue", () => {

@@ -24,22 +24,23 @@ function Field({
 
 export function NewSession() {
 	const navigate = useNavigate();
-	const [name, setName] = useState("");
-	const [module, setModule] = useState("");
-	const [examDate, setExamDate] = useState("");
+	const [form, setForm] = useState({ name: "", module: "", examDate: "" });
 	const [submitting, setSubmitting] = useState(false);
+
+	const set = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+		setForm((f) => ({ ...f, [field]: e.target.value }));
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
-		if (!name.trim()) return;
+		if (!form.name.trim()) return;
 
 		setSubmitting(true);
-		log.info(`handleSubmit — creating session "${name.trim()}"`);
+		log.info(`handleSubmit — creating session "${form.name.trim()}"`);
 		try {
 			const session = await createSession({
-				name: name.trim(),
-				module: module.trim() || undefined,
-				examDate: examDate || undefined,
+				name: form.name.trim(),
+				module: form.module.trim() || undefined,
+				examDate: form.examDate || undefined,
 			});
 			log.info(`handleSubmit — created ${session.id}, navigating`);
 			navigate(`/session/${session.id}`);
@@ -59,8 +60,8 @@ export function NewSession() {
 					id="name"
 					label="Session Name *"
 					type="text"
-					value={name}
-					onChange={(e) => setName(e.target.value)}
+					value={form.name}
+					onChange={set("name")}
 					placeholder="e.g. PDEs Midterm"
 					required
 				/>
@@ -68,21 +69,21 @@ export function NewSession() {
 					id="module"
 					label="Module"
 					type="text"
-					value={module}
-					onChange={(e) => setModule(e.target.value)}
+					value={form.module}
+					onChange={set("module")}
 					placeholder="e.g. M2AA1 - Partial Differential Equations"
 				/>
 				<Field
 					id="examDate"
 					label="Exam Date"
 					type="date"
-					value={examDate}
-					onChange={(e) => setExamDate(e.target.value)}
+					value={form.examDate}
+					onChange={set("examDate")}
 				/>
 
 				<button
 					type="submit"
-					disabled={submitting || !name.trim()}
+					disabled={submitting || !form.name.trim()}
 					className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
 				>
 					{submitting ? "Creating..." : "Create Session"}

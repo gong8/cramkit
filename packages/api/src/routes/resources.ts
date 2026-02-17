@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { createLogger, createResourceSchema, getDb, updateResourceSchema } from "@cramkit/shared";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { enqueueProcessing } from "../lib/queue.js";
 import {
@@ -79,6 +80,24 @@ async function findResource(id: string, include?: { files?: boolean; chunks?: bo
 	});
 }
 
+async function findResourceOr404(
+	c: Context,
+	id: string,
+	include?: { files?: boolean; chunks?: boolean },
+) {
+	const resource = await findResource(id, include);
+	if (!resource) return c.json({ error: "Resource not found" }, 404);
+	return resource;
+}
+
+async function findFileInResource(c: Context, resourceId: string, fileId: string) {
+	const file = await getDb().file.findUnique({ where: { id: fileId } });
+	if (!file || file.resourceId !== resourceId) {
+		return c.json({ error: "File not found in this resource" }, 404);
+	}
+	return file;
+}
+
 function buildChunkTree<T extends { id: string; parentId: string | null }>(
 	chunks: T[],
 ): (T & { children: (T & { children: unknown[] })[] })[] {
@@ -101,71 +120,47 @@ function buildChunkTree<T extends { id: string; parentId: string | null }>(
 	return roots;
 }
 
-// ── Routes ──────────────────────────────────────────────────────────
-
-// Create resource + upload files (multipart)
-resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
-	const db = getDb();
-	const sessionId = c.req.param("sessionId");
-
-	const session = await db.session.findUnique({ where: { id: sessionId } });
-	if (!session) {
-		log.warn(`POST /sessions/${sessionId}/resources — session not found`);
-		return c.json({ error: "Session not found" }, 404);
-	}
-
-	const formData = await c.req.formData();
-	const name = formData.get("name") as string;
-	const type = formData.get("type") as string;
-	const label = formData.get("label") as string | null;
-	const splitMode = formData.get("splitMode") as string | null;
-
-	const metaParsed = createResourceSchema.safeParse({
-		name,
-		type,
-		label: label || undefined,
-		splitMode: splitMode || undefined,
+function parseFormMetadata(formData: FormData) {
+	return createResourceSchema.safeParse({
+		name: formData.get("name") as string,
+		type: formData.get("type") as string,
+		label: (formData.get("label") as string | null) || undefined,
+		splitMode: (formData.get("splitMode") as string | null) || undefined,
 	});
-	if (!metaParsed.success) {
-		log.warn(
-			`POST /sessions/${sessionId}/resources — invalid metadata`,
-			metaParsed.error.flatten(),
-		);
-		return c.json({ error: metaParsed.error.flatten() }, 400);
-	}
+}
 
-	// For LECTURE_NOTES, check if session already has one → add to existing
-	if (metaParsed.data.type === "LECTURE_NOTES") {
-		const existing = await db.resource.findFirst({
-			where: { sessionId, type: "LECTURE_NOTES" },
-		});
-		if (existing) {
-			const allFiles = collectFormFiles(formData);
-			if (allFiles.length === 0) return c.json({ error: "No files provided" }, 400);
+async function addToExistingLectureNotes(
+	sessionId: string,
+	existingId: string,
+	formData: FormData,
+) {
+	const allFiles = collectFormFiles(formData);
+	if (allFiles.length === 0) return { error: "No files provided" } as const;
 
-			await saveFiles(sessionId, existing.id, allFiles, "PRIMARY");
-			await reprocessResource(existing.id);
+	await saveFiles(sessionId, existingId, allFiles, "PRIMARY");
+	await reprocessResource(existingId);
 
-			log.info(
-				`POST /sessions/${sessionId}/resources — added ${allFiles.length} files to existing lecture notes resource ${existing.id}`,
-			);
-			return c.json(await findResource(existing.id, { files: true }), 200);
-		}
-	}
+	log.info(
+		`POST /sessions/${sessionId}/resources — added ${allFiles.length} files to existing lecture notes resource ${existingId}`,
+	);
+	return { resource: await findResource(existingId, { files: true }) } as const;
+}
 
-	// Create new resource
+type ResourceMeta = ReturnType<typeof createResourceSchema.parse>;
+
+async function createResourceWithFiles(sessionId: string, meta: ResourceMeta, formData: FormData) {
+	const db = getDb();
 	const resource = await db.resource.create({
 		data: {
 			sessionId,
-			name: metaParsed.data.name,
-			type: metaParsed.data.type,
-			label: metaParsed.data.label ?? null,
-			splitMode: metaParsed.data.splitMode,
+			name: meta.name,
+			type: meta.type,
+			label: meta.label ?? null,
+			splitMode: meta.splitMode,
 		},
 	});
 
-	const allPrimaryFiles = collectFormFiles(formData);
-	await saveFiles(sessionId, resource.id, allPrimaryFiles, "PRIMARY");
+	await saveFiles(sessionId, resource.id, collectFormFiles(formData), "PRIMARY");
 
 	const markSchemeFile = formData.get("markScheme") as File | null;
 	if (markSchemeFile) await saveFiles(sessionId, resource.id, [markSchemeFile], "MARK_SCHEME");
@@ -178,10 +173,59 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 	log.info(
 		`POST /sessions/${sessionId}/resources — created resource ${resource.id}, queued for processing`,
 	);
-	return c.json(await findResource(resource.id, { files: true }), 201);
+	return findResource(resource.id, { files: true });
+}
+
+async function deleteFullResource(resourceId: string, sessionId: string) {
+	await deleteResourceRelationships(resourceId);
+	await deleteResourceDir(sessionId, resourceId);
+	await getDb().resource.delete({ where: { id: resourceId } });
+}
+
+const MIME_TYPES: Record<string, string> = {
+	".pdf": "application/pdf",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".txt": "text/plain",
+};
+
+// ── Routes ──────────────────────────────────────────────────────────
+
+resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
+	const db = getDb();
+	const sessionId = c.req.param("sessionId");
+
+	const session = await db.session.findUnique({ where: { id: sessionId } });
+	if (!session) {
+		log.warn(`POST /sessions/${sessionId}/resources — session not found`);
+		return c.json({ error: "Session not found" }, 404);
+	}
+
+	const formData = await c.req.formData();
+	const metaParsed = parseFormMetadata(formData);
+	if (!metaParsed.success) {
+		log.warn(
+			`POST /sessions/${sessionId}/resources — invalid metadata`,
+			metaParsed.error.flatten(),
+		);
+		return c.json({ error: metaParsed.error.flatten() }, 400);
+	}
+
+	if (metaParsed.data.type === "LECTURE_NOTES") {
+		const existing = await db.resource.findFirst({
+			where: { sessionId, type: "LECTURE_NOTES" },
+		});
+		if (existing) {
+			const result = await addToExistingLectureNotes(sessionId, existing.id, formData);
+			if ("error" in result) return c.json({ error: result.error }, 400);
+			return c.json(result.resource, 200);
+		}
+	}
+
+	return c.json(await createResourceWithFiles(sessionId, metaParsed.data, formData), 201);
 });
 
-// List resources for session
 resourcesRoutes.get("/sessions/:sessionId/resources", async (c) => {
 	const db = getDb();
 	const resources = await db.resource.findMany({
@@ -195,35 +239,28 @@ resourcesRoutes.get("/sessions/:sessionId/resources", async (c) => {
 	return c.json(resources);
 });
 
-// Get resource detail
 resourcesRoutes.get("/:id", async (c) => {
-	const resource = await findResource(c.req.param("id"), { files: true, chunks: true });
-	if (!resource) {
-		log.warn(`GET /resources/${c.req.param("id")} — not found`);
-		return c.json({ error: "Resource not found" }, 404);
-	}
-	log.info(`GET /resources/${resource.id} — found "${resource.name}"`);
-	return c.json(resource);
+	const result = await findResourceOr404(c, c.req.param("id"), { files: true, chunks: true });
+	if (result instanceof Response) return result;
+	log.info(`GET /resources/${result.id} — found "${result.name}"`);
+	return c.json(result);
 });
 
-// Get resource content (all processed markdown concatenated)
 resourcesRoutes.get("/:id/content", async (c) => {
-	const resource = await findResource(c.req.param("id"));
-	if (!resource) return c.json({ error: "Resource not found" }, 404);
-	if (!resource.isIndexed) return c.json({ error: "Resource not yet processed" }, 404);
+	const result = await findResourceOr404(c, c.req.param("id"));
+	if (result instanceof Response) return result;
+	if (!result.isIndexed) return c.json({ error: "Resource not yet processed" }, 404);
 
-	const content = await readResourceContent(resource.sessionId, resource.id);
-	log.info(`GET /resources/${resource.id}/content — ${content.length} chars`);
-	return c.json({ id: resource.id, name: resource.name, type: resource.type, content });
+	const content = await readResourceContent(result.sessionId, result.id);
+	log.info(`GET /resources/${result.id}/content — ${content.length} chars`);
+	return c.json({ id: result.id, name: result.name, type: result.type, content });
 });
 
-// Get resource chunk tree (for TOC rendering)
 resourcesRoutes.get("/:id/tree", async (c) => {
 	const db = getDb();
 	const resourceId = c.req.param("id");
-
-	const resource = await findResource(resourceId);
-	if (!resource) return c.json({ error: "Resource not found" }, 404);
+	const result = await findResourceOr404(c, resourceId);
+	if (result instanceof Response) return result;
 
 	const chunks = await db.chunk.findMany({
 		where: { resourceId },
@@ -246,7 +283,6 @@ resourcesRoutes.get("/:id/tree", async (c) => {
 	return c.json(buildChunkTree(chunks));
 });
 
-// Update resource metadata
 resourcesRoutes.patch("/:id", async (c) => {
 	const db = getDb();
 	const body = await c.req.json();
@@ -266,51 +302,39 @@ resourcesRoutes.patch("/:id", async (c) => {
 	return c.json(resource);
 });
 
-// Delete resource
 resourcesRoutes.delete("/:id", async (c) => {
-	const resource = await findResource(c.req.param("id"));
-	if (!resource) {
-		log.warn(`DELETE /resources/${c.req.param("id")} — not found`);
-		return c.json({ error: "Resource not found" }, 404);
-	}
+	const result = await findResourceOr404(c, c.req.param("id"));
+	if (result instanceof Response) return result;
 
-	await deleteResourceRelationships(resource.id);
-	await deleteResourceDir(resource.sessionId, resource.id);
-	await getDb().resource.delete({ where: { id: resource.id } });
-
-	log.info(`DELETE /resources/${resource.id} — deleted "${resource.name}"`);
+	await deleteFullResource(result.id, result.sessionId);
+	log.info(`DELETE /resources/${result.id} — deleted "${result.name}"`);
 	return c.json({ ok: true });
 });
 
-// Add file(s) to existing resource → auto re-process
 resourcesRoutes.post("/:id/files", async (c) => {
 	const resourceId = c.req.param("id");
-	const resource = await findResource(resourceId);
-	if (!resource) return c.json({ error: "Resource not found" }, 404);
+	const result = await findResourceOr404(c, resourceId);
+	if (result instanceof Response) return result;
 
 	const formData = await c.req.formData();
 	const role = (formData.get("role") as string) || "PRIMARY";
 	const allFiles = collectFormFiles(formData);
 	if (allFiles.length === 0) return c.json({ error: "No files provided" }, 400);
 
-	await saveFiles(resource.sessionId, resourceId, allFiles, role);
+	await saveFiles(result.sessionId, resourceId, allFiles, role);
 	await reprocessResource(resourceId);
 
-	const result = await findResource(resourceId, { files: true });
 	log.info(`POST /resources/${resourceId}/files — added ${allFiles.length} files, re-processing`);
-	return c.json(result);
+	return c.json(await findResource(resourceId, { files: true }));
 });
 
-// Remove file from resource → auto re-process (or delete resource if last file)
 resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 	const db = getDb();
 	const resourceId = c.req.param("id");
 	const fileId = c.req.param("fileId");
 
-	const file = await db.file.findUnique({ where: { id: fileId } });
-	if (!file || file.resourceId !== resourceId) {
-		return c.json({ error: "File not found in this resource" }, 404);
-	}
+	const fileResult = await findFileInResource(c, resourceId, fileId);
+	if (fileResult instanceof Response) return fileResult;
 
 	await db.file.delete({ where: { id: fileId } });
 
@@ -321,44 +345,32 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 		return c.json({ ok: true });
 	}
 
-	const resource = await findResource(resourceId);
-	if (!resource) return c.json({ error: "Resource not found" }, 404);
+	const resource = await findResourceOr404(c, resourceId);
+	if (resource instanceof Response) return resource;
 
-	await deleteResourceRelationships(resourceId);
-	await deleteResourceDir(resource.sessionId, resourceId);
-	await db.resource.delete({ where: { id: resourceId } });
+	await deleteFullResource(resourceId, resource.sessionId);
 	log.info(`DELETE /resources/${resourceId}/files/${fileId} — last file removed, resource deleted`);
 	return c.json({ ok: true, resourceDeleted: true });
 });
 
-// Serve raw file (PDF, etc.)
-const MIME_TYPES: Record<string, string> = {
-	".pdf": "application/pdf",
-	".png": "image/png",
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".txt": "text/plain",
-};
-
 resourcesRoutes.get("/:id/files/:fileId/raw", async (c) => {
-	const db = getDb();
-	const file = await db.file.findUnique({ where: { id: c.req.param("fileId") } });
-	if (!file || file.resourceId !== c.req.param("id")) {
-		return c.json({ error: "File not found" }, 404);
-	}
+	const fileResult = await findFileInResource(c, c.req.param("id"), c.req.param("fileId"));
+	if (fileResult instanceof Response) return fileResult;
 
 	try {
-		const data = await readFile(file.rawPath);
-		const ext = extname(file.filename).toLowerCase();
+		const data = await readFile(fileResult.rawPath);
+		const ext = extname(fileResult.filename).toLowerCase();
 		const contentType = MIME_TYPES[ext] || "application/octet-stream";
 		return new Response(data, {
 			headers: {
 				"Content-Type": contentType,
-				"Content-Disposition": `inline; filename="${file.filename}"`,
+				"Content-Disposition": `inline; filename="${fileResult.filename}"`,
 			},
 		});
 	} catch {
-		log.error(`GET /resources/${c.req.param("id")}/files/${file.id}/raw — file not found on disk`);
+		log.error(
+			`GET /resources/${c.req.param("id")}/files/${fileResult.id}/raw — file not found on disk`,
+		);
 		return c.json({ error: "File not found on disk" }, 404);
 	}
 });

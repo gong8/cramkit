@@ -92,20 +92,19 @@ function createContext(zip: JSZip, db: ReturnType<typeof getDb>, sessionId: stri
 	};
 }
 
+const ENTITY_MAP_KEYS: Record<string, keyof IdMaps> = {
+	resource: "resource",
+	chunk: "chunk",
+	concept: "concept",
+};
+
 function remapEntityId(entityType: string, oldId: string, maps: IdMaps): string | null {
-	const map =
-		entityType === "resource"
-			? maps.resource
-			: entityType === "chunk"
-				? maps.chunk
-				: entityType === "concept"
-					? maps.concept
-					: null;
-	if (!map) {
+	const key = ENTITY_MAP_KEYS[entityType];
+	if (!key) {
 		log.warn(`importSession — unknown entity type "${entityType}" for ID ${oldId}`);
 		return null;
 	}
-	return map.get(oldId) ?? null;
+	return maps[key].get(oldId) ?? null;
 }
 
 async function writeZipFileToDisk(zip: JSZip, zipPath: string, destPath: string): Promise<boolean> {
@@ -114,6 +113,22 @@ async function writeZipFileToDisk(zip: JSZip, zipPath: string, destPath: string)
 	await ensureDir(dirname(destPath));
 	await writeFile(destPath, content);
 	return true;
+}
+
+async function restoreProcessedFile(
+	ctx: ImportContext,
+	oldResourceId: string,
+	processedPath: string,
+	newResourceDir: string,
+): Promise<string | null> {
+	const processedFilename = processedPath.split("/").pop() ?? processedPath;
+	const diskPath = join(newResourceDir, "processed", processedFilename);
+	const wrote = await writeZipFileToDisk(
+		ctx.zip,
+		`resources/${oldResourceId}/${processedPath}`,
+		diskPath,
+	);
+	return wrote ? diskPath : null;
 }
 
 async function importResourceFiles(
@@ -142,19 +157,12 @@ async function importResourceFiles(
 			continue;
 		}
 
-		let processedDiskPath: string | null = null;
-		if (fileEntry.processedPath) {
-			const processedFilename = fileEntry.processedPath.split("/").pop() ?? fileEntry.processedPath;
-			processedDiskPath = join(newResourceDir, "processed", processedFilename);
-			const wroteProcessed = await writeZipFileToDisk(
-				ctx.zip,
-				`resources/${oldResourceId}/${fileEntry.processedPath}`,
-				processedDiskPath,
-			);
-			if (!wroteProcessed) {
-				log.warn(`importSession — missing processed file for "${fileEntry.filename}"`);
-				processedDiskPath = null;
-			}
+		const processedDiskPath = fileEntry.processedPath
+			? await restoreProcessedFile(ctx, oldResourceId, fileEntry.processedPath, newResourceDir)
+			: null;
+
+		if (fileEntry.processedPath && !processedDiskPath) {
+			log.warn(`importSession — missing processed file for "${fileEntry.filename}"`);
 		}
 
 		const file = await ctx.db.file.create({
@@ -210,11 +218,12 @@ async function importResourceChunks(
 ): Promise<void> {
 	const sorted = [...chunks].sort((a, b) => a.depth - b.depth || a.index - b.index);
 
+	const remap = (map: Map<string, string>, id?: string | null) =>
+		id ? (map.get(id) ?? null) : null;
+
 	for (const entry of sorted) {
-		const newSourceFileId = entry.sourceFileId
-			? (ctx.maps.file.get(entry.sourceFileId) ?? null)
-			: null;
-		const newParentId = entry.parentId ? (ctx.maps.chunk.get(entry.parentId) ?? null) : null;
+		const newSourceFileId = remap(ctx.maps.file, entry.sourceFileId);
+		const newParentId = remap(ctx.maps.chunk, entry.parentId);
 
 		const chunk = await ctx.db.chunk.create({
 			data: {
@@ -309,18 +318,12 @@ async function importRelationships(ctx: ImportContext): Promise<void> {
 
 	for (const entry of relationships) {
 		const newSourceId = remapEntityId(entry.sourceType, entry.sourceId, ctx.maps);
-		if (!newSourceId) {
-			log.warn(
-				`importSession — skipping relationship: missing ${entry.sourceType} source ${entry.sourceId}`,
-			);
-			continue;
-		}
-
 		const newTargetId = remapEntityId(entry.targetType, entry.targetId, ctx.maps);
-		if (!newTargetId) {
-			log.warn(
-				`importSession — skipping relationship: missing ${entry.targetType} target ${entry.targetId}`,
-			);
+		if (!newSourceId || !newTargetId) {
+			const side = !newSourceId ? "source" : "target";
+			const type = !newSourceId ? entry.sourceType : entry.targetType;
+			const id = !newSourceId ? entry.sourceId : entry.targetId;
+			log.warn(`importSession — skipping relationship: missing ${type} ${side} ${id}`);
 			continue;
 		}
 

@@ -15,6 +15,13 @@ async function findSessionOr404(c: Context, id: string) {
 	return session;
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: accepts any Zod schema
+function validateOrError(c: Context, schema: { safeParse: (d: any) => any }, body: unknown) {
+	const parsed = schema.safeParse(body);
+	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+	return { data: parsed.data };
+}
+
 // List sessions
 sessionsRoutes.get("/", async (c) => {
 	const db = getDb();
@@ -57,18 +64,13 @@ sessionsRoutes.get("/:id", async (c) => {
 // Create session
 sessionsRoutes.post("/", async (c) => {
 	const db = getDb();
-	const body = await c.req.json();
-	const parsed = createSessionSchema.safeParse(body);
-
-	if (!parsed.success) {
-		log.warn("POST /sessions — validation failed", parsed.error.flatten());
-		return c.json({ error: parsed.error.flatten() }, 400);
-	}
+	const result = validateOrError(c, createSessionSchema, await c.req.json());
+	if (result instanceof Response) return result;
 
 	const session = await db.session.create({
 		data: {
-			...parsed.data,
-			examDate: parsed.data.examDate ? new Date(parsed.data.examDate) : undefined,
+			...result.data,
+			examDate: result.data.examDate ? new Date(result.data.examDate) : undefined,
 		},
 	});
 
@@ -79,15 +81,10 @@ sessionsRoutes.post("/", async (c) => {
 // Update session
 sessionsRoutes.patch("/:id", async (c) => {
 	const db = getDb();
-	const body = await c.req.json();
-	const parsed = updateSessionSchema.safeParse(body);
+	const result = validateOrError(c, updateSessionSchema, await c.req.json());
+	if (result instanceof Response) return result;
 
-	if (!parsed.success) {
-		log.warn(`PATCH /sessions/${c.req.param("id")} — validation failed`, parsed.error.flatten());
-		return c.json({ error: parsed.error.flatten() }, 400);
-	}
-
-	const data: Record<string, unknown> = { ...parsed.data };
+	const data: Record<string, unknown> = { ...result.data };
 	if (typeof data.examDate === "string") {
 		data.examDate = new Date(data.examDate as string);
 	}
@@ -151,26 +148,25 @@ sessionsRoutes.get("/:id/export", async (c) => {
 
 // Import session from .cramkit.zip
 sessionsRoutes.post("/import", async (c) => {
+	const body = await c.req.parseBody();
+	const file = body.file;
+
+	if (!file || !(file instanceof File)) {
+		return c.json(
+			{ error: "No file uploaded. Send a .cramkit.zip as multipart 'file' field." },
+			400,
+		);
+	}
+
+	if (!file.name.endsWith(".cramkit.zip")) {
+		log.warn(`POST /sessions/import — rejected file "${file.name}" (not .cramkit.zip)`);
+	}
+
 	try {
-		const body = await c.req.parseBody();
-		const file = body.file;
-
-		if (!file || !(file instanceof File)) {
-			return c.json(
-				{ error: "No file uploaded. Send a .cramkit.zip as multipart 'file' field." },
-				400,
-			);
-		}
-
-		if (!file.name.endsWith(".cramkit.zip")) {
-			log.warn(`POST /sessions/import — rejected file "${file.name}" (not .cramkit.zip)`);
-		}
-
 		const buffer = await file.arrayBuffer();
 		log.info(`POST /sessions/import — received "${file.name}" (${buffer.byteLength} bytes)`);
 
 		const stats = await importSession(buffer);
-
 		log.info(`POST /sessions/import — imported session ${stats.sessionId}`);
 		return c.json(stats, 201);
 	} catch (error) {

@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
+import { findChunkByLabel, fuzzyMatchTitle, toTitleCase } from "./graph-indexer-utils.js";
 import { chatCompletion } from "./llm-client.js";
 
 const log = createLogger("api");
@@ -47,65 +48,6 @@ interface ExtractionResult {
 	file_concept_links: ConceptLink[];
 	concept_concept_links: ConceptConceptLink[];
 	question_concept_links: QuestionConceptLink[];
-}
-
-function toTitleCase(str: string): string {
-	return str
-		.split(" ")
-		.map((word) => {
-			// Preserve all-caps words (likely acronyms: ODE, PDE, FFT)
-			if (word.length >= 2 && word === word.toUpperCase() && /^[A-Z]+$/.test(word)) {
-				return word;
-			}
-			// Preserve words with internal capitals (pH, mRNA, d'Alembert)
-			if (/[a-z][A-Z]|'[A-Z]/.test(word)) {
-				return word;
-			}
-			return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-		})
-		.join(" ");
-}
-
-function diceCoefficient(a: string, b: string): number {
-	if (a === b) return 1;
-	if (a.length < 2 || b.length < 2) return 0;
-	const bigrams = new Map<string, number>();
-	for (let i = 0; i < a.length - 1; i++) {
-		const bigram = a.slice(i, i + 2);
-		bigrams.set(bigram, (bigrams.get(bigram) || 0) + 1);
-	}
-	let overlap = 0;
-	for (let i = 0; i < b.length - 1; i++) {
-		const bigram = b.slice(i, i + 2);
-		const count = bigrams.get(bigram);
-		if (count && count > 0) {
-			overlap++;
-			bigrams.set(bigram, count - 1);
-		}
-	}
-	return (2 * overlap) / (a.length - 1 + (b.length - 1));
-}
-
-function fuzzyMatchTitle(
-	needle: string,
-	haystack: Map<string, string>,
-	threshold = 0.6,
-): string | null {
-	const needleLower = needle.toLowerCase();
-	// Try exact match first
-	const exact = haystack.get(needleLower);
-	if (exact) return exact;
-	// Fuzzy fallback
-	let bestId: string | null = null;
-	let bestScore = threshold;
-	for (const [title, id] of haystack) {
-		const score = diceCoefficient(needleLower, title);
-		if (score > bestScore) {
-			bestScore = score;
-			bestId = id;
-		}
-	}
-	return bestId;
 }
 
 interface ChunkInfo {
@@ -157,6 +99,23 @@ function buildStructuredContent(chunks: ChunkInfo[]): string {
 	return lines.join("\n");
 }
 
+const CONTENT_LIMIT = 30000;
+
+function buildContentString(chunks: ChunkInfo[]): string {
+	const hasTree = chunks.some((c) => c.parentId !== null);
+	let content = hasTree
+		? buildStructuredContent(chunks)
+		: chunks
+				.map((c) => c.content)
+				.join("\n\n")
+				.replace(/\0/g, "");
+
+	if (content.length > CONTENT_LIMIT) {
+		content = `${content.slice(0, CONTENT_LIMIT)}\n\n[Content truncated — extract concepts only from the content shown above]`;
+	}
+	return content;
+}
+
 function buildPrompt(
 	resource: { name: string; type: string; label: string | null },
 	files: Array<{ filename: string; role: string }>,
@@ -169,27 +128,12 @@ function buildPrompt(
 			? `\n\nExisting concepts in this session (reuse exact names where applicable):\n${existingConcepts.map((c) => `- ${c.name}${c.description ? `: ${c.description}` : ""}`).join("\n")}`
 			: "";
 
-	let contentStr: string;
-	if (hasTree) {
-		contentStr = buildStructuredContent(chunks);
-	} else {
-		contentStr = chunks
-			.map((c) => c.content)
-			.join("\n\n")
-			.replace(/\0/g, "");
-	}
-
 	const structuredNote = hasTree
 		? `\nThe content is organized as a hierarchical tree of sections. Each section has a type (e.g., definition, theorem, proof, example, question, chapter, section). Use this structure to better understand the material's organization. When creating file_concept_links, include the chunkTitle to specify which section the concept appears in.`
 		: "";
 
 	const fileList = files.map((f) => `  - ${f.filename} (${f.role})`).join("\n");
-
-	const wasTruncated = contentStr.length > 30000;
-	contentStr = contentStr.slice(0, 30000);
-	if (wasTruncated) {
-		contentStr += "\n\n[Content truncated — extract concepts only from the content shown above]";
-	}
+	const contentStr = buildContentString(chunks);
 
 	return [
 		{
@@ -270,15 +214,37 @@ async function extractWithRetries(
 
 type RelData = Prisma.RelationshipCreateManyInput;
 
-function findChunkByLabel(chunks: ChunkInfo[], label: string): ChunkInfo | undefined {
-	const lower = label.toLowerCase();
-	return (
-		chunks.find((c) => c.title?.toLowerCase() === lower) ||
-		chunks.find((c) => c.title?.toLowerCase().startsWith(lower)) ||
-		chunks.find(
-			(c) => c.title?.toLowerCase().includes(lower) || c.content.toLowerCase().includes(lower),
-		)
-	);
+function makeRel(
+	sessionId: string,
+	sourceType: string,
+	sourceId: string,
+	sourceLabel: string,
+	targetId: string,
+	targetLabel: string,
+	relationship: string,
+	confidence: number,
+): RelData {
+	return {
+		sessionId,
+		sourceType,
+		sourceId,
+		sourceLabel,
+		targetType: "concept",
+		targetId,
+		targetLabel,
+		relationship,
+		confidence,
+		createdBy: "system",
+	};
+}
+
+function resolveConcept(
+	name: string,
+	conceptMap: Map<string, string>,
+): { id: string; name: string } | null {
+	const titleCased = toTitleCase(name);
+	const id = conceptMap.get(titleCased);
+	return id ? { id, name: titleCased } : null;
 }
 
 function buildRelationshipData(
@@ -292,36 +258,8 @@ function buildRelationshipData(
 ): RelData[] {
 	const relationships: RelData[] = [];
 
-	const resolveConcept = (name: string) => {
-		const titleCased = toTitleCase(name);
-		const id = conceptMap.get(titleCased);
-		return id ? { id, name: titleCased } : null;
-	};
-
-	const push = (
-		sourceType: string,
-		sourceId: string,
-		sourceLabel: string,
-		target: { id: string; name: string },
-		relationship: string,
-		confidence: number,
-	) => {
-		relationships.push({
-			sessionId,
-			sourceType,
-			sourceId,
-			sourceLabel,
-			targetType: "concept",
-			targetId: target.id,
-			targetLabel: target.name,
-			relationship,
-			confidence,
-			createdBy: "system",
-		});
-	};
-
 	for (const link of result.file_concept_links) {
-		const target = resolveConcept(link.conceptName);
+		const target = resolveConcept(link.conceptName, conceptMap);
 		if (!target) continue;
 
 		let sourceType = "resource";
@@ -337,29 +275,55 @@ function buildRelationshipData(
 			}
 		}
 
-		push(sourceType, sourceId, sourceLabel, target, link.relationship, link.confidence ?? 0.8);
+		relationships.push(
+			makeRel(
+				sessionId,
+				sourceType,
+				sourceId,
+				sourceLabel,
+				target.id,
+				target.name,
+				link.relationship,
+				link.confidence ?? 0.8,
+			),
+		);
 	}
 
 	for (const link of result.concept_concept_links) {
-		const source = resolveConcept(link.sourceConcept);
-		const target = resolveConcept(link.targetConcept);
+		const source = resolveConcept(link.sourceConcept, conceptMap);
+		const target = resolveConcept(link.targetConcept, conceptMap);
 		if (!source || !target) continue;
 
-		push("concept", source.id, source.name, target, link.relationship, link.confidence ?? 0.7);
+		relationships.push(
+			makeRel(
+				sessionId,
+				"concept",
+				source.id,
+				source.name,
+				target.id,
+				target.name,
+				link.relationship,
+				link.confidence ?? 0.7,
+			),
+		);
 	}
 
 	for (const link of result.question_concept_links) {
-		const target = resolveConcept(link.conceptName);
+		const target = resolveConcept(link.conceptName, conceptMap);
 		if (!target) continue;
 
 		const matchingChunk = findChunkByLabel(chunks, link.questionLabel);
-		push(
-			matchingChunk ? "chunk" : "resource",
-			matchingChunk?.id || resourceId,
-			link.questionLabel,
-			target,
-			link.relationship,
-			link.confidence ?? 0.8,
+		relationships.push(
+			makeRel(
+				sessionId,
+				matchingChunk ? "chunk" : "resource",
+				matchingChunk?.id || resourceId,
+				link.questionLabel,
+				target.id,
+				target.name,
+				link.relationship,
+				link.confidence ?? 0.8,
+			),
 		);
 	}
 

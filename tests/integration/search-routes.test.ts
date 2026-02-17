@@ -1,6 +1,4 @@
-import { getDb } from "@cramkit/shared";
-import { Hono } from "hono";
-import { cleanDb } from "../fixtures/helpers.js";
+import { createRouteApp, seedSearchData, useTestDb } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -8,109 +6,16 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 
 import { searchRoutes } from "../../packages/api/src/routes/search.js";
 
-const db = getDb();
-
-function getApp() {
-	const app = new Hono();
-	app.route("/search", searchRoutes);
-	return app;
-}
-
-async function seedSearchData() {
-	const session = await db.session.create({ data: { name: "Search Test" } });
-
-	const resource = await db.resource.create({
-		data: {
-			sessionId: session.id,
-			name: "PDE Lectures",
-			type: "LECTURE_NOTES",
-			isIndexed: true,
-		},
-	});
-
-	const chunkWithContent = await db.chunk.create({
-		data: {
-			resourceId: resource.id,
-			index: 0,
-			title: "Heat Equation Introduction",
-			content: "The heat equation is a parabolic PDE that models diffusion processes.",
-			keywords: "heat equation, diffusion",
-		},
-	});
-
-	const chunkGraphOnly = await db.chunk.create({
-		data: {
-			resourceId: resource.id,
-			index: 1,
-			title: "Section 2",
-			content: "This section covers some advanced mathematical techniques for boundary analysis.",
-		},
-	});
-
-	const chunkBoth = await db.chunk.create({
-		data: {
-			resourceId: resource.id,
-			index: 2,
-			title: "Wave Equation",
-			content: "The wave equation describes wave propagation phenomena.",
-			keywords: "wave equation",
-		},
-	});
-
-	const heatConcept = await db.concept.create({
-		data: {
-			sessionId: session.id,
-			name: "Heat Equation",
-			description: "Parabolic PDE modelling diffusion",
-		},
-	});
-
-	const waveConcept = await db.concept.create({
-		data: {
-			sessionId: session.id,
-			name: "Wave Equation",
-			description: "Hyperbolic PDE for wave propagation",
-		},
-	});
-
-	await db.relationship.create({
-		data: {
-			sessionId: session.id,
-			sourceType: "chunk",
-			sourceId: chunkGraphOnly.id,
-			targetType: "concept",
-			targetId: heatConcept.id,
-			targetLabel: "Heat Equation",
-			relationship: "covers",
-			createdBy: "system",
-		},
-	});
-
-	await db.relationship.create({
-		data: {
-			sessionId: session.id,
-			sourceType: "chunk",
-			sourceId: chunkBoth.id,
-			targetType: "concept",
-			targetId: waveConcept.id,
-			targetLabel: "Wave Equation",
-			relationship: "covers",
-			createdBy: "system",
-		},
-	});
-
-	return { session, resource, chunkWithContent, chunkGraphOnly, chunkBoth };
-}
+const db = useTestDb();
+const app = createRouteApp("/search", searchRoutes);
 
 beforeEach(async () => {
 	await new Promise((r) => setTimeout(r, 50));
-	await cleanDb(db);
 });
 
 describe("search routes", () => {
 	it("content-only search (no graph data)", async () => {
-		const { session } = await seedSearchData();
-		const app = getApp();
+		const { session } = await seedSearchData(db);
 
 		const res = await app.request(`/search/sessions/${session.id}/search?q=diffusion`);
 
@@ -123,8 +28,7 @@ describe("search routes", () => {
 	});
 
 	it("graph-only search (query matches concept but not chunk text)", async () => {
-		const { session, chunkGraphOnly } = await seedSearchData();
-		const app = getApp();
+		const { session, chunkGraphOnly } = await seedSearchData(db);
 
 		const res = await app.request(`/search/sessions/${session.id}/search?q=Heat Equation`);
 
@@ -137,8 +41,7 @@ describe("search routes", () => {
 	});
 
 	it("both sources (chunk text matches AND concept matches)", async () => {
-		const { session, chunkBoth } = await seedSearchData();
-		const app = getApp();
+		const { session, chunkBoth } = await seedSearchData(db);
 
 		const res = await app.request(`/search/sessions/${session.id}/search?q=Wave Equation`);
 
@@ -153,8 +56,7 @@ describe("search routes", () => {
 	});
 
 	it("deduplication", async () => {
-		const { session, chunkBoth } = await seedSearchData();
-		const app = getApp();
+		const { session, chunkBoth } = await seedSearchData(db);
 
 		const res = await app.request(`/search/sessions/${session.id}/search?q=Wave Equation`);
 
@@ -166,8 +68,7 @@ describe("search routes", () => {
 	});
 
 	it("amortisation fires after search", async () => {
-		const { session } = await seedSearchData();
-		const app = getApp();
+		const { session } = await seedSearchData(db);
 
 		await app.request(`/search/sessions/${session.id}/search?q=Heat Equation`);
 
@@ -201,7 +102,6 @@ describe("search routes", () => {
 			});
 		}
 
-		const app = getApp();
 		const res = await app.request(`/search/sessions/${session.id}/search?q=PDE&limit=3`);
 
 		expect(res.status).toBe(200);
