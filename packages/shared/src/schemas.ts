@@ -8,12 +8,7 @@ export const ResourceTypeEnum = z.enum([
 	"OTHER",
 ]);
 
-export const FileRoleEnum = z.enum([
-	"PRIMARY",
-	"MARK_SCHEME",
-	"SOLUTIONS",
-	"SUPPLEMENT",
-]);
+export const FileRoleEnum = z.enum(["PRIMARY", "MARK_SCHEME", "SOLUTIONS", "SUPPLEMENT"]);
 
 export const SplitModeEnum = z.enum(["auto", "split", "single"]);
 
@@ -77,4 +72,5 @@ export const chatStreamRequestSchema = z.object({
 	sessionId: z.string(),
 	conversationId: z.string(),
 	message: z.string().min(1),
+	attachmentIds: z.array(z.string()).optional(),
 });

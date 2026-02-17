@@ -13,10 +13,11 @@ const LLM_MODEL = process.env.LLM_MODEL || "claude-opus-4-6";
 
 const SYSTEM_PROMPT_SUFFIX = [
 	"",
-	"IMPORTANT: You are a study assistant chatbot, NOT a coding agent.",
-	"You MUST only use the MCP tools (prefixed with mcp__cramkit__) to look up study material and answer questions.",
-	"NEVER attempt to use code tools like Bash, Read, Write, Edit, Glob, Grep, or any tool not prefixed with mcp__cramkit__.",
-	"If data is not available via MCP tools, say so and use your own knowledge instead. Do not try to access the filesystem or codebase.",
+	"IMPORTANT CONSTRAINTS:",
+	"- You are a study assistant. Only use MCP tools prefixed with mcp__cramkit__ to access study materials.",
+	"- Never attempt to use filesystem, code editing, web browsing, or any non-MCP tools.",
+	"- If you cannot find information via MCP tools, tell the student and offer your own knowledge as a supplement.",
+	"- Never fabricate citations to materials. If you did not retrieve it from a tool, do not claim it is from their notes.",
 ].join("\n");
 
 const BLOCKED_BUILTIN_TOOLS = [
@@ -77,6 +78,7 @@ export interface CliChatOptions {
 	systemPrompt: string;
 	model?: string;
 	signal?: AbortSignal;
+	images?: string[];
 }
 
 function buildPrompt(messages: CliMessage[]): string {
@@ -104,7 +106,9 @@ function buildCliArgs(
 	systemPromptPath: string,
 	disallowedTools: string[],
 	prompt: string,
+	images?: string[],
 ): string[] {
+	const imageFlags = (images ?? []).flatMap((path) => ["--image", path]);
 	return [
 		"--print",
 		"--output-format",
@@ -126,6 +130,7 @@ function buildCliArgs(
 		"--no-session-persistence",
 		"--max-turns",
 		"50",
+		...imageFlags,
 		prompt,
 	];
 }
@@ -148,7 +153,7 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 	const systemPromptPath = writeSystemPrompt(options.systemPrompt);
 	const model = getCliModel(options.model ?? LLM_MODEL);
 	const prompt = buildPrompt(options.messages);
-	const args = buildCliArgs(model, mcpConfigPath, systemPromptPath, BLOCKED_BUILTIN_TOOLS, prompt);
+	const args = buildCliArgs(model, mcpConfigPath, systemPromptPath, BLOCKED_BUILTIN_TOOLS, prompt, options.images);
 
 	const startMs = performance.now();
 	log.info(`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${prompt.length} chars`);

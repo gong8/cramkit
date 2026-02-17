@@ -91,6 +91,29 @@ sessionsRoutes.patch("/:id", async (c) => {
 	return c.json(session);
 });
 
+// Clear knowledge graph for a session (concepts + relationships, reset isGraphIndexed)
+sessionsRoutes.delete("/:id/graph", async (c) => {
+	const db = getDb();
+	const id = c.req.param("id");
+
+	const session = await db.session.findUnique({ where: { id } });
+	if (!session) {
+		return c.json({ error: "Session not found" }, 404);
+	}
+
+	await db.$transaction([
+		db.concept.deleteMany({ where: { sessionId: id } }),
+		db.relationship.deleteMany({ where: { sessionId: id } }),
+		db.resource.updateMany({
+			where: { sessionId: id },
+			data: { isGraphIndexed: false, graphIndexDurationMs: null },
+		}),
+	]);
+
+	log.info(`DELETE /sessions/${id}/graph — cleared knowledge graph`);
+	return c.json({ ok: true });
+});
+
 // Delete session
 sessionsRoutes.delete("/:id", async (c) => {
 	const db = getDb();

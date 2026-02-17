@@ -160,5 +160,20 @@ model Message {
   content        String
   createdAt      DateTime     @default(now())
 
+  attachments ChatAttachment[]
+
   @@index([conversationId])
+}
+
+model ChatAttachment {
+  id          String   @id @default(cuid())
+  messageId   String?
+  message     Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  filename    String
+  contentType String
+  diskPath    String
+  fileSize    Int
+  createdAt   DateTime @default(now())
+
+  @@index([messageId])
 }

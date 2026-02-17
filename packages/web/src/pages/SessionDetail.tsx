@@ -3,6 +3,7 @@ import { ResourceUpload } from "@/components/ResourceUpload";
 import { FileViewer } from "@/components/FileViewer";
 import {
 	cancelIndexing,
+	clearSessionGraph,
 	fetchIndexStatus,
 	fetchSession,
 	indexAllResources,
@@ -14,7 +15,7 @@ import {
 } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQuery } from "@tanstack/react-query";
-import { BrainCircuit, Check, Circle, Loader2, MessageSquare, Network, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, BrainCircuit, Check, Circle, Loader2, MessageSquare, Network, RefreshCw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -201,6 +202,21 @@ export function SessionDetail() {
 	}, [sessionId, startPolling]);
 
 	const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null);
+	const [showClearGraphModal, setShowClearGraphModal] = useState(false);
+	const [isClearingGraph, setIsClearingGraph] = useState(false);
+
+	const handleClearGraph = useCallback(async () => {
+		setIsClearingGraph(true);
+		try {
+			await clearSessionGraph(sessionId);
+			setShowClearGraphModal(false);
+			queryClient();
+		} catch (err) {
+			log.error("handleClearGraph — failed", err);
+		} finally {
+			setIsClearingGraph(false);
+		}
+	}, [sessionId, queryClient]);
 
 	const hasUnindexedResources = resources.some((r) => r.isIndexed && !r.isGraphIndexed);
 	const allGraphIndexed =
@@ -286,6 +302,15 @@ export function SessionDetail() {
 						<MessageSquare className="h-4 w-4" />
 						Chat
 					</Link>
+					{hasIndexedResources && (
+						<button
+							onClick={() => setShowClearGraphModal(true)}
+							className="flex items-center gap-2 rounded-md border border-destructive/30 px-4 py-3 text-sm font-medium text-destructive hover:bg-destructive/10"
+						>
+							<Trash2 className="h-4 w-4" />
+							Clear Graph
+						</button>
+					)}
 				</div>
 
 				<div className="mb-6">
@@ -397,6 +422,43 @@ export function SessionDetail() {
 					/>
 				</div>
 			</div>
+
+			{/* Clear Graph confirmation modal */}
+			{showClearGraphModal && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+					<div className="mx-4 w-full max-w-md rounded-lg border border-border bg-background p-6 shadow-lg">
+						<div className="mb-4 flex items-center gap-3">
+							<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+								<AlertTriangle className="h-5 w-5 text-destructive" />
+							</div>
+							<h3 className="text-lg font-semibold">Clear Knowledge Graph</h3>
+						</div>
+						<p className="mb-1 text-sm text-muted-foreground">
+							This will permanently delete all concepts and relationships for this session.
+						</p>
+						<p className="mb-6 text-sm text-muted-foreground">
+							Resources and their content will not be affected. You can re-index afterwards.
+						</p>
+						<div className="flex justify-end gap-3">
+							<button
+								onClick={() => setShowClearGraphModal(false)}
+								disabled={isClearingGraph}
+								className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-accent"
+							>
+								Cancel
+							</button>
+							<button
+								onClick={handleClearGraph}
+								disabled={isClearingGraph}
+								className="flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+							>
+								{isClearingGraph && <Loader2 className="h-4 w-4 animate-spin" />}
+								Clear Graph
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

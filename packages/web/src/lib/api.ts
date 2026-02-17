@@ -163,6 +163,11 @@ export function updateSession(
 	});
 }
 
+export function clearSessionGraph(sessionId: string): Promise<{ ok: boolean }> {
+	log.info(`clearSessionGraph — ${sessionId}`);
+	return request(`/sessions/${sessionId}/graph`, { method: "DELETE" });
+}
+
 // Resource operations
 export async function createResource(
 	sessionId: string,
@@ -290,11 +295,18 @@ export interface ConversationSummary {
 	updatedAt: string;
 }
 
+export interface ChatAttachment {
+	id: string;
+	filename: string;
+	contentType: string;
+}
+
 export interface ChatMessage {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
 	createdAt: string;
+	attachments?: ChatAttachment[];
 }
 
 export function fetchConversations(sessionId: string): Promise<ConversationSummary[]> {
@@ -312,7 +324,10 @@ export function fetchMessages(conversationId: string): Promise<ChatMessage[]> {
 	return request(`/chat/conversations/${conversationId}/messages`);
 }
 
-export function renameConversation(conversationId: string, title: string): Promise<ConversationSummary> {
+export function renameConversation(
+	conversationId: string,
+	title: string,
+): Promise<ConversationSummary> {
 	log.info(`renameConversation — ${conversationId}`);
 	return request(`/chat/conversations/${conversationId}`, {
 		method: "PATCH",

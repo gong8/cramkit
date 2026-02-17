@@ -1,46 +1,60 @@
-import { createCramKitChatAdapter } from "@/lib/chat-adapter";
 import {
-	fetchSession,
-	fetchConversations,
-	createConversation,
-	fetchMessages,
-	deleteConversation,
-	renameConversation,
 	type ConversationSummary,
+	createConversation,
+	deleteConversation,
+	fetchConversations,
+	fetchMessages,
+	fetchSession,
+	renameConversation,
 } from "@/lib/api";
+import { chatAttachmentAdapter, createCramKitChatAdapter } from "@/lib/chat-adapter";
 import {
 	AssistantRuntimeProvider,
-	useLocalRuntime,
-	ThreadPrimitive,
+	AttachmentPrimitive,
 	ComposerPrimitive,
 	MessagePrimitive,
+	ThreadPrimitive,
+	useComposerRuntime,
+	useLocalRuntime,
+	useMessagePartImage,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import "katex/dist/katex.min.css";
-import { ArrowLeft, Send, Plus, MessageSquare, Trash2, Pencil, Check, X } from "lucide-react";
-import { useMemo, useCallback, useState, useRef, useEffect } from "react";
-import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
+import {
+	ArrowLeft,
+	Check,
+	MessageSquare,
+	Paperclip,
+	Pencil,
+	Plus,
+	Send,
+	Trash2,
+	X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+
+function UserImagePart() {
+	const image = useMessagePartImage();
+	if (!image?.image) return null;
+	return <img src={image.image} alt="" className="max-h-64 rounded-lg" />;
+}
 
 function UserMessage() {
 	return (
 		<MessagePrimitive.Root className="flex justify-end px-4 py-2">
 			<div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2 text-primary-foreground">
-				<MessagePrimitive.Content />
+				<MessagePrimitive.Content components={{ Image: UserImagePart }} />
 			</div>
 		</MessagePrimitive.Root>
 	);
 }
 
 function MarkdownText() {
-	return (
-		<MarkdownTextPrimitive
-			remarkPlugins={[remarkMath]}
-			rehypePlugins={[rehypeKatex]}
-		/>
-	);
+	return <MarkdownTextPrimitive remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} />;
 }
 
 function AssistantMessage() {
@@ -50,6 +64,79 @@ function AssistantMessage() {
 				<MessagePrimitive.Content components={{ Text: MarkdownText }} />
 			</div>
 		</MessagePrimitive.Root>
+	);
+}
+
+interface DraftData {
+	text: string;
+	attachments: Array<{ id: string; name: string; contentType: string }>;
+}
+
+function getDraftKey(conversationId: string) {
+	return `chat-draft::${conversationId}`;
+}
+
+function DraftPersistence({ conversationId }: { conversationId: string }) {
+	const composerRuntime = useComposerRuntime();
+	const draftKey = getDraftKey(conversationId);
+
+	// Restore draft on mount only — intentionally omitting deps
+	// biome-ignore lint/correctness/useExhaustiveDependencies: restore only once on mount
+	useEffect(() => {
+		const raw = sessionStorage.getItem(draftKey);
+		if (!raw) return;
+		try {
+			const draft: DraftData = JSON.parse(raw);
+			if (draft.text) {
+				composerRuntime.setText(draft.text);
+			}
+			// Re-add attachments (they're already uploaded on the server)
+			for (const att of draft.attachments) {
+				const fakeFile = new File([], att.name, { type: att.contentType });
+				composerRuntime.addAttachment(fakeFile).catch(() => {});
+			}
+		} catch {
+			// Invalid draft data, ignore
+		}
+	}, []);
+
+	// Save draft periodically and on unmount
+	useEffect(() => {
+		const save = () => {
+			const state = composerRuntime.getState();
+			const draft: DraftData = {
+				text: state.text,
+				attachments: state.attachments.map((a) => ({
+					id: a.id,
+					name: a.name,
+					contentType: a.contentType ?? "",
+				})),
+			};
+			if (draft.text || draft.attachments.length > 0) {
+				sessionStorage.setItem(draftKey, JSON.stringify(draft));
+			} else {
+				sessionStorage.removeItem(draftKey);
+			}
+		};
+
+		const interval = setInterval(save, 2000);
+		return () => {
+			clearInterval(interval);
+			save();
+		};
+	}, [composerRuntime, draftKey]);
+
+	return null;
+}
+
+function ComposerImageAttachment() {
+	return (
+		<AttachmentPrimitive.Root className="relative inline-block m-2">
+			<AttachmentPrimitive.unstable_Thumb className="h-16 w-16 overflow-hidden rounded-lg border border-border" />
+			<AttachmentPrimitive.Remove className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-background border border-border text-muted-foreground hover:text-foreground text-xs">
+				<X className="h-3 w-3" />
+			</AttachmentPrimitive.Remove>
+		</AttachmentPrimitive.Root>
 	);
 }
 
@@ -74,24 +161,40 @@ function ChatThread({
 					const messages = await fetchMessages(conversationId);
 
 					// Build ExportedMessageRepository format with linear parent chain
-					const repoMessages = messages.map((m, i) => ({
-						message: {
-							id: m.id,
-							role: m.role,
-							content: [{ type: "text", text: m.content }],
-							createdAt: new Date(m.createdAt),
-							status: { type: "complete", reason: "stop" },
-							attachments: [],
-							metadata: { steps: [], custom: {} },
-						},
-						parentId: i === 0 ? null : messages[i - 1].id,
-					}));
+					const repoMessages = messages.map((m, i) => {
+						const contentParts: Array<
+							{ type: "text"; text: string } | { type: "image"; image: string }
+						> = [];
+
+						// Add image parts from attachments
+						if (m.attachments && m.attachments.length > 0) {
+							for (const att of m.attachments) {
+								contentParts.push({
+									type: "image",
+									image: `/api/chat/attachments/${att.id}`,
+								});
+							}
+						}
+
+						// Add text content
+						contentParts.push({ type: "text", text: m.content });
+
+						return {
+							message: {
+								id: m.id,
+								role: m.role,
+								content: contentParts,
+								createdAt: new Date(m.createdAt),
+								status: { type: "complete", reason: "stop" },
+								attachments: [],
+								metadata: { steps: [], custom: {} },
+							},
+							parentId: i === 0 ? null : messages[i - 1].id,
+						};
+					});
 
 					return {
-						headId:
-							messages.length > 0
-								? messages[messages.length - 1].id
-								: null,
+						headId: messages.length > 0 ? messages[messages.length - 1].id : null,
 						messages: repoMessages,
 					};
 				},
@@ -108,11 +211,12 @@ function ChatThread({
 	);
 
 	const runtime = useLocalRuntime(adapter, {
-		adapters: { history },
+		adapters: { attachments: chatAttachmentAdapter, history },
 	});
 
 	return (
 		<AssistantRuntimeProvider runtime={runtime}>
+			<DraftPersistence conversationId={conversationId} />
 			<div className="flex h-full min-h-0 flex-col">
 				<ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col overflow-hidden">
 					<ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
@@ -132,15 +236,27 @@ function ChatThread({
 					</ThreadPrimitive.Viewport>
 
 					<div className="shrink-0 border-t border-border p-4">
-						<ComposerPrimitive.Root className="flex items-center gap-2 rounded-xl border border-input bg-background px-3 py-2">
-							<ComposerPrimitive.Input
-								placeholder="Type a message..."
-								className="flex-1 resize-none bg-transparent text-sm outline-none"
-								autoFocus
+						<ComposerPrimitive.Root className="rounded-xl border border-input bg-background">
+							<ComposerPrimitive.Attachments
+								components={{
+									Image: ComposerImageAttachment,
+									File: ComposerImageAttachment,
+									Attachment: ComposerImageAttachment,
+								}}
 							/>
-							<ComposerPrimitive.Send className="rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 disabled:opacity-50">
-								<Send className="h-4 w-4" />
-							</ComposerPrimitive.Send>
+							<div className="flex items-center gap-2 px-3 py-2">
+								<ComposerPrimitive.AddAttachment className="rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+									<Paperclip className="h-4 w-4" />
+								</ComposerPrimitive.AddAttachment>
+								<ComposerPrimitive.Input
+									placeholder="Type a message..."
+									className="flex-1 resize-none bg-transparent text-sm outline-none"
+									autoFocus
+								/>
+								<ComposerPrimitive.Send className="rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 disabled:opacity-50">
+									<Send className="h-4 w-4" />
+								</ComposerPrimitive.Send>
+							</div>
 						</ComposerPrimitive.Root>
 					</div>
 				</ThreadPrimitive.Root>
@@ -265,9 +381,7 @@ function ConversationItem({
 			type="button"
 			onClick={onSelect}
 			className={`group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
-				isActive
-					? "bg-accent text-accent-foreground"
-					: "text-foreground hover:bg-accent/50"
+				isActive ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-accent/50"
 			}`}
 		>
 			<MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -368,9 +482,7 @@ function ConversationSidebar({
 
 				{groups.map((group) => (
 					<div key={group.label} className="mb-3">
-						<p className="px-2 py-1 text-xs font-medium text-muted-foreground">
-							{group.label}
-						</p>
+						<p className="px-2 py-1 text-xs font-medium text-muted-foreground">{group.label}</p>
 						{group.items.map((conv) => (
 							<ConversationItem
 								key={conv.id}
@@ -465,9 +577,7 @@ export function Chat() {
 				</Link>
 				<div>
 					<h1 className="text-sm font-semibold">{session?.name || "Chat"}</h1>
-					{session?.module && (
-						<p className="text-xs text-muted-foreground">{session.module}</p>
-					)}
+					{session?.module && <p className="text-xs text-muted-foreground">{session.module}</p>}
 				</div>
 			</div>
 
@@ -487,10 +597,7 @@ export function Chat() {
 							conversationId={activeConversationId}
 						/>
 					) : (
-						<EmptyState
-							sessionId={sessionId}
-							onCreated={handleSelectConversation}
-						/>
+						<EmptyState sessionId={sessionId} onCreated={handleSelectConversation} />
 					)}
 				</div>
 			</div>
@@ -521,9 +628,7 @@ function EmptyState({
 		<div className="flex h-full flex-col items-center justify-center gap-4">
 			<MessageSquare className="h-12 w-12 text-muted-foreground/40" />
 			<div className="text-center">
-				<p className="text-sm text-muted-foreground">
-					Select a conversation or start a new one
-				</p>
+				<p className="text-sm text-muted-foreground">Select a conversation or start a new one</p>
 			</div>
 			<button
 				type="button"
