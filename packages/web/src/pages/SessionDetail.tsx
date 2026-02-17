@@ -4,6 +4,7 @@ import {
 	type IndexStatus,
 	cancelIndexing,
 	clearSessionGraph,
+	exportSession,
 	fetchIndexStatus,
 	fetchSession,
 	indexAllResources,
@@ -13,7 +14,15 @@ import {
 } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, ChevronRight, MessageSquare, Pencil } from "lucide-react";
+import {
+	ArrowLeft,
+	ChevronDown,
+	ChevronRight,
+	Download,
+	Loader2,
+	MessageSquare,
+	Pencil,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -202,6 +211,20 @@ export function SessionDetail() {
 		refetchSession();
 	}, [sessionId, refetchSession]);
 
+	const [isExporting, setIsExporting] = useState(false);
+
+	const handleExport = useCallback(async () => {
+		log.info(`handleExport — session ${sessionId}`);
+		setIsExporting(true);
+		try {
+			await exportSession(sessionId);
+		} catch (err) {
+			log.error("handleExport — failed", err);
+		} finally {
+			setIsExporting(false);
+		}
+	}, [sessionId]);
+
 	const batch = indexStatus?.batch;
 
 	if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
@@ -257,13 +280,28 @@ export function SessionDetail() {
 						<span className="shrink-0 text-sm text-muted-foreground">{examDateFormatted}</span>
 					)}
 				</div>
-				<Link
-					to={`/session/${sessionId}/chat`}
-					className="flex shrink-0 items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-				>
-					<MessageSquare className="h-4 w-4" />
-					Chat
-				</Link>
+				<div className="flex shrink-0 items-center gap-2">
+					<button
+						type="button"
+						onClick={handleExport}
+						disabled={isExporting}
+						className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+					>
+						{isExporting ? (
+							<Loader2 className="h-4 w-4 animate-spin" />
+						) : (
+							<Download className="h-4 w-4" />
+						)}
+						Export
+					</button>
+					<Link
+						to={`/session/${sessionId}/chat`}
+						className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+					>
+						<MessageSquare className="h-4 w-4" />
+						Chat
+					</Link>
+				</div>
 			</div>
 
 			{/* Collapsible session details */}

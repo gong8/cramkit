@@ -1,3 +1,6 @@
+import type { z } from "zod";
+import type { exportManifestSchema, resourceExportSchema } from "./schemas.js";
+
 export const ResourceType = {
 	LECTURE_NOTES: "LECTURE_NOTES",
 	PAST_PAPER: "PAST_PAPER",
@@ -44,4 +47,21 @@ export interface ChunkSummary {
 	keywords: string | null;
 	startPage: number | null;
 	endPage: number | null;
+}
+
+// --- Import/Export types ---
+
+export type ExportManifest = z.infer<typeof exportManifestSchema>;
+export type ResourceExport = z.infer<typeof resourceExportSchema>;
+
+export interface ImportStats {
+	sessionId: string;
+	resourceCount: number;
+	fileCount: number;
+	chunkCount: number;
+	conceptCount: number;
+	relationshipCount: number;
+	conversationCount: number;
+	messageCount: number;
+	attachmentCount: number;
 }

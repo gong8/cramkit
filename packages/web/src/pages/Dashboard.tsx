@@ -1,9 +1,17 @@
-import { deleteSession, fetchSessions, updateSession } from "@/lib/api";
+import { deleteSession, fetchSessions, importSession, updateSession } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BookOpen, Loader2, MoreVertical, Pencil, Trash2 } from "lucide-react";
+import {
+	AlertTriangle,
+	BookOpen,
+	Loader2,
+	MoreVertical,
+	Pencil,
+	Trash2,
+	Upload,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 const log = createLogger("web");
 
@@ -11,6 +19,7 @@ type EditField = "name" | "module";
 
 export function Dashboard() {
 	const queryClient = useQueryClient();
+	const navigate = useNavigate();
 	const { data: sessions, isLoading } = useQuery({
 		queryKey: ["sessions"],
 		queryFn: () => {
@@ -22,6 +31,11 @@ export function Dashboard() {
 	// Dropdown menu state
 	const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
 	const menuRef = useRef<HTMLDivElement>(null);
+
+	// Import state
+	const [isImporting, setIsImporting] = useState(false);
+	const [importError, setImportError] = useState<string | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	// Inline edit state (shared for name and module)
 	const [editingId, setEditingId] = useState<string | null>(null);
@@ -100,17 +114,74 @@ export function Dashboard() {
 		}
 	};
 
+	const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		setIsImporting(true);
+		setImportError(null);
+		log.info(`handleImport — file: ${file.name}`);
+		try {
+			const result = await importSession(file);
+			queryClient.invalidateQueries({ queryKey: ["sessions"] });
+			navigate(`/session/${result.sessionId}`);
+		} catch (err) {
+			log.error("handleImport — failed", err);
+			setImportError(err instanceof Error ? err.message : "Import failed");
+		} finally {
+			setIsImporting(false);
+			// Reset file input so the same file can be selected again
+			if (fileInputRef.current) fileInputRef.current.value = "";
+		}
+	};
+
 	return (
 		<div>
 			<div className="mb-6 flex items-center justify-between">
 				<h1 className="text-2xl font-bold">Sessions</h1>
-				<Link
-					to="/new"
-					className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-				>
-					New Session
-				</Link>
+				<div className="flex items-center gap-2">
+					<input
+						ref={fileInputRef}
+						type="file"
+						accept=".zip,.cramkit.zip"
+						onChange={handleImport}
+						className="hidden"
+					/>
+					<button
+						type="button"
+						onClick={() => fileInputRef.current?.click()}
+						disabled={isImporting}
+						className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+					>
+						{isImporting ? (
+							<Loader2 className="h-4 w-4 animate-spin" />
+						) : (
+							<Upload className="h-4 w-4" />
+						)}
+						{isImporting ? "Importing..." : "Import"}
+					</button>
+					<Link
+						to="/new"
+						className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+					>
+						New Session
+					</Link>
+				</div>
 			</div>
+
+			{importError && (
+				<div className="mb-4 flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+					<AlertTriangle className="h-4 w-4 shrink-0" />
+					<span>{importError}</span>
+					<button
+						type="button"
+						onClick={() => setImportError(null)}
+						className="ml-auto text-xs hover:underline"
+					>
+						Dismiss
+					</button>
+				</div>
+			)}
 
 			{isLoading && <p className="text-muted-foreground">Loading...</p>}
 

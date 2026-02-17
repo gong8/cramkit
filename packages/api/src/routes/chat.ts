@@ -447,20 +447,24 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 						const data = trimmed.slice(6);
 
 						if (data === "[DONE]") {
-							// Persist assistant message
+							// Persist assistant message (conversation may have been deleted mid-stream)
 							if (fullAssistantContent || toolCallsData.length > 0) {
-								await db.message.create({
-									data: {
-										conversationId,
-										role: "assistant",
-										content: stripToolCallXml(fullAssistantContent),
-										toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
-									},
-								});
-								await db.conversation.update({
-									where: { id: conversationId },
-									data: { updatedAt: new Date() },
-								});
+								try {
+									await db.message.create({
+										data: {
+											conversationId,
+											role: "assistant",
+											content: stripToolCallXml(fullAssistantContent),
+											toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
+										},
+									});
+									await db.conversation.update({
+										where: { id: conversationId },
+										data: { updatedAt: new Date() },
+									});
+								} catch (e) {
+									log.warn(`Failed to persist assistant message — conversation ${conversationId} may have been deleted`, e);
+								}
 							}
 							await stream.writeSSE({ data: "[DONE]", event: "done" });
 							return;

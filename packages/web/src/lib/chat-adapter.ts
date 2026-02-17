@@ -147,18 +147,51 @@ export function createCramKitChatAdapter(
 			let thinkingText = "";
 			const toolCalls = new Map<string, ToolCallState>();
 
-			function stripToolCallXml(text: string): string {
-				// Strip complete <tool_call>...</tool_call> and <tool_result>...</tool_result> tags
-				let cleaned = text
+			/**
+			 * Parse <tool_call> and <tool_result> XML from text content into
+			 * structured tool-call parts that assistant-ui renders via ToolCallDisplay.
+			 */
+			function parseTextToolCalls(text: string) {
+				const callRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+				const resultRegex = /<tool_result>\s*([\s\S]*?)\s*<\/tool_result>/g;
+
+				const calls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+				const results: string[] = [];
+
+				let m: RegExpExecArray | null;
+				while ((m = callRegex.exec(text)) !== null) {
+					try {
+						const parsed = JSON.parse(m[1]);
+						calls.push({
+							toolName: parsed.name || "unknown",
+							args: parsed.arguments || {},
+						});
+					} catch {
+						// Skip unparseable
+					}
+				}
+
+				while ((m = resultRegex.exec(text)) !== null) {
+					results.push(m[1].trim());
+				}
+
+				const parsedCalls = calls.map((call, i) => ({
+					id: `text_tc_${i}`,
+					toolName: call.toolName,
+					args: call.args,
+					result: results[i],
+				}));
+
+				// Strip complete tags and trailing incomplete tags
+				const cleanText = text
 					.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-					.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "");
-				// Strip trailing incomplete tags (during streaming)
-				cleaned = cleaned
+					.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
 					.replace(/<tool_call[\s\S]*$/, "")
-					.replace(/<tool_result[\s\S]*$/, "");
-				// Collapse excessive whitespace left behind
-				cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
-				return cleaned;
+					.replace(/<tool_result[\s\S]*$/, "")
+					.replace(/\n{3,}/g, "\n\n")
+					.trim();
+
+				return { cleanText, parsedCalls };
 			}
 
 			function buildContentParts() {
@@ -181,7 +214,7 @@ export function createCramKitChatAdapter(
 					parts.push({ type: "reasoning", text: thinkingText });
 				}
 
-				// Tool calls
+				// SSE-based tool calls (from proper tool_use content blocks)
 				for (const tc of toolCalls.values()) {
 					parts.push({
 						type: "tool-call",
@@ -194,8 +227,22 @@ export function createCramKitChatAdapter(
 					});
 				}
 
-				// Text content (strip leaked tool call XML)
-				parts.push({ type: "text", text: stripToolCallXml(textContent) });
+				// Parse text-embedded tool calls (from <tool_call> XML in text)
+				const { cleanText, parsedCalls } = parseTextToolCalls(textContent);
+				for (const pc of parsedCalls) {
+					parts.push({
+						type: "tool-call",
+						toolCallId: pc.id,
+						toolName: pc.toolName,
+						args: pc.args,
+						argsText: JSON.stringify(pc.args),
+						result: pc.result,
+						isError: false,
+					});
+				}
+
+				// Clean text content (XML stripped)
+				parts.push({ type: "text", text: cleanText });
 
 				return parts;
 			}

@@ -365,3 +365,62 @@ export function deleteConversation(conversationId: string): Promise<void> {
 	log.info(`deleteConversation — ${conversationId}`);
 	return request(`/chat/conversations/${conversationId}`, { method: "DELETE" });
 }
+
+// Import/Export operations
+export async function exportSession(sessionId: string): Promise<void> {
+	log.info(`exportSession — ${sessionId}`);
+	const response = await fetch(`${BASE_URL}/sessions/${sessionId}/export`);
+
+	if (!response.ok) {
+		log.error(`exportSession — failed: ${response.status}`);
+		throw new Error(`Export error: ${response.status}`);
+	}
+
+	const blob = await response.blob();
+	const disposition = response.headers.get("Content-Disposition");
+	const filenameMatch = disposition?.match(/filename="?(.+?)"?$/);
+	const filename = filenameMatch?.[1] ?? `session-${sessionId}.cramkit.zip`;
+
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(url);
+	log.info(`exportSession — download triggered: ${filename}`);
+}
+
+export interface ImportResult {
+	sessionId: string;
+	stats: {
+		resourceCount: number;
+		fileCount: number;
+		chunkCount: number;
+		conceptCount: number;
+		relationshipCount: number;
+		conversationCount: number;
+		messageCount: number;
+	};
+}
+
+export async function importSession(file: File): Promise<ImportResult> {
+	log.info(`importSession — file: ${file.name} (${file.size} bytes)`);
+	const formData = new FormData();
+	formData.append("file", file);
+
+	const response = await fetch(`${BASE_URL}/sessions/import`, {
+		method: "POST",
+		body: formData,
+	});
+
+	if (!response.ok) {
+		log.error(`importSession — failed: ${response.status}`);
+		throw new Error(`Import error: ${response.status}`);
+	}
+
+	const result = (await response.json()) as ImportResult;
+	log.info(`importSession — created session ${result.sessionId}`);
+	return result;
+}

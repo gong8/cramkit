@@ -582,8 +582,40 @@ function ChatThread({
 							}
 						}
 
-						// Add text content
-						contentParts.push({ type: "text", text: m.content });
+						// Parse any <tool_call>/<tool_result> XML embedded in text
+						const callRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+						const resultRe = /<tool_result>\s*([\s\S]*?)\s*<\/tool_result>/g;
+						const xmlCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+						const xmlResults: string[] = [];
+						let rm: RegExpExecArray | null;
+						while ((rm = callRe.exec(m.content)) !== null) {
+							try {
+								const parsed = JSON.parse(rm[1]);
+								xmlCalls.push({ name: parsed.name, args: parsed.arguments || {} });
+							} catch { /* skip */ }
+						}
+						while ((rm = resultRe.exec(m.content)) !== null) {
+							xmlResults.push(rm[1].trim());
+						}
+						for (let j = 0; j < xmlCalls.length; j++) {
+							contentParts.push({
+								type: "tool-call",
+								toolCallId: `hist_tc_${i}_${j}`,
+								toolName: xmlCalls[j].name,
+								args: xmlCalls[j].args,
+								argsText: JSON.stringify(xmlCalls[j].args),
+								result: xmlResults[j],
+								isError: false,
+							});
+						}
+
+						// Add text content with XML stripped
+						const cleanContent = m.content
+							.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+							.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
+							.replace(/\n{3,}/g, "\n\n")
+							.trim();
+						contentParts.push({ type: "text", text: cleanContent });
 
 						return {
 							message: {

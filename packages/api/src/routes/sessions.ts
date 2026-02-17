@@ -1,5 +1,7 @@
 import { createLogger, createSessionSchema, getDb, updateSessionSchema } from "@cramkit/shared";
 import { Hono } from "hono";
+import { exportSession } from "../services/session-export.js";
+import { importSession } from "../services/session-import.js";
 
 const log = createLogger("api");
 
@@ -112,6 +114,68 @@ sessionsRoutes.delete("/:id/graph", async (c) => {
 
 	log.info(`DELETE /sessions/${id}/graph — cleared knowledge graph`);
 	return c.json({ ok: true });
+});
+
+// Export session as .cramkit.zip
+sessionsRoutes.get("/:id/export", async (c) => {
+	const db = getDb();
+	const id = c.req.param("id");
+
+	const session = await db.session.findUnique({ where: { id } });
+	if (!session) {
+		return c.json({ error: "Session not found" }, 404);
+	}
+
+	try {
+		const zipBuffer = await exportSession(id);
+		const filename = `${session.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.cramkit.zip`;
+
+		log.info(
+			`GET /sessions/${id}/export — exporting "${session.name}" (${zipBuffer.length} bytes)`,
+		);
+
+		return new Response(zipBuffer, {
+			headers: {
+				"Content-Type": "application/zip",
+				"Content-Disposition": `attachment; filename="${filename}"`,
+				"Content-Length": String(zipBuffer.length),
+			},
+		});
+	} catch (error) {
+		log.error(`GET /sessions/${id}/export — failed`, error);
+		return c.json({ error: "Export failed" }, 500);
+	}
+});
+
+// Import session from .cramkit.zip
+sessionsRoutes.post("/import", async (c) => {
+	try {
+		const body = await c.req.parseBody();
+		const file = body.file;
+
+		if (!file || !(file instanceof File)) {
+			return c.json(
+				{ error: "No file uploaded. Send a .cramkit.zip as multipart 'file' field." },
+				400,
+			);
+		}
+
+		if (!file.name.endsWith(".cramkit.zip")) {
+			log.warn(`POST /sessions/import — rejected file "${file.name}" (not .cramkit.zip)`);
+		}
+
+		const buffer = await file.arrayBuffer();
+		log.info(`POST /sessions/import — received "${file.name}" (${buffer.byteLength} bytes)`);
+
+		const stats = await importSession(buffer);
+
+		log.info(`POST /sessions/import — imported session ${stats.sessionId}`);
+		return c.json(stats, 201);
+	} catch (error) {
+		log.error("POST /sessions/import — failed", error);
+		const message = error instanceof Error ? error.message : "Import failed";
+		return c.json({ error: message }, 400);
+	}
 });
 
 // Delete session
