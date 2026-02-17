@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Hono } from "hono";
 import { getDb } from "@cramkit/shared";
+import { Hono } from "hono";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb } from "../fixtures/helpers";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
@@ -105,7 +105,15 @@ async function seedSearchData() {
 		},
 	});
 
-	return { session, resource, chunkWithContent, chunkGraphOnly, chunkBoth, heatConcept, waveConcept };
+	return {
+		session,
+		resource,
+		chunkWithContent,
+		chunkGraphOnly,
+		chunkBoth,
+		heatConcept,
+		waveConcept,
+	};
 }
 
 beforeEach(async () => {
@@ -120,17 +128,15 @@ describe("search routes", () => {
 		const app = getApp();
 
 		// Search for "diffusion" — matches chunkWithContent via content but no direct concept match
-		const res = await app.request(
-			`/search/sessions/${session.id}/search?q=diffusion`,
-		);
+		const res = await app.request(`/search/sessions/${session.id}/search?q=diffusion`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any[];
+		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeGreaterThan(0);
 
 		// The content-matched result should have source "content" or "both"
 		// (it might be "both" if the concept alias "diffusion" matches in graph too)
-		const sources = body.map((r: any) => r.source);
+		const sources = body.map((r) => r.source);
 		expect(sources.some((s: string) => s === "content" || s === "both")).toBe(true);
 	});
 
@@ -142,16 +148,14 @@ describe("search routes", () => {
 		// chunkGraphOnly content is "advanced mathematical techniques" — doesn't contain "Heat Equation"
 		// But chunkWithContent DOES contain "heat equation" in its content
 		// So we test with a term that only matches via graph
-		const res = await app.request(
-			`/search/sessions/${session.id}/search?q=Heat Equation`,
-		);
+		const res = await app.request(`/search/sessions/${session.id}/search?q=Heat Equation`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any[];
+		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeGreaterThan(0);
 
 		// chunkGraphOnly should appear (via graph path)
-		const graphOnlyResult = body.find((r: any) => r.chunkId === chunkGraphOnly.id);
+		const graphOnlyResult = body.find((r) => r.chunkId === chunkGraphOnly.id);
 		expect(graphOnlyResult).toBeDefined();
 	});
 
@@ -160,14 +164,12 @@ describe("search routes", () => {
 		const app = getApp();
 
 		// "Wave Equation" matches both: chunk content AND concept
-		const res = await app.request(
-			`/search/sessions/${session.id}/search?q=Wave Equation`,
-		);
+		const res = await app.request(`/search/sessions/${session.id}/search?q=Wave Equation`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any[];
+		const body = (await res.json()) as Record<string, unknown>[];
 
-		const bothResult = body.find((r: any) => r.chunkId === chunkBoth.id);
+		const bothResult = body.find((r) => r.chunkId === chunkBoth.id);
 		expect(bothResult).toBeDefined();
 		expect(bothResult.source).toBe("both");
 		expect(bothResult.relatedConcepts).toBeDefined();
@@ -178,15 +180,13 @@ describe("search routes", () => {
 		const { session, chunkBoth } = await seedSearchData();
 		const app = getApp();
 
-		const res = await app.request(
-			`/search/sessions/${session.id}/search?q=Wave Equation`,
-		);
+		const res = await app.request(`/search/sessions/${session.id}/search?q=Wave Equation`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any[];
+		const body = (await res.json()) as Record<string, unknown>[];
 
 		// chunkBoth should appear only once despite matching content + graph
-		const matches = body.filter((r: any) => r.chunkId === chunkBoth.id);
+		const matches = body.filter((r) => r.chunkId === chunkBoth.id);
 		expect(matches.length).toBe(1);
 	});
 
@@ -194,9 +194,7 @@ describe("search routes", () => {
 		const { session } = await seedSearchData();
 		const app = getApp();
 
-		await app.request(
-			`/search/sessions/${session.id}/search?q=Heat Equation`,
-		);
+		await app.request(`/search/sessions/${session.id}/search?q=Heat Equation`);
 
 		// Wait a bit for async amortisation
 		await new Promise((resolve) => setTimeout(resolve, 200));
@@ -232,12 +230,10 @@ describe("search routes", () => {
 		}
 
 		const app = getApp();
-		const res = await app.request(
-			`/search/sessions/${session.id}/search?q=PDE&limit=3`,
-		);
+		const res = await app.request(`/search/sessions/${session.id}/search?q=PDE&limit=3`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any[];
+		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeLessThanOrEqual(3);
 	});
 });

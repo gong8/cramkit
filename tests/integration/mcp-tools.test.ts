@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../packages/mcp/src/lib/api-client.js", () => ({
 	apiClient: {
@@ -65,7 +65,7 @@ describe("MCP graph tools", () => {
 	});
 
 	it("all tools have valid Zod parameter schemas", () => {
-		for (const [name, tool] of Object.entries(graphTools)) {
+		for (const [_name, tool] of Object.entries(graphTools)) {
 			expect(tool.parameters).toBeDefined();
 			// Test that the schema can parse valid input
 			const schema = tool.parameters;

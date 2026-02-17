@@ -27,7 +27,9 @@ export const paperTools = {
 			log.info(`list_past_papers — found ${papers.length} past papers`);
 			return JSON.stringify(
 				papers.map((paper) => {
-					const hasMarkScheme = paper.label === "includes_mark_scheme" || paper.files.some((f) => f.role === "MARK_SCHEME");
+					const hasMarkScheme =
+						paper.label === "includes_mark_scheme" ||
+						paper.files.some((f) => f.role === "MARK_SCHEME");
 					return {
 						resourceId: paper.id,
 						name: paper.name,
@@ -71,7 +73,8 @@ export const paperTools = {
 			log.info(`list_problem_sheets — found ${sheets.length} problem sheets`);
 			return JSON.stringify(
 				sheets.map((sheet) => {
-					const hasSolutions = sheet.label === "includes_solutions" || sheet.files.some((f) => f.role === "SOLUTIONS");
+					const hasSolutions =
+						sheet.label === "includes_solutions" || sheet.files.some((f) => f.role === "SOLUTIONS");
 					return {
 						resourceId: sheet.id,
 						name: sheet.name,

@@ -230,8 +230,11 @@ export function ResourceList({
 									</span>
 								)}
 							</div>
-							{/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation only, not interactive */}
-							<div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+							<div
+								className="flex items-center gap-2"
+								onClick={(e) => e.stopPropagation()}
+								onKeyDown={(e) => e.stopPropagation()}
+							>
 								<span
 									className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
 								>

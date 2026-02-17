@@ -1,4 +1,5 @@
 import { createLogger, getDb } from "@cramkit/shared";
+import type { Prisma } from "@prisma/client";
 
 const log = createLogger("api");
 
@@ -84,7 +85,9 @@ export async function amortiseSearchResults(
 		}
 
 		if (toCreate.length > 0) {
-			await db.relationship.createMany({ data: toCreate });
+			await db.relationship.createMany({
+				data: toCreate as Prisma.RelationshipCreateManyInput[],
+			});
 			log.info(
 				`amortiseSearchResults — created ${toCreate.length} new relationships` +
 					` for query "${query}"`,

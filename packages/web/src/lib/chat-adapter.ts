@@ -93,7 +93,13 @@ export function createCramKitChatAdapter(
 			const attachmentIds: string[] = [];
 			if (lastMessage && "attachments" in lastMessage && Array.isArray(lastMessage.attachments)) {
 				for (const att of lastMessage.attachments) {
-					if (att && typeof att === "object" && "id" in att && typeof att.id === "string" && att.id) {
+					if (
+						att &&
+						typeof att === "object" &&
+						"id" in att &&
+						typeof att.id === "string" &&
+						att.id
+					) {
 						attachmentIds.push(att.id);
 					}
 				}
@@ -161,7 +167,8 @@ export function createCramKitChatAdapter(
 				const results: string[] = [];
 
 				let m: RegExpExecArray | null;
-				while ((m = callRegex.exec(text)) !== null) {
+				m = callRegex.exec(text);
+				while (m !== null) {
 					try {
 						const parsed = JSON.parse(m[1]);
 						calls.push({
@@ -171,10 +178,13 @@ export function createCramKitChatAdapter(
 					} catch {
 						// Skip unparseable
 					}
+					m = callRegex.exec(text);
 				}
 
-				while ((m = resultRegex.exec(text)) !== null) {
+				m = resultRegex.exec(text);
+				while (m !== null) {
 					results.push(m[1].trim());
+					m = resultRegex.exec(text);
 				}
 
 				const parsedCalls = calls.map((call, i) => ({

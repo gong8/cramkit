@@ -76,9 +76,7 @@ export function SessionDetail() {
 		if (session && !initialized.current) {
 			const s = session.scope ?? "";
 			const n = session.notes ?? "";
-			const d = session.examDate
-				? new Date(session.examDate).toISOString().split("T")[0]
-				: "";
+			const d = session.examDate ? new Date(session.examDate).toISOString().split("T")[0] : "";
 			setScope(s);
 			setNotes(n);
 			setExamDate(d);
@@ -99,9 +97,8 @@ export function SessionDetail() {
 			updateSession(sessionId, patch)
 				.then((updated) => {
 					savedValues.current = { scope, notes, examDate };
-					queryClient.setQueryData(
-						["session", sessionId],
-						(old: Session | undefined) => (old ? { ...old, ...updated } : old),
+					queryClient.setQueryData(["session", sessionId], (old: Session | undefined) =>
+						old ? { ...old, ...updated } : old,
 					);
 				})
 				.catch((err) => {
@@ -109,7 +106,7 @@ export function SessionDetail() {
 				});
 		}, 800);
 		return () => clearTimeout(timer);
-	}, [scope, notes, examDate, sessionId]);
+	}, [scope, notes, examDate, sessionId, queryClient]);
 
 	// Cleanup polling on unmount
 	useEffect(() => {
@@ -128,8 +125,7 @@ export function SessionDetail() {
 
 				const batch = status.batch;
 				const isDone = batch
-					? batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal ||
-						batch.cancelled
+					? batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal || batch.cancelled
 					: status.inProgress === 0 && status.indexed === status.total;
 
 				if (isDone) {

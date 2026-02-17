@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getDb } from "@cramkit/shared";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb, seedPdeSession } from "../fixtures/helpers";
 import {
 	lectureNotesResponse,
@@ -12,8 +12,8 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
 }));
 
-import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
+import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 
 const db = getDb();
 
@@ -56,10 +56,7 @@ describe("indexResourceGraph", () => {
 			where: {
 				sessionId: lectureResource.sessionId,
 				createdBy: "system",
-				OR: [
-					{ sourceType: "resource", sourceId: lectureResource.id },
-					{ sourceType: "chunk" },
-				],
+				OR: [{ sourceType: "resource", sourceId: lectureResource.id }, { sourceType: "chunk" }],
 			},
 		});
 
@@ -160,7 +157,9 @@ describe("indexResourceGraph", () => {
 		vi.mocked(chatCompletion).mockResolvedValue(
 			JSON.stringify({
 				concepts: [{ name: "New Concept Only", description: "test" }],
-				file_concept_links: [{ conceptName: "New Concept Only", relationship: "covers", confidence: 0.9 }],
+				file_concept_links: [
+					{ conceptName: "New Concept Only", relationship: "covers", confidence: 0.9 },
+				],
 				concept_concept_links: [],
 				question_concept_links: [],
 			}),
@@ -193,7 +192,7 @@ describe("indexResourceGraph", () => {
 				sourceType: "chunk",
 				sourceId: chunks[0].id,
 				targetType: "concept",
-				targetId: concept!.id,
+				targetId: concept?.id,
 				relationship: "related_to",
 				confidence: 0.6,
 				createdBy: "amortised",
@@ -233,7 +232,9 @@ describe("indexResourceGraph", () => {
 			},
 		});
 
-		await expect(indexResourceGraph(unindexedResource.id)).rejects.toThrow("Not content-indexed yet");
+		await expect(indexResourceGraph(unindexedResource.id)).rejects.toThrow(
+			"Not content-indexed yet",
+		);
 
 		expect(chatCompletion).not.toHaveBeenCalled();
 		const resource = await db.resource.findUnique({ where: { id: unindexedResource.id } });
@@ -246,7 +247,7 @@ describe("indexResourceGraph", () => {
 	});
 
 	it("handles LLM returning markdown-wrapped JSON", async () => {
-		const wrapped = "```json\n" + JSON.stringify(lectureNotesResponse) + "\n```";
+		const wrapped = `\`\`\`json\n${JSON.stringify(lectureNotesResponse)}\n\`\`\``;
 		vi.mocked(chatCompletion).mockResolvedValue(wrapped);
 		const { resources } = await seedPdeSession(db);
 

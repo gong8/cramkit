@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
 import { createConceptSchema, indexResourceRequestSchema } from "@cramkit/shared";
+import { describe, expect, it } from "vitest";
 
 describe("createConceptSchema", () => {
 	it("accepts valid input", () => {

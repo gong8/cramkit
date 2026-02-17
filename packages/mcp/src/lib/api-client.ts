@@ -37,11 +37,9 @@ export const apiClient = {
 
 	getResource: (resourceId: string) => request<unknown>(`/resources/${resourceId}`),
 
-	getResourceContent: (resourceId: string) =>
-		request<unknown>(`/resources/${resourceId}/content`),
+	getResourceContent: (resourceId: string) => request<unknown>(`/resources/${resourceId}/content`),
 
-	getResourceTree: (resourceId: string) =>
-		request<unknown>(`/resources/${resourceId}/tree`),
+	getResourceTree: (resourceId: string) => request<unknown>(`/resources/${resourceId}/tree`),
 
 	// Chunks
 	getChunk: (chunkId: string) => request<unknown>(`/chunks/${chunkId}`),
@@ -68,8 +66,7 @@ export const apiClient = {
 			`/graph/related?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}${relationship ? `&relationship=${encodeURIComponent(relationship)}` : ""}`,
 		),
 
-	listConcepts: (sessionId: string) =>
-		request<unknown[]>(`/graph/sessions/${sessionId}/concepts`),
+	listConcepts: (sessionId: string) => request<unknown[]>(`/graph/sessions/${sessionId}/concepts`),
 
 	getConcept: (conceptId: string) => request<unknown>(`/graph/concepts/${conceptId}`),
 };

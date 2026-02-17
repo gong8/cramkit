@@ -68,8 +68,7 @@ async function runIndexJob(jobId: string): Promise<void> {
 				: error instanceof Error
 					? error.message
 					: String(error);
-		const errorType =
-			error instanceof GraphIndexError ? error.errorType : ("unknown" as const);
+		const errorType = error instanceof GraphIndexError ? error.errorType : ("unknown" as const);
 
 		await db.indexJob.update({
 			where: { id: jobId },
@@ -166,9 +165,7 @@ export interface BatchStatusResult {
 	}>;
 }
 
-export async function getSessionBatchStatus(
-	sessionId: string,
-): Promise<BatchStatusResult | null> {
+export async function getSessionBatchStatus(sessionId: string): Promise<BatchStatusResult | null> {
 	const db = getDb();
 
 	// Prefer running batch, then most recent

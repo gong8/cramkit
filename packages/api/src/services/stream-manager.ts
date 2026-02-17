@@ -303,7 +303,7 @@ export function subscribe(conversationId: string, cb: Subscriber): SubscribeHand
 		}
 		draining = false;
 		// If the stream is done and we've delivered everything, resolve
-		if (stream.status !== "streaming" && queue.length === 0) {
+		if (stream && stream.status !== "streaming" && queue.length === 0) {
 			resolveDelivered();
 		}
 	}

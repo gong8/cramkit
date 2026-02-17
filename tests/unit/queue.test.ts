@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getDb, initDb } from "@cramkit/shared";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb } from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/graph-indexer.js", () => ({
@@ -20,14 +20,14 @@ vi.mock("../../packages/api/src/services/resource-processor.js", () => ({
 	processResource: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
-import { processResource } from "../../packages/api/src/services/resource-processor.js";
 import {
 	enqueueGraphIndexing,
+	enqueueProcessing,
 	enqueueSessionGraphIndexing,
 	getIndexingQueueSize,
-	enqueueProcessing,
 } from "../../packages/api/src/lib/queue.js";
+import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
+import { processResource } from "../../packages/api/src/services/resource-processor.js";
 
 beforeEach(async () => {
 	vi.mocked(indexResourceGraph).mockReset().mockResolvedValue(undefined);

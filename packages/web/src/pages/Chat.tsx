@@ -25,7 +25,7 @@ import {
 	useMessageRuntime,
 	useThreadRuntime,
 } from "@assistant-ui/react";
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+import type { ThreadHistoryAdapter, ToolCallMessagePartProps } from "@assistant-ui/react";
 import { type CodeHeaderProps, MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import "katex/dist/katex.min.css";
@@ -481,10 +481,12 @@ function getDraftKey(conversationId: string) {
 function DraftPersistence({ conversationId }: { conversationId: string }) {
 	const composerRuntime = useComposerRuntime();
 	const draftKey = getDraftKey(conversationId);
+	const restoredRef = useRef(false);
 
-	// Restore draft on mount only — intentionally omitting deps
-	// biome-ignore lint/correctness/useExhaustiveDependencies: restore only once on mount
+	// Restore draft on mount only
 	useEffect(() => {
+		if (restoredRef.current) return;
+		restoredRef.current = true;
 		const raw = sessionStorage.getItem(draftKey);
 		if (!raw) return;
 		try {
@@ -501,7 +503,7 @@ function DraftPersistence({ conversationId }: { conversationId: string }) {
 		} catch {
 			// Invalid draft data, ignore
 		}
-	}, []);
+	}, [draftKey, composerRuntime]);
 
 	// Save draft periodically and on unmount
 	useEffect(() => {
@@ -713,28 +715,25 @@ function ChatThread({
 	const queryClient = useQueryClient();
 
 	const adapterStreamingRef = useRef(false);
-	const adapter = useMemo(
-		() => {
-			const base = createCramKitChatAdapter(sessionId, conversationId);
-			return {
-				...base,
-				async *run(options: Parameters<typeof base.run>[0]) {
-					adapterStreamingRef.current = true;
-					try {
-						const result = base.run(options);
-						if (Symbol.asyncIterator in result) {
-							yield* result;
-						} else {
-							yield await result;
-						}
-					} finally {
-						adapterStreamingRef.current = false;
+	const adapter = useMemo(() => {
+		const base = createCramKitChatAdapter(sessionId, conversationId);
+		return {
+			...base,
+			async *run(options: Parameters<typeof base.run>[0]) {
+				adapterStreamingRef.current = true;
+				try {
+					const result = base.run(options);
+					if (Symbol.asyncIterator in result) {
+						yield* result;
+					} else {
+						yield await result;
 					}
-				},
-			};
-		},
-		[sessionId, conversationId],
-	);
+				} finally {
+					adapterStreamingRef.current = false;
+				}
+			},
+		};
+	}, [sessionId, conversationId]);
 
 	const history = useMemo(
 		() =>
@@ -794,16 +793,20 @@ function ChatThread({
 						const xmlCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 						const xmlResults: string[] = [];
 						let rm: RegExpExecArray | null;
-						while ((rm = callRe.exec(m.content)) !== null) {
+						rm = callRe.exec(m.content);
+						while (rm !== null) {
 							try {
 								const parsed = JSON.parse(rm[1]);
 								xmlCalls.push({ name: parsed.name, args: parsed.arguments || {} });
 							} catch {
 								/* skip */
 							}
+							rm = callRe.exec(m.content);
 						}
-						while ((rm = resultRe.exec(m.content)) !== null) {
+						rm = resultRe.exec(m.content);
+						while (rm !== null) {
 							xmlResults.push(rm[1].trim());
+							rm = resultRe.exec(m.content);
 						}
 						for (let j = 0; j < xmlCalls.length; j++) {
 							contentParts.push({
@@ -831,7 +834,7 @@ function ChatThread({
 								role: m.role,
 								content: contentParts,
 								createdAt: new Date(m.createdAt),
-								status: { type: "complete", reason: "stop" },
+								status: { type: "complete", reason: "stop" } as const,
 								attachments: [],
 								metadata: { steps: [], custom: {} },
 							},
@@ -851,8 +854,7 @@ function ChatThread({
 						queryKey: ["conversations", sessionId],
 					});
 				},
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			}) as any,
+			}) as unknown as ThreadHistoryAdapter,
 		[conversationId, sessionId, queryClient],
 	);
 
@@ -1236,23 +1238,16 @@ function ConversationItem({
 	}
 
 	return (
-		<div
-			role="button"
-			tabIndex={0}
+		<button
+			type="button"
 			onClick={onSelect}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					onSelect();
-				}
-			}}
 			className={`group flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
 				isActive ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-accent/50"
 			}`}
 		>
 			<MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 			<span className="flex-1 truncate">{conv.title}</span>
-			<div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+			<span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
 				<button
 					type="button"
 					onClick={(e) => {
@@ -1274,8 +1269,8 @@ function ConversationItem({
 				>
 					<Trash2 className="h-3 w-3" />
 				</button>
-			</div>
-		</div>
+			</span>
+		</button>
 	);
 }
 

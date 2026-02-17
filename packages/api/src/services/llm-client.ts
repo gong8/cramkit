@@ -1,8 +1,8 @@
-import { spawn } from "child_process";
-import { writeFileSync, mkdirSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
-import { randomUUID } from "crypto";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createLogger } from "@cramkit/shared";
 
 const log = createLogger("api");
@@ -65,6 +65,10 @@ export async function chatCompletion(
 		"",
 		"--no-session-persistence",
 	];
+
+	if (options?.maxTokens) {
+		args.push("--max-tokens", String(options.maxTokens));
+	}
 
 	if (systemParts.length > 0) {
 		const systemPromptPath = join(tempDir, "system-prompt.txt");

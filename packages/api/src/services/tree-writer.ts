@@ -1,6 +1,6 @@
-import { createLogger } from "@cramkit/shared";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createLogger } from "@cramkit/shared";
 import type { TreeNode } from "./markdown-parser.js";
 import { getResourceDir, getSessionDir } from "./storage.js";
 
@@ -42,9 +42,8 @@ async function writeNodeToDisk(
 	node: TreeNode,
 	mappings: DiskMapping[],
 ): Promise<void> {
-	const slug = node.order === 0 && node.depth === 0
-		? ""
-		: `${zeroPad(node.order)}-${slugify(node.title)}`;
+	const slug =
+		node.order === 0 && node.depth === 0 ? "" : `${zeroPad(node.order)}-${slugify(node.title)}`;
 
 	const isLeaf = node.children.length === 0;
 
@@ -80,12 +79,7 @@ async function writeNodeToDisk(
 		mappings.push({ node, diskPath, slug });
 
 		for (const child of node.children) {
-			await writeNodeToDisk(
-				dirPath,
-				join(relativeBase, slug),
-				child,
-				mappings,
-			);
+			await writeNodeToDisk(dirPath, join(relativeBase, slug), child, mappings);
 		}
 	}
 }

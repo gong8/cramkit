@@ -122,7 +122,11 @@ export function preprocessPdfMarkdown(markdown: string): string {
 			if (j < lines.length) {
 				const nextTrimmed = lines[j].trim();
 				// Only use as title if it's short and not a section number
-				if (nextTrimmed.length > 0 && nextTrimmed.length < 100 && !SECTION_NUMBER_REGEX.test(nextTrimmed.replace(/\t/g, " "))) {
+				if (
+					nextTrimmed.length > 0 &&
+					nextTrimmed.length < 100 &&
+					!SECTION_NUMBER_REGEX.test(nextTrimmed.replace(/\t/g, " "))
+				) {
 					title = `Chapter ${chapterMatch[1]}: ${nextTrimmed}`;
 					i = j + 1;
 				} else {
@@ -261,9 +265,7 @@ function mergeShortLeaves(node: TreeNode): void {
 	for (const child of node.children) {
 		if (child.children.length === 0 && child.content.length < 50) {
 			// Merge into parent: append content with title as header
-			const merged = child.content
-				? `**${child.title}**: ${child.content}`
-				: `**${child.title}**`;
+			const merged = child.content ? `**${child.title}**: ${child.content}` : `**${child.title}**`;
 			node.content = node.content ? `${node.content}\n\n${merged}` : merged;
 		} else {
 			child.order = kept.length;
@@ -273,7 +275,7 @@ function mergeShortLeaves(node: TreeNode): void {
 	node.children = kept;
 }
 
-/** Check if a markdown document has any headings (including PDF section numbers) */
+/** Check if a markdown document contains headings (including PDF section numbers) */
 export function hasHeadings(markdown: string): boolean {
 	return markdown.split("\n").some((line) => {
 		if (HEADING_REGEX.test(line)) return true;

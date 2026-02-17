@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
 import { getDb } from "@cramkit/shared";
-import { cleanDb } from "../fixtures/helpers";
+import { beforeEach, describe, expect, it } from "vitest";
 import { searchGraph } from "../../packages/api/src/services/graph-search.js";
+import { cleanDb } from "../fixtures/helpers";
 
 const db = getDb();
 
@@ -140,7 +140,7 @@ describe("searchGraph", () => {
 	});
 
 	it("follows resource-concept → resource-chunks path", async () => {
-		const { session, resource, chunks } = await seedGraphData();
+		const { session, resource } = await seedGraphData();
 
 		// Heat Equation is linked to the resource, so its chunks should be returned
 		const results = await searchGraph(session.id, "Heat Equation", 10);
@@ -204,7 +204,7 @@ describe("searchGraph", () => {
 	});
 
 	it("full PDE graph: search 'Separation Of Variables'", async () => {
-		const { session, resource, chunks, concepts } = await seedGraphData();
+		const { session, concepts } = await seedGraphData();
 
 		// Add a problem sheet resource with chunk linked to separation of variables
 		const sheetResource = await db.resource.create({

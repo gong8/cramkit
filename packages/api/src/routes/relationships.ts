@@ -12,7 +12,9 @@ relationshipsRoutes.get("/sessions/:sessionId/relationships", async (c) => {
 		where: { sessionId: c.req.param("sessionId") },
 		orderBy: { createdAt: "desc" },
 	});
-	log.info(`GET /sessions/${c.req.param("sessionId")}/relationships — found ${relationships.length}`);
+	log.info(
+		`GET /sessions/${c.req.param("sessionId")}/relationships — found ${relationships.length}`,
+	);
 	return c.json(relationships);
 });
 
@@ -34,7 +36,9 @@ relationshipsRoutes.post("/sessions/:sessionId/relationships", async (c) => {
 		},
 	});
 
-	log.info(`POST /relationships — created ${relationship.id} (${parsed.data.sourceLabel} -> ${parsed.data.targetLabel})`);
+	log.info(
+		`POST /relationships — created ${relationship.id} (${parsed.data.sourceLabel} -> ${parsed.data.targetLabel})`,
+	);
 	return c.json(relationship, 201);
 });
 

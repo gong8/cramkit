@@ -1,4 +1,4 @@
-import { createBrowserRouter, Outlet } from "react-router-dom";
+import { Outlet, createBrowserRouter } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";

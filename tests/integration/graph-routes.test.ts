@@ -1,8 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Hono } from "hono";
 import { getDb } from "@cramkit/shared";
+import { Hono } from "hono";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb, seedPdeSession } from "../fixtures/helpers";
-import { lectureNotesResponse, pastPaperResponse, problemSheetResponse } from "../fixtures/llm-responses";
+import {
+	lectureNotesResponse,
+	pastPaperResponse,
+	problemSheetResponse,
+} from "../fixtures/llm-responses";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -19,10 +23,13 @@ vi.mock("../../packages/api/src/lib/queue.js", () => ({
 	resumeInterruptedBatches: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
-import { enqueueGraphIndexing, enqueueSessionGraphIndexing } from "../../packages/api/src/lib/queue.js";
-import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
+import {
+	enqueueGraphIndexing,
+	enqueueSessionGraphIndexing,
+} from "../../packages/api/src/lib/queue.js";
 import { graphRoutes } from "../../packages/api/src/routes/graph.js";
+import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
+import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 
 const db = getDb();
 
@@ -61,11 +68,11 @@ describe("graph routes", () => {
 		const res = await app.request(`/graph/sessions/${session.id}/concepts`);
 
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as any[];
+		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeGreaterThan(0);
 
 		// Should be sorted by name ascending
-		const names = body.map((c: any) => c.name);
+		const names = body.map((c) => c.name);
 		const sorted = [...names].sort();
 		expect(names).toEqual(sorted);
 	});
@@ -78,10 +85,10 @@ describe("graph routes", () => {
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
 		const app = getApp();
-		const res = await app.request(`/graph/concepts/${concept!.id}`);
+		const res = await app.request(`/graph/concepts/${concept?.id}`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.name).toBe("Heat Equation");
 		expect(body).toHaveProperty("relationships");
 		expect(Array.isArray(body.relationships)).toBe(true);
@@ -102,12 +109,12 @@ describe("graph routes", () => {
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
 		const app = getApp();
-		const res = await app.request(`/graph/concepts/${concept!.id}`, { method: "DELETE" });
+		const res = await app.request(`/graph/concepts/${concept?.id}`, { method: "DELETE" });
 
 		expect(res.status).toBe(200);
 
 		// Concept should be gone
-		const deleted = await db.concept.findUnique({ where: { id: concept!.id } });
+		const deleted = await db.concept.findUnique({ where: { id: concept?.id } });
 		expect(deleted).toBeNull();
 
 		// Relationships involving this concept should be gone
@@ -115,8 +122,8 @@ describe("graph routes", () => {
 			where: {
 				sessionId: session.id,
 				OR: [
-					{ sourceType: "concept", sourceId: concept!.id },
-					{ targetType: "concept", targetId: concept!.id },
+					{ sourceType: "concept", sourceId: concept?.id },
+					{ targetType: "concept", targetId: concept?.id },
 				],
 			},
 		});
@@ -131,10 +138,10 @@ describe("graph routes", () => {
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
 		const app = getApp();
-		const res = await app.request(`/graph/related?type=concept&id=${concept!.id}`);
+		const res = await app.request(`/graph/related?type=concept&id=${concept?.id}`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any[];
+		const body = (await res.json()) as Record<string, unknown>[];
 		expect(body.length).toBeGreaterThan(0);
 	});
 
@@ -143,7 +150,7 @@ describe("graph routes", () => {
 		const res = await app.request("/graph/related");
 
 		expect(res.status).toBe(400);
-		const body = await res.json() as any;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.error).toMatch(/type and id/i);
 	});
 
@@ -158,7 +165,7 @@ describe("graph routes", () => {
 		});
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.ok).toBe(true);
 		expect(body.resourceId).toBe(resources[0].id);
 		expect(enqueueSessionGraphIndexing).toHaveBeenCalledWith(session.id, [resources[0].id]);
@@ -186,7 +193,7 @@ describe("graph routes", () => {
 		});
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.ok).toBe(true);
 		// All 11 resources are isIndexed but not isGraphIndexed
 		expect(body.queued).toBe(11);
@@ -204,7 +211,7 @@ describe("graph routes", () => {
 		const res = await app.request(`/graph/sessions/${session.id}/index-status`);
 
 		expect(res.status).toBe(200);
-		const body = await res.json() as any;
+		const body = (await res.json()) as Record<string, unknown>;
 		expect(body).toHaveProperty("total");
 		expect(body).toHaveProperty("indexed");
 		expect(body).toHaveProperty("inProgress");
@@ -231,16 +238,16 @@ describe("graph routes", () => {
 
 		// Check status
 		const statusRes = await app.request(`/graph/sessions/${session.id}/index-status`);
-		const status = await statusRes.json() as any;
+		const status = (await statusRes.json()) as Record<string, unknown>;
 		expect(status.indexed).toBe(11);
 
 		// Check concepts
 		const conceptsRes = await app.request(`/graph/sessions/${session.id}/concepts`);
-		const concepts = await conceptsRes.json() as any[];
+		const concepts = (await conceptsRes.json()) as Record<string, unknown>[];
 		expect(concepts.length).toBeGreaterThanOrEqual(8);
 
 		// Verify Method Of Characteristics exists
-		const moc = concepts.find((c: any) => c.name === "Method Of Characteristics");
+		const moc = concepts.find((c) => c.name === "Method Of Characteristics");
 		expect(moc).toBeDefined();
 	});
 });

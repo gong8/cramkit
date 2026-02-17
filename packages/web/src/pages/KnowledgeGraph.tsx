@@ -1,10 +1,17 @@
 import { fetchSession, fetchSessionGraph } from "@/lib/api";
 import type { Concept, GraphResource, Relationship } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
-import { GraphCanvas, lightTheme, type GraphCanvasRef, type GraphEdge, type GraphNode, type LayoutTypes } from "reagraph";
 import { ArrowLeft, ArrowRight, Search, X } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import {
+	GraphCanvas,
+	type GraphCanvasRef,
+	type GraphEdge,
+	type GraphNode,
+	type LayoutTypes,
+	lightTheme,
+} from "reagraph";
 
 // ─── Constants ──────────────────────────────────────────────────
 
@@ -77,7 +84,11 @@ interface FullGraphData {
 	resourcesByType: Map<string, GraphResource[]>;
 }
 
-function buildGraphData(concepts: Concept[], relationships: Relationship[], resources: GraphResource[]): FullGraphData {
+function buildGraphData(
+	concepts: Concept[],
+	relationships: Relationship[],
+	resources: GraphResource[],
+): FullGraphData {
 	const nodeMap = new Map<string, GraphNode>();
 	const nodeTypeSet = new Set<string>();
 	const relTypeSet = new Set<string>();
@@ -108,7 +119,8 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[], reso
 			nodeMap.set(sourceKey, {
 				id: sourceKey,
 				label: resMeta?.name || r.sourceLabel || r.sourceId.slice(0, 8),
-				fill: (resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.sourceType] || "#6b7280",
+				fill:
+					(resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.sourceType] || "#6b7280",
 				data: {
 					type: r.sourceType,
 					resourceId: r.sourceType === "resource" ? r.sourceId : undefined,
@@ -124,7 +136,8 @@ function buildGraphData(concepts: Concept[], relationships: Relationship[], reso
 			nodeMap.set(targetKey, {
 				id: targetKey,
 				label: resMeta?.name || r.targetLabel || r.targetId.slice(0, 8),
-				fill: (resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.targetType] || "#6b7280",
+				fill:
+					(resMeta && RESOURCE_TYPE_COLORS[resMeta.type]) || NODE_COLORS[r.targetType] || "#6b7280",
 				data: {
 					type: r.targetType,
 					resourceId: r.targetType === "resource" ? r.targetId : undefined,
@@ -173,8 +186,8 @@ function findPath(
 	for (const edge of edges) {
 		if (!adj.has(edge.source)) adj.set(edge.source, []);
 		if (!adj.has(edge.target)) adj.set(edge.target, []);
-		adj.get(edge.source)!.push({ nodeId: edge.target, edgeId: edge.id });
-		adj.get(edge.target)!.push({ nodeId: edge.source, edgeId: edge.id });
+		adj.get(edge.source)?.push({ nodeId: edge.target, edgeId: edge.id });
+		adj.get(edge.target)?.push({ nodeId: edge.source, edgeId: edge.id });
 	}
 
 	const visited = new Set<string>([fromId]);
@@ -183,7 +196,8 @@ function findPath(
 	];
 
 	while (queue.length > 0) {
-		const current = queue.shift()!;
+		const current = queue.shift();
+		if (!current) break;
 		if (current.nodeId === toId) return { nodeIds: current.path, edgeIds: current.edgePath };
 
 		for (const neighbor of adj.get(current.nodeId) || []) {
@@ -263,7 +277,9 @@ function NodePicker({
 	const filtered = useMemo(
 		() =>
 			query
-				? nodes.filter((n) => (n.label ?? "").toLowerCase().includes(query.toLowerCase())).slice(0, 8)
+				? nodes
+						.filter((n) => (n.label ?? "").toLowerCase().includes(query.toLowerCase()))
+						.slice(0, 8)
 				: nodes.slice(0, 8),
 		[nodes, query],
 	);
@@ -293,6 +309,7 @@ function NodePicker({
 				<div className="absolute z-50 mt-1 max-h-32 w-full overflow-y-auto rounded border border-border bg-background shadow-lg">
 					{filtered.map((n) => (
 						<button
+							type="button"
 							key={n.id}
 							className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs hover:bg-accent"
 							onMouseDown={(e) => {
@@ -313,6 +330,7 @@ function NodePicker({
 			)}
 			{value && (
 				<button
+					type="button"
 					className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
 					onClick={() => {
 						onChange(null);
@@ -340,7 +358,11 @@ export function KnowledgeGraph() {
 		enabled: !!sessionId,
 	});
 
-	const { data: graph, isLoading, error } = useQuery({
+	const {
+		data: graph,
+		isLoading,
+		error,
+	} = useQuery({
 		queryKey: ["session-graph", sessionId],
 		queryFn: () => fetchSessionGraph(sessionId),
 		enabled: !!sessionId,
@@ -357,7 +379,9 @@ export function KnowledgeGraph() {
 	const [layoutType, setLayoutType] = useState<LayoutTypes>("forceDirected2d");
 	const [pathFrom, setPathFrom] = useState<string | null>(null);
 	const [pathTo, setPathTo] = useState<string | null>(null);
-	const [pathResult, setPathResult] = useState<{ nodeIds: string[]; edgeIds: string[] } | null>(null);
+	const [pathResult, setPathResult] = useState<{ nodeIds: string[]; edgeIds: string[] } | null>(
+		null,
+	);
 	const [pathSearched, setPathSearched] = useState(false);
 	const [highlightOrphans, setHighlightOrphans] = useState(false);
 
@@ -368,7 +392,10 @@ export function KnowledgeGraph() {
 	);
 
 	// Stats (from full graph)
-	const stats = useMemo(() => (fullGraph ? computeStats(fullGraph.nodes, fullGraph.edges) : null), [fullGraph]);
+	const stats = useMemo(
+		() => (fullGraph ? computeStats(fullGraph.nodes, fullGraph.edges) : null),
+		[fullGraph],
+	);
 
 	// Filtered graph
 	const filteredGraph = useMemo(() => {
@@ -378,7 +405,12 @@ export function KnowledgeGraph() {
 		for (const node of fullGraph.nodes) {
 			if (disabledNodeTypes.has(node.data?.type)) continue;
 			// Hide individual file nodes that are disabled
-			if (node.data?.type === "resource" && node.data?.resourceId && disabledResourceIds.has(node.data.resourceId)) continue;
+			if (
+				node.data?.type === "resource" &&
+				node.data?.resourceId &&
+				disabledResourceIds.has(node.data.resourceId)
+			)
+				continue;
 			filteredNodeIds.add(node.id);
 		}
 
@@ -514,11 +546,17 @@ export function KnowledgeGraph() {
 
 	// Loading / error / empty
 	if (isLoading) {
-		return <div className="flex h-screen items-center justify-center text-muted-foreground">Loading graph...</div>;
+		return (
+			<div className="flex h-screen items-center justify-center text-muted-foreground">
+				Loading graph...
+			</div>
+		);
 	}
 	if (error) {
 		return (
-			<div className="flex h-screen items-center justify-center text-destructive">Failed to load graph data.</div>
+			<div className="flex h-screen items-center justify-center text-destructive">
+				Failed to load graph data.
+			</div>
 		);
 	}
 	if (!filteredGraph || !fullGraph || fullGraph.nodes.length === 0) {
@@ -555,7 +593,9 @@ export function KnowledgeGraph() {
 					Back
 				</Link>
 				<div className="h-4 w-px bg-border" />
-				<h1 className="shrink-0 text-sm font-semibold">{session?.name ?? "Session"} — Knowledge Graph</h1>
+				<h1 className="shrink-0 text-sm font-semibold">
+					{session?.name ?? "Session"} — Knowledge Graph
+				</h1>
 				<span className="shrink-0 text-xs text-muted-foreground">
 					{filteredGraph.nodes.length}/{fullGraph.nodes.length} nodes, {filteredGraph.edges.length}/
 					{fullGraph.edges.length} edges
@@ -579,6 +619,7 @@ export function KnowledgeGraph() {
 						/>
 						{searchQuery && (
 							<button
+								type="button"
 								onClick={() => {
 									setSearchQuery("");
 									setSearchOpen(false);
@@ -592,6 +633,7 @@ export function KnowledgeGraph() {
 						<div className="absolute right-0 z-50 mt-1 max-h-48 w-64 overflow-y-auto rounded border border-border bg-background shadow-lg">
 							{searchResults.map((n) => (
 								<button
+									type="button"
 									key={n.id}
 									className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent"
 									onMouseDown={(e) => {
@@ -631,7 +673,9 @@ export function KnowledgeGraph() {
 				<div className="w-64 shrink-0 overflow-y-auto border-r border-border">
 					{/* Node type filters */}
 					<div className="border-b border-border p-3">
-						<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Node Types</h3>
+						<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+							Node Types
+						</h3>
 						<div className="space-y-1">
 							{fullGraph.nodeTypes.map((type) => (
 								<label key={type} className="flex cursor-pointer items-center gap-2 text-xs">
@@ -680,13 +724,10 @@ export function KnowledgeGraph() {
 												<span
 													className="h-2 w-2 rounded-full"
 													style={{
-														backgroundColor:
-															RESOURCE_TYPE_COLORS[resType] || "#6b7280",
+														backgroundColor: RESOURCE_TYPE_COLORS[resType] || "#6b7280",
 													}}
 												/>
-												<span>
-													{RESOURCE_TYPE_LABELS[resType] || resType}
-												</span>
+												<span>{RESOURCE_TYPE_LABELS[resType] || resType}</span>
 												<span className="ml-auto text-muted-foreground">
 													{typeResources.length}
 												</span>
@@ -710,7 +751,7 @@ export function KnowledgeGraph() {
 												))}
 											</div>
 										</div>
-);
+									);
 								})}
 							</div>
 						</div>
@@ -718,7 +759,9 @@ export function KnowledgeGraph() {
 
 					{/* Relationship type filters */}
 					<div className="border-b border-border p-3">
-						<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Relationships</h3>
+						<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+							Relationships
+						</h3>
 						<div className="space-y-1">
 							{fullGraph.relTypes.map((type) => (
 								<label key={type} className="flex cursor-pointer items-center gap-2 text-xs">
@@ -800,7 +843,9 @@ export function KnowledgeGraph() {
 
 					{/* Pathfinding */}
 					<div className="p-3">
-						<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Find Path</h3>
+						<h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+							Find Path
+						</h3>
 						<div className="space-y-2">
 							<NodePicker
 								nodes={conceptNodes}
@@ -824,6 +869,7 @@ export function KnowledgeGraph() {
 							/>
 							<div className="flex gap-2">
 								<button
+									type="button"
 									onClick={handleFindPath}
 									disabled={!pathFrom || !pathTo || pathFrom === pathTo}
 									className="flex-1 rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
@@ -832,6 +878,7 @@ export function KnowledgeGraph() {
 								</button>
 								{(pathResult || pathSearched) && (
 									<button
+										type="button"
 										onClick={handleClearPath}
 										className="rounded border border-input px-2 py-1 text-xs hover:bg-accent"
 									>
@@ -847,18 +894,15 @@ export function KnowledgeGraph() {
 							)}
 							{pathResult && (
 								<div className="rounded bg-accent/50 p-2 text-xs">
-									<div className="mb-1 font-medium">
-										Path ({pathResult.nodeIds.length} nodes):
-									</div>
+									<div className="mb-1 font-medium">Path ({pathResult.nodeIds.length} nodes):</div>
 									<div className="flex flex-wrap items-center gap-1">
 										{pathResult.nodeIds.map((nid, i) => {
 											const node = fullGraph.nodes.find((n) => n.id === nid);
 											return (
 												<span key={nid} className="flex items-center gap-1">
-													{i > 0 && (
-														<ArrowRight className="h-3 w-3 text-muted-foreground" />
-													)}
+													{i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
 													<button
+														type="button"
 														className="rounded bg-background px-1.5 py-0.5 hover:bg-primary/10"
 														onClick={() => {
 															setSelectedNodeId(nid);
@@ -910,6 +954,7 @@ export function KnowledgeGraph() {
 								</span>
 							</div>
 							<button
+								type="button"
 								onClick={() => setSelectedNodeId(null)}
 								className="text-muted-foreground hover:text-foreground"
 							>
@@ -942,6 +987,7 @@ export function KnowledgeGraph() {
 								<div className="space-y-1">
 									{selectedNodeDetail.connections.map((conn) => (
 										<button
+											type="button"
 											key={conn.edgeId}
 											className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
 											onClick={() => {
@@ -958,22 +1004,17 @@ export function KnowledgeGraph() {
 														className="h-2 w-2 shrink-0 rounded-full"
 														style={{ backgroundColor: conn.otherNodeColor }}
 													/>
-													<span className="truncate font-medium">
-														{conn.otherNodeLabel}
-													</span>
+													<span className="truncate font-medium">{conn.otherNodeLabel}</span>
 												</div>
 												<div className="mt-0.5 flex items-center gap-2 text-muted-foreground">
 													<span
 														className="inline-block h-1.5 w-3 rounded-sm"
 														style={{
-															backgroundColor:
-																EDGE_COLORS[conn.relationship] || "#9ca3af",
+															backgroundColor: EDGE_COLORS[conn.relationship] || "#9ca3af",
 														}}
 													/>
 													<span>{conn.relationship.replace(/_/g, " ")}</span>
-													<span className="ml-auto">
-														{(conn.confidence * 100).toFixed(0)}%
-													</span>
+													<span className="ml-auto">{(conn.confidence * 100).toFixed(0)}%</span>
 												</div>
 											</div>
 										</button>

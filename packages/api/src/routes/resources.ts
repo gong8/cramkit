@@ -277,7 +277,7 @@ resourcesRoutes.get("/:id/tree", async (c) => {
 	}
 
 	for (const chunk of chunks) {
-		const node = chunkMap.get(chunk.id)!;
+		const node = chunkMap.get(chunk.id) as TreeChunk;
 		if (chunk.parentId && chunkMap.has(chunk.parentId)) {
 			chunkMap.get(chunk.parentId)?.children.push(node);
 		} else {
@@ -432,7 +432,10 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 		});
 
 		// Delete the entire resource if no files left
-		const parentResource = (await db.resource.findUnique({ where: { id: resourceId } }))!;
+		const parentResource = await db.resource.findUnique({ where: { id: resourceId } });
+		if (!parentResource) {
+			return c.json({ error: "Resource not found" }, 404);
+		}
 		await deleteResourceDir(parentResource.sessionId, resourceId);
 		await db.resource.delete({ where: { id: resourceId } });
 		log.info(

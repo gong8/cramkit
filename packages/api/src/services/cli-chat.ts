@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sharp from "sharp";
 import { createLogger } from "@cramkit/shared";
+import sharp from "sharp";
 
 const log = createLogger("api");
 
@@ -300,10 +300,7 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
 				const toolUseId = block.tool_use_id as string;
 				const isError = block.is_error === true;
 				let resultText = "";
-				const blockContent = block.content as
-					| string
-					| Array<Record<string, unknown>>
-					| undefined;
+				const blockContent = block.content as string | Array<Record<string, unknown>> | undefined;
 				if (typeof blockContent === "string") {
 					resultText = blockContent;
 				} else if (Array.isArray(blockContent)) {
@@ -439,7 +436,7 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 			// Resize images for CLI consumption (must happen before building prompt)
 			let cliImagePaths = options.images;
 			if (hasImages) {
-				cliImagePaths = await resizeImagesForCli(options.images!, invocationDir);
+				cliImagePaths = await resizeImagesForCli(options.images ?? [], invocationDir);
 			}
 
 			// Write MCP config — includes image viewer MCP server when images are attached
@@ -449,7 +446,13 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 				buildPrompt(options.messages, cliImagePaths) || (hasImages ? "Describe this image." : "");
 
 			// All builtin tools stay blocked — images are served via MCP, not Read
-			const args = buildCliArgs(model, mcpConfigPath, systemPromptPath, BLOCKED_BUILTIN_TOOLS, prompt);
+			const args = buildCliArgs(
+				model,
+				mcpConfigPath,
+				systemPromptPath,
+				BLOCKED_BUILTIN_TOOLS,
+				prompt,
+			);
 
 			const startMs = performance.now();
 			log.info(`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${prompt.length} chars`);

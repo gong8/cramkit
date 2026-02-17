@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getDb } from "@cramkit/shared";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDb, seedPdeSession } from "../fixtures/helpers";
 import {
 	lectureNotesResponse,
@@ -11,10 +11,10 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
 }));
 
-import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
+import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
 import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
 import { searchGraph } from "../../packages/api/src/services/graph-search.js";
-import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
+import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 
 const db = getDb();
 
@@ -26,7 +26,7 @@ beforeEach(async () => {
 describe("full indexing flow", () => {
 	it("complete PDE lifecycle: upload → index → search → amortise → re-index → delete", async () => {
 		// Step 1: Create session + seed 11 resources with chunks
-		const { session, resources, chunks } = await seedPdeSession(db);
+		const { session, resources } = await seedPdeSession(db);
 
 		// Verify initial state
 		for (const resource of resources) {
@@ -71,12 +71,15 @@ describe("full indexing flow", () => {
 		expect(allRels.length).toBeGreaterThan(0);
 
 		// Find resource-concept rels from different resource types pointing to same concept
-		const heatEquation = concepts.find((c) => c.name === "Heat Equation")!;
+		const heatEquation = concepts.find((c) => c.name === "Heat Equation");
+		expect(heatEquation).toBeDefined();
 		const heatRels = allRels.filter(
-			(r) => r.targetType === "concept" && r.targetId === heatEquation.id,
+			(r) => r.targetType === "concept" && r.targetId === heatEquation?.id,
 		);
 		// Should have relationships from lecture notes AND past papers AND problem sheets
-		const sourceResourceIds = [...new Set(heatRels.filter((r) => r.sourceType === "resource").map((r) => r.sourceId))];
+		const sourceResourceIds = [
+			...new Set(heatRels.filter((r) => r.sourceType === "resource").map((r) => r.sourceId)),
+		];
 		expect(sourceResourceIds.length).toBeGreaterThan(1);
 
 		// Step 5: Search "Method of Characteristics"

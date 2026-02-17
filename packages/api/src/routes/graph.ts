@@ -2,7 +2,6 @@ import { createLogger, getDb, indexResourceRequestSchema } from "@cramkit/shared
 import { Hono } from "hono";
 import {
 	cancelSessionIndexing,
-	enqueueGraphIndexing,
 	enqueueSessionGraphIndexing,
 	getIndexingQueueSize,
 	getSessionBatchStatus,

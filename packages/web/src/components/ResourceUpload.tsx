@@ -1,4 +1,4 @@
-import { createResource, type Resource } from "@/lib/api";
+import { type Resource, createResource } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Upload, X } from "lucide-react";
@@ -122,11 +122,24 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 		} finally {
 			setUploading(false);
 		}
-	}, [resourceType, files, resourceName, hasMarkScheme, hasSolutions, markSchemeFile, solutionsFile, splitMode, sessionId, queryClient, reset]);
+	}, [
+		resourceType,
+		files,
+		resourceName,
+		hasMarkScheme,
+		hasSolutions,
+		markSchemeFile,
+		solutionsFile,
+		splitMode,
+		sessionId,
+		queryClient,
+		reset,
+	]);
 
 	return (
 		<>
 			<button
+				type="button"
 				onClick={handleOpen}
 				className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-3 text-sm font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary"
 			>
@@ -135,12 +148,20 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 			</button>
 
 			{isOpen && (
-				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={handleClose}>
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+					onClick={handleClose}
+					onKeyDown={handleClose}
+					role="presentation"
+				>
 					<div
 						className="relative w-full max-w-lg rounded-lg border border-border bg-background p-6 shadow-lg"
 						onClick={(e) => e.stopPropagation()}
+						onKeyDown={(e) => e.stopPropagation()}
+						role="presentation"
 					>
 						<button
+							type="button"
 							onClick={handleClose}
 							className="absolute right-3 top-3 rounded p-1 text-muted-foreground hover:text-foreground"
 						>
@@ -156,6 +177,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 										const isExisting = opt.value === "LECTURE_NOTES" && !!existingLectureNotes;
 										return (
 											<button
+												type="button"
 												key={opt.value}
 												onClick={() => handleTypeSelect(opt.value)}
 												className="flex w-full items-center justify-between rounded-md border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-primary/5"
@@ -163,7 +185,9 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 												<div>
 													<div className="text-sm font-medium">{opt.label}</div>
 													<div className="text-xs text-muted-foreground">
-														{isExisting ? "Add more files to existing lecture notes" : opt.description}
+														{isExisting
+															? "Add more files to existing lecture notes"
+															: opt.description}
 													</div>
 												</div>
 											</button>
@@ -186,10 +210,11 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 									{/* Resource name */}
 									{!isAddingToExisting && (
 										<div>
-											<label className="mb-1 block text-sm font-medium">
+											<label htmlFor="resource-name" className="mb-1 block text-sm font-medium">
 												Name <span className="font-normal text-muted-foreground">(optional)</span>
 											</label>
 											<input
+												id="resource-name"
 												type="text"
 												value={resourceName}
 												onChange={(e) => setResourceName(e.target.value)}
@@ -240,7 +265,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 
 									{/* File upload */}
 									<div>
-										<label className="mb-1 block text-sm font-medium">
+										<label htmlFor="resource-file" className="mb-1 block text-sm font-medium">
 											{allowMultipleFiles ? "Files" : "File"}
 										</label>
 
@@ -253,6 +278,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 													>
 														<span className="truncate">{file.name}</span>
 														<button
+															type="button"
 															onClick={() => removeFile(i)}
 															className="ml-2 text-muted-foreground hover:text-destructive"
 														>
@@ -265,6 +291,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 
 										{(allowMultipleFiles || files.length === 0) && (
 											<button
+												type="button"
 												onClick={() => fileInputRef.current?.click()}
 												className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-6 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
 											>
@@ -274,6 +301,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 										)}
 
 										<input
+											id="resource-file"
 											ref={fileInputRef}
 											type="file"
 											accept=".pdf"
@@ -286,13 +314,15 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 									{/* Separate mark scheme file upload */}
 									{resourceType === "PAST_PAPER" && !hasMarkScheme && (
 										<div>
-											<label className="mb-1 block text-sm font-medium">
-												Mark Scheme <span className="font-normal text-muted-foreground">(optional)</span>
+											<label htmlFor="mark-scheme-file" className="mb-1 block text-sm font-medium">
+												Mark Scheme{" "}
+												<span className="font-normal text-muted-foreground">(optional)</span>
 											</label>
 											{markSchemeFile ? (
 												<div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm">
 													<span className="truncate">{markSchemeFile.name}</span>
 													<button
+														type="button"
 														onClick={() => setMarkSchemeFile(null)}
 														className="ml-2 text-muted-foreground hover:text-destructive"
 													>
@@ -301,6 +331,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 												</div>
 											) : (
 												<button
+													type="button"
 													onClick={() => secondaryFileInputRef.current?.click()}
 													className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-4 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
 												>
@@ -309,12 +340,14 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 												</button>
 											)}
 											<input
+												id="mark-scheme-file"
 												ref={secondaryFileInputRef}
 												type="file"
 												accept=".pdf"
 												onChange={(e) => {
 													if (e.target.files?.[0]) setMarkSchemeFile(e.target.files[0]);
-													if (secondaryFileInputRef.current) secondaryFileInputRef.current.value = "";
+													if (secondaryFileInputRef.current)
+														secondaryFileInputRef.current.value = "";
 												}}
 												className="hidden"
 											/>
@@ -324,13 +357,15 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 									{/* Separate solutions file upload */}
 									{resourceType === "PROBLEM_SHEET" && !hasSolutions && (
 										<div>
-											<label className="mb-1 block text-sm font-medium">
-												Solutions <span className="font-normal text-muted-foreground">(optional)</span>
+											<label htmlFor="solutions-file" className="mb-1 block text-sm font-medium">
+												Solutions{" "}
+												<span className="font-normal text-muted-foreground">(optional)</span>
 											</label>
 											{solutionsFile ? (
 												<div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-1.5 text-sm">
 													<span className="truncate">{solutionsFile.name}</span>
 													<button
+														type="button"
 														onClick={() => setSolutionsFile(null)}
 														className="ml-2 text-muted-foreground hover:text-destructive"
 													>
@@ -339,6 +374,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 												</div>
 											) : (
 												<button
+													type="button"
 													onClick={() => secondaryFileInputRef.current?.click()}
 													className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-4 text-sm text-muted-foreground transition-colors hover:border-primary hover:text-primary"
 												>
@@ -347,12 +383,14 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 												</button>
 											)}
 											<input
+												id="solutions-file"
 												ref={secondaryFileInputRef}
 												type="file"
 												accept=".pdf"
 												onChange={(e) => {
 													if (e.target.files?.[0]) setSolutionsFile(e.target.files[0]);
-													if (secondaryFileInputRef.current) secondaryFileInputRef.current.value = "";
+													if (secondaryFileInputRef.current)
+														secondaryFileInputRef.current.value = "";
 												}}
 												className="hidden"
 											/>
@@ -362,6 +400,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 									{/* Actions */}
 									<div className="flex items-center justify-between pt-2">
 										<button
+											type="button"
 											onClick={() => {
 												setStep("type");
 												setFiles([]);
@@ -371,6 +410,7 @@ export function ResourceUpload({ sessionId, existingResources }: ResourceUploadP
 											Back
 										</button>
 										<button
+											type="button"
 											onClick={handleSubmit}
 											disabled={files.length === 0 || uploading}
 											className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"

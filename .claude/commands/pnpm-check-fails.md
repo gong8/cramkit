@@ -10,17 +10,19 @@ Run `pnpm check` to collect all failures. Since `pnpm check` is `pnpm lint && pn
 
 1. Run `pnpm lint 2>&1` — capture Biome lint/format errors
 2. Run `pnpm typecheck 2>&1` — capture TypeScript type errors
-3. Run `pnpm test 2>&1` — capture test failures
+3. Run `pnpm quality 2>&1` — capture quality check errors
+4. Run `pnpm test 2>&1` — capture test failures
 
-Run all 3 in parallel since they're independent.
+Run all 4 in parallel since they're independent.
 
-After all 3 complete, parse the output and group failures by file. For each command:
+After all 4 complete, parse the output and group failures by file. For each command:
 
 - **Lint errors**: Biome reports file paths and specific rule violations. Group by file.
 - **Type errors**: TypeScript reports `file(line,col): error TS...`. Group by file.
+- **Quality errors**: Script reports violations. Group by file.
 - **Test failures**: Vitest reports which test files failed and the error messages. Group by test file and the source file it tests.
 
-If there are zero total failures across all 3, report "All checks pass!" and stop.
+If there are zero total failures across all 4, report "All checks pass!" and stop.
 
 ---
 
@@ -64,6 +66,7 @@ Fix the following errors in the CramKit codebase.
 - After making fixes, run the relevant check command to verify your fixes work:
   - For lint errors: `pnpm lint`
   - For type errors: `pnpm typecheck`
+  - For quality errors: `pnpm quality`
   - For test failures: `pnpm test`
 ```
 

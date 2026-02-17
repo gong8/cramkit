@@ -1,9 +1,9 @@
+import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
 import { MarkItDown } from "markitdown-ts";
-import { createLogger, getDb } from "@cramkit/shared";
-import { hasHeadings, parseMarkdownTree, type TreeNode } from "./markdown-parser.js";
+import { type TreeNode, hasHeadings, parseMarkdownTree } from "./markdown-parser.js";
 import { saveResourceProcessedFile } from "./storage.js";
-import { writeResourceTreeToDisk, type DiskMapping } from "./tree-writer.js";
+import { type DiskMapping, writeResourceTreeToDisk } from "./tree-writer.js";
 
 const log = createLogger("api");
 
@@ -67,7 +67,12 @@ async function createChunkRecords(
 
 export async function processResource(resourceId: string): Promise<void> {
 	const db = getDb();
-	const ROLE_ORDER: Record<string, number> = { PRIMARY: 0, SUPPLEMENT: 1, MARK_SCHEME: 2, SOLUTIONS: 3 };
+	const ROLE_ORDER: Record<string, number> = {
+		PRIMARY: 0,
+		SUPPLEMENT: 1,
+		MARK_SCHEME: 2,
+		SOLUTIONS: 3,
+	};
 	const resource = await db.resource.findUnique({
 		where: { id: resourceId },
 		include: {
@@ -83,7 +88,9 @@ export async function processResource(resourceId: string): Promise<void> {
 		return;
 	}
 
-	log.info(`processResource — starting "${resource.name}" (${resourceId}), ${resource.files.length} files`);
+	log.info(
+		`processResource — starting "${resource.name}" (${resourceId}), ${resource.files.length} files`,
+	);
 
 	try {
 		const { readFile } = await import("node:fs/promises");
@@ -99,7 +106,11 @@ export async function processResource(resourceId: string): Promise<void> {
 				rawContent = await readFile(file.rawPath, "utf-8");
 			} else {
 				const result = await new MarkItDown().convert(file.rawPath);
-				rawContent = result?.markdown ?? await readFile(file.rawPath, "utf-8").catch(() => `[Could not convert: ${file.filename}]`);
+				rawContent =
+					result?.markdown ??
+					(await readFile(file.rawPath, "utf-8").catch(
+						() => `[Could not convert: ${file.filename}]`,
+					));
 			}
 
 			log.debug(`processResource — converted "${file.filename}" (${rawContent.length} chars)`);
@@ -126,29 +137,33 @@ export async function processResource(resourceId: string): Promise<void> {
 		const splitMode = resource.splitMode || "auto";
 
 		// Pre-compute trees and disk mappings before entering the transaction
-		type ChunkPlan = {
-			type: "split-single";
-			fileId: string;
-			tree: TreeNode;
-			mappings: DiskMapping[];
-			mappingLookup: Map<TreeNode, DiskMapping>;
-		} | {
-			type: "single-chunk";
-			fileId: string;
-			title: string;
-			content: string;
-		} | {
-			type: "split-multi";
-			combinedRoot: TreeNode;
-			fileTrees: Array<{ fileId: string; tree: TreeNode }>;
-			mappings: DiskMapping[];
-			mappingLookup: Map<TreeNode, DiskMapping>;
-		} | {
-			type: "concat-multi";
-			fileId: string;
-			title: string;
-			content: string;
-		};
+		type ChunkPlan =
+			| {
+					type: "split-single";
+					fileId: string;
+					tree: TreeNode;
+					mappings: DiskMapping[];
+					mappingLookup: Map<TreeNode, DiskMapping>;
+			  }
+			| {
+					type: "single-chunk";
+					fileId: string;
+					title: string;
+					content: string;
+			  }
+			| {
+					type: "split-multi";
+					combinedRoot: TreeNode;
+					fileTrees: Array<{ fileId: string; tree: TreeNode }>;
+					mappings: DiskMapping[];
+					mappingLookup: Map<TreeNode, DiskMapping>;
+			  }
+			| {
+					type: "concat-multi";
+					fileId: string;
+					title: string;
+					content: string;
+			  };
 
 		let plan: ChunkPlan;
 
@@ -160,7 +175,12 @@ export async function processResource(resourceId: string): Promise<void> {
 
 			if (shouldSplit) {
 				const resourceSlug = slugify(resource.name);
-				const mappings = await writeResourceTreeToDisk(resource.sessionId, resourceId, resourceSlug, tree);
+				const mappings = await writeResourceTreeToDisk(
+					resource.sessionId,
+					resourceId,
+					resourceSlug,
+					tree,
+				);
 				const mappingLookup = new Map<TreeNode, DiskMapping>();
 				for (const m of mappings) mappingLookup.set(m.node, m);
 				plan = { type: "split-single", fileId, tree, mappings, mappingLookup };
@@ -169,8 +189,7 @@ export async function processResource(resourceId: string): Promise<void> {
 			}
 		} else {
 			const shouldSplitMulti =
-				splitMode === "split" ||
-				(splitMode === "auto" && resource.type === "LECTURE_NOTES");
+				splitMode === "split" || (splitMode === "auto" && resource.type === "LECTURE_NOTES");
 
 			if (shouldSplitMulti) {
 				const combinedRoot: TreeNode = {
@@ -198,7 +217,12 @@ export async function processResource(resourceId: string): Promise<void> {
 				}
 
 				const resourceSlug = slugify(resource.name);
-				const mappings = await writeResourceTreeToDisk(resource.sessionId, resourceId, resourceSlug, combinedRoot);
+				const mappings = await writeResourceTreeToDisk(
+					resource.sessionId,
+					resourceId,
+					resourceSlug,
+					combinedRoot,
+				);
 				const mappingLookup = new Map<TreeNode, DiskMapping>();
 				for (const m of mappings) mappingLookup.set(m.node, m);
 				plan = {
@@ -210,139 +234,147 @@ export async function processResource(resourceId: string): Promise<void> {
 				};
 			} else {
 				const allContent = fileTrees.map((ft) => ft.rawContent).join("\n\n---\n\n");
-				plan = { type: "concat-multi", fileId: fileTrees[0].fileId, title: resource.name, content: allContent };
+				plan = {
+					type: "concat-multi",
+					fileId: fileTrees[0].fileId,
+					title: resource.name,
+					content: allContent,
+				};
 			}
 		}
 
 		// Step 3: Delete old chunks + create new ones atomically in a transaction
 		const counter = { value: 0 };
 
-		await db.$transaction(async (tx) => {
-			await tx.chunk.deleteMany({ where: { resourceId } });
+		await db.$transaction(
+			async (tx) => {
+				await tx.chunk.deleteMany({ where: { resourceId } });
 
-			switch (plan.type) {
-				case "split-single": {
-					const rootMapping = plan.mappings.find((m) => m.node === plan.tree);
-					const rootChunk = await tx.chunk.create({
-						data: {
-							resourceId,
-							sourceFileId: plan.fileId,
-							parentId: null,
-							index: counter.value++,
-							depth: plan.tree.depth,
-							nodeType: plan.tree.nodeType,
-							slug: rootMapping?.slug ?? null,
-							diskPath: rootMapping?.diskPath ?? null,
-							title: plan.tree.title,
-							content: plan.tree.content,
-							startPage: plan.tree.startPage ?? null,
-							endPage: plan.tree.endPage ?? null,
-						},
-					});
-
-					await createChunkRecords(
-						tx,
-						resourceId,
-						plan.fileId,
-						plan.mappings,
-						rootChunk.id,
-						plan.tree.children,
-						plan.mappingLookup,
-						counter,
-					);
-					break;
-				}
-
-				case "single-chunk": {
-					await tx.chunk.create({
-						data: {
-							resourceId,
-							sourceFileId: plan.fileId,
-							index: 0,
-							title: plan.title,
-							content: plan.content,
-						},
-					});
-					break;
-				}
-
-				case "split-multi": {
-					const rootMapping = plan.mappings.find((m) => m.node === plan.combinedRoot);
-					const rootChunk = await tx.chunk.create({
-						data: {
-							resourceId,
-							sourceFileId: null,
-							parentId: null,
-							index: counter.value++,
-							depth: plan.combinedRoot.depth,
-							nodeType: plan.combinedRoot.nodeType,
-							slug: rootMapping?.slug ?? null,
-							diskPath: rootMapping?.diskPath ?? null,
-							title: plan.combinedRoot.title,
-							content: plan.combinedRoot.content,
-							startPage: plan.combinedRoot.startPage ?? null,
-							endPage: plan.combinedRoot.endPage ?? null,
-						},
-					});
-
-					for (let i = 0; i < plan.combinedRoot.children.length; i++) {
-						const childTree = plan.combinedRoot.children[i];
-						const fileId = plan.fileTrees[i].fileId;
-
-						const childMapping = plan.mappingLookup.get(childTree);
-						const childChunk = await tx.chunk.create({
+				switch (plan.type) {
+					case "split-single": {
+						const rootMapping = plan.mappings.find((m) => m.node === plan.tree);
+						const rootChunk = await tx.chunk.create({
 							data: {
 								resourceId,
-								sourceFileId: fileId,
-								parentId: rootChunk.id,
+								sourceFileId: plan.fileId,
+								parentId: null,
 								index: counter.value++,
-								depth: childTree.depth,
-								nodeType: childTree.nodeType,
-								slug: childMapping?.slug ?? null,
-								diskPath: childMapping?.diskPath ?? null,
-								title: childTree.title,
-								content: childTree.content,
-								startPage: childTree.startPage ?? null,
-								endPage: childTree.endPage ?? null,
+								depth: plan.tree.depth,
+								nodeType: plan.tree.nodeType,
+								slug: rootMapping?.slug ?? null,
+								diskPath: rootMapping?.diskPath ?? null,
+								title: plan.tree.title,
+								content: plan.tree.content,
+								startPage: plan.tree.startPage ?? null,
+								endPage: plan.tree.endPage ?? null,
 							},
 						});
 
-						if (childTree.children.length > 0) {
-							await createChunkRecords(
-								tx,
-								resourceId,
-								fileId,
-								plan.mappings,
-								childChunk.id,
-								childTree.children,
-								plan.mappingLookup,
-								counter,
-							);
-						}
-					}
-					break;
-				}
-
-				case "concat-multi": {
-					await tx.chunk.create({
-						data: {
+						await createChunkRecords(
+							tx,
 							resourceId,
-							sourceFileId: plan.fileId,
-							index: 0,
-							title: plan.title,
-							content: plan.content,
-						},
-					});
-					break;
-				}
-			}
+							plan.fileId,
+							plan.mappings,
+							rootChunk.id,
+							plan.tree.children,
+							plan.mappingLookup,
+							counter,
+						);
+						break;
+					}
 
-			// Mark resource as indexed inside the same transaction
-			await tx.resource.update({
-				where: { id: resourceId },
-				data: { isIndexed: true, isGraphIndexed: false, graphIndexDurationMs: null },
-			});
-		}, { timeout: 30000 });
+					case "single-chunk": {
+						await tx.chunk.create({
+							data: {
+								resourceId,
+								sourceFileId: plan.fileId,
+								index: 0,
+								title: plan.title,
+								content: plan.content,
+							},
+						});
+						break;
+					}
+
+					case "split-multi": {
+						const rootMapping = plan.mappings.find((m) => m.node === plan.combinedRoot);
+						const rootChunk = await tx.chunk.create({
+							data: {
+								resourceId,
+								sourceFileId: null,
+								parentId: null,
+								index: counter.value++,
+								depth: plan.combinedRoot.depth,
+								nodeType: plan.combinedRoot.nodeType,
+								slug: rootMapping?.slug ?? null,
+								diskPath: rootMapping?.diskPath ?? null,
+								title: plan.combinedRoot.title,
+								content: plan.combinedRoot.content,
+								startPage: plan.combinedRoot.startPage ?? null,
+								endPage: plan.combinedRoot.endPage ?? null,
+							},
+						});
+
+						for (let i = 0; i < plan.combinedRoot.children.length; i++) {
+							const childTree = plan.combinedRoot.children[i];
+							const fileId = plan.fileTrees[i].fileId;
+
+							const childMapping = plan.mappingLookup.get(childTree);
+							const childChunk = await tx.chunk.create({
+								data: {
+									resourceId,
+									sourceFileId: fileId,
+									parentId: rootChunk.id,
+									index: counter.value++,
+									depth: childTree.depth,
+									nodeType: childTree.nodeType,
+									slug: childMapping?.slug ?? null,
+									diskPath: childMapping?.diskPath ?? null,
+									title: childTree.title,
+									content: childTree.content,
+									startPage: childTree.startPage ?? null,
+									endPage: childTree.endPage ?? null,
+								},
+							});
+
+							if (childTree.children.length > 0) {
+								await createChunkRecords(
+									tx,
+									resourceId,
+									fileId,
+									plan.mappings,
+									childChunk.id,
+									childTree.children,
+									plan.mappingLookup,
+									counter,
+								);
+							}
+						}
+						break;
+					}
+
+					case "concat-multi": {
+						await tx.chunk.create({
+							data: {
+								resourceId,
+								sourceFileId: plan.fileId,
+								index: 0,
+								title: plan.title,
+								content: plan.content,
+							},
+						});
+						break;
+					}
+				}
+
+				// Mark resource as indexed inside the same transaction
+				await tx.resource.update({
+					where: { id: resourceId },
+					data: { isIndexed: true, isGraphIndexed: false, graphIndexDurationMs: null },
+				});
+			},
+			{ timeout: 30000 },
+		);
 
 		log.info(`processResource — completed "${resource.name}" (${counter.value} chunks)`);
 	} catch (error) {

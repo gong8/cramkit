@@ -1,7 +1,7 @@
-import { createLogger } from "@cramkit/shared";
 import { mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createLogger } from "@cramkit/shared";
 
 const log = createLogger("api");
 
@@ -49,10 +49,7 @@ export async function saveResourceProcessedFile(
 	return filePath;
 }
 
-export async function readResourceContent(
-	sessionId: string,
-	resourceId: string,
-): Promise<string> {
+export async function readResourceContent(sessionId: string, resourceId: string): Promise<string> {
 	const dir = join(getResourceDir(sessionId, resourceId), "processed");
 	log.debug(`readResourceContent — ${dir}`);
 	try {

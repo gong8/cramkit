@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
 import { getDb } from "@cramkit/shared";
-import { cleanDb } from "../fixtures/helpers";
+import { beforeEach, describe, expect, it } from "vitest";
 import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
+import { cleanDb } from "../fixtures/helpers";
 
 const db = getDb();
 
@@ -83,12 +83,12 @@ describe("amortiseSearchResults", () => {
 		});
 
 		expect(rel).not.toBeNull();
-		expect(rel!.createdBy).toBe("amortised");
-		expect(rel!.confidence).toBe(0.6);
+		expect(rel?.createdBy).toBe("amortised");
+		expect(rel?.confidence).toBe(0.6);
 	});
 
 	it("skips existing relationships", async () => {
-		const { session, resource, chunks, concept } = await seedForAmortiser();
+		const { session, resource, chunks } = await seedForAmortiser();
 
 		const contentResults = [{ chunkId: chunks[0].id, resourceId: resource.id }];
 

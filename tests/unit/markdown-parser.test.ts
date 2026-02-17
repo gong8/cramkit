@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
-import { preprocessPdfMarkdown, parseMarkdownTree, hasHeadings } from "../../packages/api/src/services/markdown-parser.js";
+import { describe, expect, it } from "vitest";
+import {
+	hasHeadings,
+	parseMarkdownTree,
+	preprocessPdfMarkdown,
+} from "../../packages/api/src/services/markdown-parser.js";
 
 describe("preprocessPdfMarkdown", () => {
 	it("converts section numbers to headings", () => {
@@ -48,7 +52,8 @@ describe("preprocessPdfMarkdown", () => {
 describe("parseMarkdownTree with PDF section numbers", () => {
 	it("builds deep tree from section numbers", () => {
 		// Content must be >50 chars per section or mergeShortLeaves collapses them
-		const filler = "This is enough content to avoid being merged into the parent node by the short-leaf merger.";
+		const filler =
+			"This is enough content to avoid being merged into the parent node by the short-leaf merger.";
 		const input = [
 			"Chapter \t1",
 			"Introduction",
@@ -90,7 +95,8 @@ describe("parseMarkdownTree with PDF section numbers", () => {
 	});
 
 	it("infers chapter node type", () => {
-		const filler = "This is enough content to avoid being merged into the parent node by the short-leaf merger.";
+		const filler =
+			"This is enough content to avoid being merged into the parent node by the short-leaf merger.";
 		const input = [
 			"Chapter \t2",
 			"Methods",

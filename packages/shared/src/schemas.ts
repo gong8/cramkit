@@ -76,9 +76,12 @@ export const chatStreamRequestSchema = z
 		attachmentIds: z.array(z.string()).optional(),
 		rewindToMessageId: z.string().optional(),
 	})
-	.refine((data) => data.message.length >= 1 || (data.attachmentIds && data.attachmentIds.length >= 1), {
-		message: "Either message text or at least one attachment is required",
-	});
+	.refine(
+		(data) => data.message.length >= 1 || (data.attachmentIds && data.attachmentIds.length >= 1),
+		{
+			message: "Either message text or at least one attachment is required",
+		},
+	);
 
 // --- Import/Export schemas ---
 

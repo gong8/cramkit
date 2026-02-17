@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock child_process.spawn
 const mockSpawn = vi.fn();
@@ -120,9 +120,9 @@ describe("chatCompletion", () => {
 
 		const chatCompletion = await loadChatCompletion();
 
-		await expect(
-			chatCompletion([{ role: "user", content: "test" }]),
-		).rejects.toThrow(/Claude CLI error/);
+		await expect(chatCompletion([{ role: "user", content: "test" }])).rejects.toThrow(
+			/Claude CLI error/,
+		);
 	});
 
 	it("throws on empty response", async () => {
@@ -130,9 +130,9 @@ describe("chatCompletion", () => {
 
 		const chatCompletion = await loadChatCompletion();
 
-		await expect(
-			chatCompletion([{ role: "user", content: "test" }]),
-		).rejects.toThrow("LLM returned empty response");
+		await expect(chatCompletion([{ role: "user", content: "test" }])).rejects.toThrow(
+			"LLM returned empty response",
+		);
 	});
 
 	it("handles system messages via append-system-prompt-file", async () => {
