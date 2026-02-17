@@ -168,7 +168,46 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
 	const toolCalls = new Map<number, { id: string; name: string; argsJson: string }>();
 	const thinkingText = new Map<number, string>();
 
+	function processToolResults(message: Record<string, unknown>): void {
+		const content = message.content as Array<Record<string, unknown>> | undefined;
+		if (!content) return;
+		for (const block of content) {
+			if (block.type === "tool_result") {
+				const toolUseId = block.tool_use_id as string;
+				const isError = block.is_error === true;
+				let resultText = "";
+				const blockContent = block.content as
+					| string
+					| Array<Record<string, unknown>>
+					| undefined;
+				if (typeof blockContent === "string") {
+					resultText = blockContent;
+				} else if (Array.isArray(blockContent)) {
+					resultText = blockContent.map((c) => (c.text as string) || "").join("");
+				}
+				emitSSE(
+					"tool_result",
+					JSON.stringify({
+						toolCallId: toolUseId,
+						result: resultText,
+						isError,
+					}),
+				);
+			}
+		}
+	}
+
 	function process(msg: Record<string, unknown>): void {
+		// Handle top-level "user" messages containing tool_result blocks
+		// These are emitted by the CLI outside of stream_event wrappers
+		if (msg.type === "user") {
+			const message = msg.message as Record<string, unknown> | undefined;
+			if (message?.role === "user") {
+				processToolResults(message);
+			}
+			return;
+		}
+
 		if (msg.type !== "stream_event") return;
 		const event = msg.event as Record<string, unknown> | undefined;
 		if (!event) return;
@@ -245,42 +284,11 @@ function createStreamParser(emitSSE: (event: string, data: string) => void): Str
 				break;
 			}
 
-			// Handle tool results from assistant messages that contain tool_result content
-			// When --include-partial-messages is used, tool results appear as new
-			// message starts with role "user" containing tool_result content blocks
+			// Handle tool results from stream_event message_start with role "user"
 			case "message_start": {
 				const message = event.message as Record<string, unknown> | undefined;
-				if (!message) break;
-				const role = message.role as string;
-				if (role === "user") {
-					// Partial messages from tool results — the content will contain tool_result blocks
-					const content = message.content as Array<Record<string, unknown>> | undefined;
-					if (content) {
-						for (const block of content) {
-							if (block.type === "tool_result") {
-								const toolUseId = block.tool_use_id as string;
-								const isError = block.is_error === true;
-								let resultText = "";
-								const blockContent = block.content as
-									| string
-									| Array<Record<string, unknown>>
-									| undefined;
-								if (typeof blockContent === "string") {
-									resultText = blockContent;
-								} else if (Array.isArray(blockContent)) {
-									resultText = blockContent.map((c) => (c.text as string) || "").join("");
-								}
-								emitSSE(
-									"tool_result",
-									JSON.stringify({
-										toolCallId: toolUseId,
-										result: resultText,
-										isError,
-									}),
-								);
-							}
-						}
-					}
+				if (message?.role === "user") {
+					processToolResults(message);
 				}
 				break;
 			}
@@ -376,18 +384,6 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 						msg = JSON.parse(trimmed);
 					} catch {
 						continue;
-					}
-
-					// Debug: log all non-delta CLI messages to understand event format
-					{
-						const evtType = (msg as { event?: { type?: string } }).event?.type;
-						if (evtType !== "content_block_delta" && msg.type !== "stream_event") {
-							log.info(`cli-chat EVENT [${msg.type}]: ${JSON.stringify(msg).slice(0, 400)}`);
-						} else if (evtType && evtType !== "content_block_delta") {
-							log.info(
-								`cli-chat EVENT [stream_event/${evtType}]: ${JSON.stringify(msg).slice(0, 400)}`,
-							);
-						}
 					}
 
 					parser.process(msg);
