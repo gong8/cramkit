@@ -101,10 +101,10 @@ export function createCramKitChatAdapter(
 			const lastUserMsg = lastMessage;
 			let rewindToMessageId: string | undefined;
 			if (lastUserMsg && "id" in lastUserMsg && lastUserMsg.id) {
-				// This is a retry/edit — the message already exists in history
-				// Check if it's a real DB ID (not a generated one)
+				// Only treat as rewind if the ID is a real DB ID (Prisma cuid format),
+				// not an auto-generated short ID from assistant-ui
 				const msgId = lastUserMsg.id as string;
-				if (!msgId.startsWith("__")) {
+				if (/^c[a-z0-9]{20,}$/.test(msgId)) {
 					rewindToMessageId = msgId;
 				}
 			}
@@ -147,6 +147,20 @@ export function createCramKitChatAdapter(
 			let thinkingText = "";
 			const toolCalls = new Map<string, ToolCallState>();
 
+			function stripToolCallXml(text: string): string {
+				// Strip complete <tool_call>...</tool_call> and <tool_result>...</tool_result> tags
+				let cleaned = text
+					.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+					.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "");
+				// Strip trailing incomplete tags (during streaming)
+				cleaned = cleaned
+					.replace(/<tool_call[\s\S]*$/, "")
+					.replace(/<tool_result[\s\S]*$/, "");
+				// Collapse excessive whitespace left behind
+				cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
+				return cleaned;
+			}
+
 			function buildContentParts() {
 				const parts: Array<
 					| { type: "reasoning"; text: string }
@@ -180,8 +194,8 @@ export function createCramKitChatAdapter(
 					});
 				}
 
-				// Text content
-				parts.push({ type: "text", text: textContent });
+				// Text content (strip leaked tool call XML)
+				parts.push({ type: "text", text: stripToolCallXml(textContent) });
 
 				return parts;
 			}

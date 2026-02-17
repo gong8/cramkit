@@ -9,6 +9,8 @@ export interface GraphSearchResult {
 	resourceType: string;
 	title: string | null;
 	content: string;
+	nodeType: string;
+	keywords: string | null;
 	source: "graph";
 	relatedConcepts: Array<{ name: string; relationship: string }>;
 }
@@ -20,16 +22,18 @@ export async function searchGraph(
 ): Promise<GraphSearchResult[]> {
 	const db = getDb();
 
-	// Find concepts matching the query
-	const concepts = await db.concept.findMany({
-		where: {
-			sessionId,
-			OR: [
-				{ name: { contains: query } },
-				{ description: { contains: query } },
-				{ aliases: { contains: query } },
-			],
-		},
+	// Token-based fuzzy concept matching
+	const terms = query
+		.toLowerCase()
+		.split(/\s+/)
+		.filter((t) => t.length > 1);
+	const allConcepts = await db.concept.findMany({
+		where: { sessionId },
+		select: { id: true, name: true, description: true, aliases: true },
+	});
+	const concepts = allConcepts.filter((c) => {
+		const text = `${c.name} ${c.description ?? ""} ${c.aliases ?? ""}`.toLowerCase();
+		return terms.length > 0 && terms.every((t) => text.includes(t));
 	});
 
 	if (concepts.length === 0) {
@@ -113,7 +117,7 @@ export async function searchGraph(
 	}
 
 	if (chunkIds.size === 0) {
-		log.info(`searchGraph — concepts matched but no connected chunks`);
+		log.info("searchGraph — concepts matched but no connected chunks");
 		return [];
 	}
 
@@ -135,6 +139,8 @@ export async function searchGraph(
 		resourceType: chunk.resource.type,
 		title: chunk.title,
 		content: chunk.content,
+		nodeType: chunk.nodeType,
+		keywords: chunk.keywords,
 		source: "graph" as const,
 		relatedConcepts: chunkConceptMap.get(chunk.id) || [],
 	}));

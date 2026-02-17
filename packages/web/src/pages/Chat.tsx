@@ -971,7 +971,7 @@ export function Chat() {
 		enabled: !!sessionId,
 	});
 
-	const { data: conversations = [] } = useQuery({
+	const { data: conversations = [], isFetching: conversationsFetching } = useQuery({
 		queryKey: ["conversations", sessionId],
 		queryFn: () => fetchConversations(sessionId),
 		enabled: !!sessionId,
@@ -979,9 +979,10 @@ export function Chat() {
 
 	const navigate = useNavigate();
 
-	// Validate: if activeConversationId is not in the loaded list, clear it
+	// Validate: if activeConversationId is not in the loaded list, clear it.
+	// Skip while fetching — a new conversation may not be in the list yet.
 	useEffect(() => {
-		if (!activeConversationId) return;
+		if (!activeConversationId || conversationsFetching) return;
 		const exists = conversations.some((c) => c.id === activeConversationId);
 		if (!exists) {
 			if (conversations.length > 0) {
@@ -990,18 +991,17 @@ export function Chat() {
 				navigate(`/session/${sessionId}/chat`, { replace: true });
 			}
 		}
-	}, [activeConversationId, conversations, sessionId, setSearchParams, navigate]);
+	}, [activeConversationId, conversations, conversationsFetching, sessionId, setSearchParams, navigate]);
 
-	// Proactive cleanup: delete empty conversations (messageCount === 0) that aren't active and have no draft
+	// Proactive cleanup: on initial load only, delete empty conversations that aren't active and have no draft.
+	// Runs once per page visit — re-running on every query change causes races with "New chat".
+	const cleanupRanRef = useRef(false);
 	useEffect(() => {
-		if (conversations.length === 0) return;
+		if (conversations.length === 0 || conversationsFetching || cleanupRanRef.current) return;
+		cleanupRanRef.current = true;
 		const toDelete = conversations.filter((c) => {
 			if (c.messageCount !== 0) return false;
 			if (c.id === activeConversationId) return false;
-			// Grace period: don't delete conversations created in the last 10s
-			// (avoids race with "New chat" before the URL updates)
-			const ageMs = Date.now() - new Date(c.createdAt).getTime();
-			if (ageMs < 10_000) return false;
 			// Preserve if there's a draft with content
 			const saved = sessionStorage.getItem(`chat-draft::${c.id}`);
 			if (saved) {
@@ -1018,7 +1018,7 @@ export function Chat() {
 		Promise.all(toDelete.map((c) => deleteConversation(c.id).catch(() => {}))).then(() => {
 			queryClient.invalidateQueries({ queryKey: ["conversations", sessionId] });
 		});
-	}, [conversations, activeConversationId, sessionId, queryClient]);
+	}, [conversations, conversationsFetching, activeConversationId, sessionId, queryClient]);
 
 	const handleSelectConversation = useCallback(
 		(convId: string) => {

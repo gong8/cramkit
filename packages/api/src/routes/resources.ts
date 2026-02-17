@@ -1,9 +1,13 @@
-import { createLogger, createResourceSchema, getDb, updateResourceSchema } from "@cramkit/shared";
-import { Hono } from "hono";
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
+import { createLogger, createResourceSchema, getDb, updateResourceSchema } from "@cramkit/shared";
+import { Hono } from "hono";
 import { enqueueProcessing } from "../lib/queue.js";
-import { deleteResourceDir, readResourceContent, saveResourceRawFile } from "../services/storage.js";
+import {
+	deleteResourceDir,
+	readResourceContent,
+	saveResourceRawFile,
+} from "../services/storage.js";
 
 const log = createLogger("api");
 
@@ -33,7 +37,10 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 		splitMode: splitMode || undefined,
 	});
 	if (!metaParsed.success) {
-		log.warn(`POST /sessions/${sessionId}/resources — invalid metadata`, metaParsed.error.flatten());
+		log.warn(
+			`POST /sessions/${sessionId}/resources — invalid metadata`,
+			metaParsed.error.flatten(),
+		);
 		return c.json({ error: metaParsed.error.flatten() }, 400);
 	}
 
@@ -53,7 +60,12 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 			}
 
 			for (const f of allFiles) {
-				const rawPath = await saveResourceRawFile(sessionId, existing.id, f.name, Buffer.from(await f.arrayBuffer()));
+				const rawPath = await saveResourceRawFile(
+					sessionId,
+					existing.id,
+					f.name,
+					Buffer.from(await f.arrayBuffer()),
+				);
 				await db.file.create({
 					data: {
 						resourceId: existing.id,
@@ -77,7 +89,9 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 				include: { files: true },
 			});
 
-			log.info(`POST /sessions/${sessionId}/resources — added ${allFiles.length} files to existing lecture notes resource ${existing.id}`);
+			log.info(
+				`POST /sessions/${sessionId}/resources — added ${allFiles.length} files to existing lecture notes resource ${existing.id}`,
+			);
 			return c.json(resource, 200);
 		}
 	}
@@ -99,7 +113,12 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 	const allPrimaryFiles = singleFile ? [singleFile, ...primaryFiles] : primaryFiles;
 
 	for (const f of allPrimaryFiles) {
-		const rawPath = await saveResourceRawFile(sessionId, resource.id, f.name, Buffer.from(await f.arrayBuffer()));
+		const rawPath = await saveResourceRawFile(
+			sessionId,
+			resource.id,
+			f.name,
+			Buffer.from(await f.arrayBuffer()),
+		);
 		await db.file.create({
 			data: {
 				resourceId: resource.id,
@@ -114,7 +133,12 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 	// Optional mark scheme / solutions file
 	const markSchemeFile = formData.get("markScheme") as File | null;
 	if (markSchemeFile) {
-		const rawPath = await saveResourceRawFile(sessionId, resource.id, markSchemeFile.name, Buffer.from(await markSchemeFile.arrayBuffer()));
+		const rawPath = await saveResourceRawFile(
+			sessionId,
+			resource.id,
+			markSchemeFile.name,
+			Buffer.from(await markSchemeFile.arrayBuffer()),
+		);
 		await db.file.create({
 			data: {
 				resourceId: resource.id,
@@ -128,7 +152,12 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 
 	const solutionsFile = formData.get("solutions") as File | null;
 	if (solutionsFile) {
-		const rawPath = await saveResourceRawFile(sessionId, resource.id, solutionsFile.name, Buffer.from(await solutionsFile.arrayBuffer()));
+		const rawPath = await saveResourceRawFile(
+			sessionId,
+			resource.id,
+			solutionsFile.name,
+			Buffer.from(await solutionsFile.arrayBuffer()),
+		);
 		await db.file.create({
 			data: {
 				resourceId: resource.id,
@@ -147,7 +176,9 @@ resourcesRoutes.post("/sessions/:sessionId/resources", async (c) => {
 		include: { files: true },
 	});
 
-	log.info(`POST /sessions/${sessionId}/resources — created resource ${resource.id}, queued for processing`);
+	log.info(
+		`POST /sessions/${sessionId}/resources — created resource ${resource.id}, queued for processing`,
+	);
 	return c.json(result, 201);
 });
 
@@ -159,7 +190,9 @@ resourcesRoutes.get("/sessions/:sessionId/resources", async (c) => {
 		include: { files: true },
 		orderBy: { createdAt: "desc" },
 	});
-	log.info(`GET /sessions/${c.req.param("sessionId")}/resources — found ${resources.length} resources`);
+	log.info(
+		`GET /sessions/${c.req.param("sessionId")}/resources — found ${resources.length} resources`,
+	);
 	return c.json(resources);
 });
 
@@ -246,7 +279,7 @@ resourcesRoutes.get("/:id/tree", async (c) => {
 	for (const chunk of chunks) {
 		const node = chunkMap.get(chunk.id)!;
 		if (chunk.parentId && chunkMap.has(chunk.parentId)) {
-			chunkMap.get(chunk.parentId)!.children.push(node);
+			chunkMap.get(chunk.parentId)?.children.push(node);
 		} else {
 			roots.push(node);
 		}
@@ -289,18 +322,17 @@ resourcesRoutes.delete("/:id", async (c) => {
 	}
 
 	// Clean up relationships referencing this resource or its chunks
-	const chunkIds = (await db.chunk.findMany({
-		where: { resourceId: resource.id },
-		select: { id: true },
-	})).map((c) => c.id);
+	const chunkIds = (
+		await db.chunk.findMany({
+			where: { resourceId: resource.id },
+			select: { id: true },
+		})
+	).map((c) => c.id);
 
 	const sourceIds = [resource.id, ...chunkIds];
 	await db.relationship.deleteMany({
 		where: {
-			OR: [
-				{ sourceId: { in: sourceIds } },
-				{ targetId: { in: sourceIds } },
-			],
+			OR: [{ sourceId: { in: sourceIds } }, { targetId: { in: sourceIds } }],
 		},
 	});
 
@@ -335,7 +367,12 @@ resourcesRoutes.post("/:id/files", async (c) => {
 	}
 
 	for (const f of allFiles) {
-		const rawPath = await saveResourceRawFile(resource.sessionId, resourceId, f.name, Buffer.from(await f.arrayBuffer()));
+		const rawPath = await saveResourceRawFile(
+			resource.sessionId,
+			resourceId,
+			f.name,
+			Buffer.from(await f.arrayBuffer()),
+		);
 		await db.file.create({
 			data: {
 				resourceId,
@@ -379,11 +416,28 @@ resourcesRoutes.delete("/:id/files/:fileId", async (c) => {
 	// Check if resource still has files
 	const remainingFiles = await db.file.count({ where: { resourceId } });
 	if (remainingFiles === 0) {
+		// Clean up relationships referencing this resource or its chunks
+		const chunkIds = (
+			await db.chunk.findMany({
+				where: { resourceId },
+				select: { id: true },
+			})
+		).map((c) => c.id);
+
+		const entityIds = [resourceId, ...chunkIds];
+		await db.relationship.deleteMany({
+			where: {
+				OR: [{ sourceId: { in: entityIds } }, { targetId: { in: entityIds } }],
+			},
+		});
+
 		// Delete the entire resource if no files left
 		const parentResource = (await db.resource.findUnique({ where: { id: resourceId } }))!;
 		await deleteResourceDir(parentResource.sessionId, resourceId);
 		await db.resource.delete({ where: { id: resourceId } });
-		log.info(`DELETE /resources/${resourceId}/files/${fileId} — last file removed, resource deleted`);
+		log.info(
+			`DELETE /resources/${resourceId}/files/${fileId} — last file removed, resource deleted`,
+		);
 		return c.json({ ok: true, resourceDeleted: true });
 	}
 

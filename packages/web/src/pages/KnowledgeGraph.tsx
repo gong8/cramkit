@@ -62,9 +62,6 @@ const RESOURCE_TYPE_COLORS: Record<string, string> = {
 const LAYOUT_OPTIONS: { value: LayoutTypes; label: string }[] = [
 	{ value: "forceDirected2d", label: "Force Directed" },
 	{ value: "circular2d", label: "Circular" },
-	{ value: "hierarchicalTd", label: "Hierarchical" },
-	{ value: "treeTd2d", label: "Tree (Top-Down)" },
-	{ value: "treeLr2d", label: "Tree (Left-Right)" },
 	{ value: "radialOut2d", label: "Radial" },
 	{ value: "nooverlap", label: "No Overlap" },
 ];

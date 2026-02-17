@@ -403,6 +403,15 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 		images: imagePaths.length > 0 ? imagePaths : undefined,
 	});
 
+	// Strip leaked <tool_call>/<tool_result> XML from text content before persisting
+	function stripToolCallXml(text: string): string {
+		return text
+			.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+			.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
+			.replace(/\n{3,}/g, "\n\n")
+			.trim();
+	}
+
 	// Forward CLI SSE stream to client, accumulate for persistence
 	return streamSSE(c, async (stream) => {
 		const reader = cliStream.getReader();
@@ -444,7 +453,7 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 									data: {
 										conversationId,
 										role: "assistant",
-										content: fullAssistantContent,
+										content: stripToolCallXml(fullAssistantContent),
 										toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
 									},
 								});
@@ -557,7 +566,7 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 					data: {
 						conversationId,
 						role: "assistant",
-						content: fullAssistantContent,
+						content: stripToolCallXml(fullAssistantContent),
 						toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
 					},
 				});
@@ -575,7 +584,7 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 						data: {
 							conversationId,
 							role: "assistant",
-							content: fullAssistantContent,
+							content: stripToolCallXml(fullAssistantContent),
 							toolCalls: toolCallsData.length > 0 ? JSON.stringify(toolCallsData) : null,
 						},
 					})

@@ -101,11 +101,13 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 		db.chunk.findMany({
 			where: {
 				resource: { sessionId },
-				OR: [
-					{ content: { contains: parsed.data.q } },
-					{ title: { contains: parsed.data.q } },
-					{ keywords: { contains: parsed.data.q } },
-				],
+				AND: queryTerms.map((term) => ({
+					OR: [
+						{ content: { contains: term } },
+						{ title: { contains: term } },
+						{ keywords: { contains: term } },
+					],
+				})),
 			},
 			include: {
 				resource: { select: { id: true, name: true, type: true } },
@@ -158,8 +160,8 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 				{
 					title: graphResult.title,
 					content: graphResult.content,
-					keywords: null,
-					nodeType: "section",
+					keywords: graphResult.keywords,
+					nodeType: graphResult.nodeType,
 				},
 				queryTerms,
 				parsed.data.q,
@@ -179,7 +181,9 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 	contentResults.sort((a, b) => b.score - a.score);
 	const merged = contentResults.slice(0, parsed.data.limit);
 
-	log.info(`GET /sessions/${sessionId}/search — query="${parsed.data.q}", found ${merged.length} results (content=${contentChunks.length}, graph=${graphResults.length})`);
+	log.info(
+		`GET /sessions/${sessionId}/search — query="${parsed.data.q}", found ${merged.length} results (content=${contentChunks.length}, graph=${graphResults.length})`,
+	);
 
 	// Fire amortisation async (don't await)
 	amortiseSearchResults(
