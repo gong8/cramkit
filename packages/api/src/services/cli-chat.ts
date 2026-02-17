@@ -188,7 +188,10 @@ export interface CliChatOptions {
 	systemPrompt: string;
 	model?: string;
 	signal?: AbortSignal;
+	/** All images in the conversation (for MCP tool access). */
 	images?: string[];
+	/** Only images attached to the latest user message (for prompt instruction). */
+	newImages?: string[];
 }
 
 export interface ToolCallData {
@@ -199,7 +202,7 @@ export interface ToolCallData {
 	isError?: boolean;
 }
 
-function buildPrompt(messages: CliMessage[], images?: string[]): string {
+function buildPrompt(messages: CliMessage[], newImages?: string[]): string {
 	const parts: string[] = [];
 
 	for (const msg of messages) {
@@ -215,12 +218,12 @@ function buildPrompt(messages: CliMessage[], images?: string[]): string {
 		}
 	}
 
-	if (images && images.length > 0) {
-		const imageList = images.map((p) => `  - ${p}`).join("\n");
+	if (newImages && newImages.length > 0) {
+		const imageList = newImages.map((p) => `  - ${p}`).join("\n");
 		parts.push(
 			[
 				"<attached_images>",
-				"The user has attached images to this conversation. Use the mcp__images__view_image tool to view each image:",
+				"The user has attached new images. Use the mcp__images__view_image tool to view each image:",
 				imageList,
 				"</attached_images>",
 			].join("\n"),
@@ -403,9 +406,21 @@ async function prepareInvocation(options: CliChatOptions): Promise<{
 		cliImagePaths = await resizeImagesForCli(options.images ?? [], invocationDir);
 	}
 
+	// Build a map from original path → resized path so we can find new images
+	const newImageSet = new Set(options.newImages ?? []);
+	const cliNewImagePaths =
+		hasImages && options.newImages?.length
+			? (options.images ?? [])
+					.map((orig, i) => (newImageSet.has(orig) ? cliImagePaths![i] : null))
+					.filter((p): p is string => p !== null)
+			: undefined;
+
+	// MCP config gets ALL images so Claude can re-view if needed
 	const mcpConfigPath = writeMcpConfig(invocationDir, cliImagePaths);
+	// Prompt only instructs Claude to view NEW images
 	const prompt =
-		buildPrompt(options.messages, cliImagePaths) || (hasImages ? "Describe this image." : "");
+		buildPrompt(options.messages, cliNewImagePaths) ||
+		(cliNewImagePaths?.length ? "Describe this image." : "");
 	const args = buildCliArgs(model, mcpConfigPath, systemPromptPath, BLOCKED_BUILTIN_TOOLS, prompt);
 
 	return { invocationDir, args, model };

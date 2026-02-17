@@ -98,6 +98,19 @@ export function collectImagePaths(
 	);
 }
 
+/**
+ * Collect attachment disk-paths from only the last user message.
+ */
+export function collectNewImagePaths(
+	history: Array<{ role: string; attachments: Array<{ diskPath: string | null }> }>,
+): string[] {
+	const lastUserMsg = [...history].reverse().find((msg) => msg.role === "user");
+	if (!lastUserMsg) return [];
+	return lastUserMsg.attachments
+		.map((att) => att.diskPath)
+		.filter((p): p is string => p !== null);
+}
+
 interface SessionWithResources {
 	name: string;
 	module: string | null;
@@ -284,7 +297,8 @@ export async function launchChatStream(
 	}
 
 	const history = await loadConversationHistory(db, conversationId);
-	const imagePaths = collectImagePaths(history);
+	const allImagePaths = collectImagePaths(history);
+	const newImagePaths = collectNewImagePaths(history);
 	await autoTitleConversation(db, conversationId, history.length, message);
 
 	const sessionResult = await loadSessionWithPrompt(db, sessionId);
@@ -299,7 +313,8 @@ export async function launchChatStream(
 	const cliStream = streamCliChat({
 		messages: history as Array<{ role: "system" | "user" | "assistant"; content: string }>,
 		systemPrompt: sessionResult.systemPrompt,
-		images: imagePaths.length > 0 ? imagePaths : undefined,
+		images: allImagePaths.length > 0 ? allImagePaths : undefined,
+		newImages: newImagePaths.length > 0 ? newImagePaths : undefined,
 	});
 	startStream(conversationId, cliStream, db);
 
