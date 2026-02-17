@@ -281,3 +281,46 @@ export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
 	log.info(`fetchSessionGraph — session=${sessionId}`);
 	return request(`/graph/sessions/${sessionId}/full`);
 }
+
+// Conversation operations
+export interface ConversationSummary {
+	id: string;
+	title: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface ChatMessage {
+	id: string;
+	role: "user" | "assistant";
+	content: string;
+	createdAt: string;
+}
+
+export function fetchConversations(sessionId: string): Promise<ConversationSummary[]> {
+	log.info(`fetchConversations — session=${sessionId}`);
+	return request(`/chat/sessions/${sessionId}/conversations`);
+}
+
+export function createConversation(sessionId: string): Promise<ConversationSummary> {
+	log.info(`createConversation — session=${sessionId}`);
+	return request(`/chat/sessions/${sessionId}/conversations`, { method: "POST" });
+}
+
+export function fetchMessages(conversationId: string): Promise<ChatMessage[]> {
+	log.info(`fetchMessages — conversation=${conversationId}`);
+	return request(`/chat/conversations/${conversationId}/messages`);
+}
+
+export function renameConversation(conversationId: string, title: string): Promise<ConversationSummary> {
+	log.info(`renameConversation — ${conversationId}`);
+	return request(`/chat/conversations/${conversationId}`, {
+		method: "PATCH",
+		body: JSON.stringify({ title }),
+	});
+}
+
+export function deleteConversation(conversationId: string): Promise<void> {
+	log.info(`deleteConversation — ${conversationId}`);
+	return request(`/chat/conversations/${conversationId}`, { method: "DELETE" });
+}

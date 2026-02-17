@@ -1,7 +1,7 @@
 import { fetchSession, fetchSessionGraph } from "@/lib/api";
 import type { Concept, GraphResource, Relationship } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
-import { GraphCanvas, type GraphCanvasRef, type GraphEdge, type GraphNode, type LayoutTypes } from "reagraph";
+import { GraphCanvas, lightTheme, type GraphCanvasRef, type GraphEdge, type GraphNode, type LayoutTypes } from "reagraph";
 import { ArrowLeft, ArrowRight, Search, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -29,6 +29,18 @@ const EDGE_COLORS: Record<string, string> = {
 	contradicts: "#dc2626",
 	tests: "#a855f7",
 	requires: "#e11d48",
+};
+
+const graphTheme = {
+	...lightTheme,
+	node: {
+		...lightTheme.node,
+		inactiveOpacity: 0.05,
+	},
+	edge: {
+		...lightTheme.edge,
+		inactiveOpacity: 0.02,
+	},
 };
 
 const RESOURCE_TYPE_LABELS: Record<string, string> = {
@@ -878,6 +890,7 @@ export function KnowledgeGraph() {
 						edgeArrowPosition="end"
 						labelType="all"
 						draggable
+						theme={graphTheme}
 						selections={selections}
 						onNodeClick={(node) => {
 							setSelectedNodeId((prev) => (prev === node.id ? null : node.id));

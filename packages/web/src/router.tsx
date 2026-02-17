@@ -8,7 +8,7 @@ import { SessionDetail } from "./pages/SessionDetail";
 
 function FullscreenLayout() {
 	return (
-		<div className="h-screen bg-background">
+		<div className="h-screen overflow-hidden bg-background">
 			<Outlet />
 		</div>
 	);

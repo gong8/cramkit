@@ -31,4 +31,5 @@ log.info(`CramKit API running on http://localhost:${port}`);
 export default {
 	port,
 	fetch: app.fetch,
+	idleTimeout: 120,
 };

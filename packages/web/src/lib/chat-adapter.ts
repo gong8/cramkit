@@ -2,22 +2,24 @@ import type { ChatModelAdapter } from "@assistant-ui/react";
 
 const BASE_URL = "/api";
 
-export function createCramKitChatAdapter(sessionId: string): ChatModelAdapter {
+export function createCramKitChatAdapter(
+	sessionId: string,
+	conversationId: string,
+): ChatModelAdapter {
 	return {
 		async *run({ messages, abortSignal }) {
-			const apiMessages = messages.map((msg) => ({
-				role: msg.role as "user" | "assistant",
-				content:
-					msg.content
-						.filter((part): part is { type: "text"; text: string } => part.type === "text")
-						.map((part) => part.text)
-						.join("") || "",
-			}));
+			// Extract the latest user message
+			const lastMessage = messages[messages.length - 1];
+			const userText =
+				lastMessage?.content
+					.filter((part): part is { type: "text"; text: string } => part.type === "text")
+					.map((part) => part.text)
+					.join("") || "";
 
 			const response = await fetch(`${BASE_URL}/chat/stream`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ sessionId, messages: apiMessages }),
+				body: JSON.stringify({ sessionId, conversationId, message: userText }),
 				signal: abortSignal,
 			});
 
@@ -45,7 +47,6 @@ export function createCramKitChatAdapter(sessionId: string): ChatModelAdapter {
 						const trimmed = line.trim();
 						if (!trimmed) continue;
 
-						// Parse SSE format: "event: xxx\ndata: yyy"
 						if (trimmed.startsWith("data: ")) {
 							const data = trimmed.slice(6);
 							if (data === "[DONE]") {
@@ -73,7 +74,6 @@ export function createCramKitChatAdapter(sessionId: string): ChatModelAdapter {
 				reader.releaseLock();
 			}
 
-			// Final yield if not already done
 			if (fullContent) {
 				yield {
 					content: [{ type: "text" as const, text: fullContent }],

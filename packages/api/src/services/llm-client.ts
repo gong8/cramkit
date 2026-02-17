@@ -1,20 +1,28 @@
+import { spawn } from "child_process";
+import { writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { randomUUID } from "crypto";
 import { createLogger } from "@cramkit/shared";
 
 const log = createLogger("api");
 
-const LLM_BASE_URL = process.env.LLM_BASE_URL || "http://localhost:3456/v1";
-const LLM_API_KEY = process.env.LLM_API_KEY || "proxy-mode-no-key-required";
 const LLM_MODEL = process.env.LLM_MODEL || "claude-opus-4-6";
+
+function getCliModel(model: string): string {
+	if (model.includes("opus")) return "opus";
+	if (model.includes("haiku")) return "haiku";
+	return "sonnet";
+}
 
 export async function chatCompletion(
 	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
 	options?: { model?: string; temperature?: number; maxTokens?: number },
 ): Promise<string> {
-	const model = options?.model || LLM_MODEL;
-	const temperature = options?.temperature ?? 0;
+	const model = getCliModel(options?.model || LLM_MODEL);
 	const maxTokens = options?.maxTokens ?? 4096;
 
-	log.info(`chatCompletion — model=${model}, messages=${messages.length}, temperature=${temperature}`);
+	log.info(`chatCompletion — model=${model}, messages=${messages.length}`);
 
 	// Strip null bytes from message content — PDF extraction can leave them in
 	const sanitizedMessages = messages.map((m) => ({
@@ -22,35 +30,99 @@ export async function chatCompletion(
 		content: m.content.replaceAll("\0", ""),
 	}));
 
-	const response = await fetch(`${LLM_BASE_URL}/chat/completions`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${LLM_API_KEY}`,
-		},
-		body: JSON.stringify({
-			model,
-			messages: sanitizedMessages,
-			temperature,
-			max_tokens: maxTokens,
-		}),
+	// Build the prompt: system messages go to --append-system-prompt, rest inline
+	const systemParts: string[] = [];
+	const promptParts: string[] = [];
+
+	for (const msg of sanitizedMessages) {
+		switch (msg.role) {
+			case "system":
+				systemParts.push(msg.content);
+				break;
+			case "assistant":
+				promptParts.push(`<previous_response>\n${msg.content}\n</previous_response>`);
+				break;
+			case "user":
+				promptParts.push(msg.content);
+				break;
+		}
+	}
+
+	const prompt = promptParts.join("\n\n").trim();
+	if (!prompt) {
+		throw new Error("No user prompt found in messages");
+	}
+
+	const tempDir = join(tmpdir(), `cramkit-llm-${randomUUID().slice(0, 8)}`);
+	mkdirSync(tempDir, { recursive: true });
+
+	const args = [
+		"--print",
+		"--output-format",
+		"text",
+		"--model",
+		model,
+		"--dangerously-skip-permissions",
+		"--setting-sources",
+		"",
+		"--no-session-persistence",
+		"--max-tokens",
+		String(maxTokens),
+	];
+
+	if (systemParts.length > 0) {
+		const systemPromptPath = join(tempDir, "system-prompt.txt");
+		writeFileSync(systemPromptPath, systemParts.join("\n\n"));
+		args.push("--append-system-prompt-file", systemPromptPath);
+	}
+
+	args.push(prompt);
+
+	return new Promise<string>((resolve, reject) => {
+		const proc = spawn("claude", args, {
+			cwd: tempDir,
+			env: {
+				PATH: process.env.PATH,
+				HOME: process.env.HOME,
+				SHELL: process.env.SHELL,
+				TERM: process.env.TERM,
+			},
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+
+		proc.stdin?.end();
+
+		let stdout = "";
+		let stderr = "";
+
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+		});
+
+		proc.stderr?.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString();
+		});
+
+		proc.on("close", (code) => {
+			if (code !== 0) {
+				log.error(`chatCompletion — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
+				reject(new Error(`Claude CLI error (exit code ${code}): ${stderr.slice(0, 500)}`));
+				return;
+			}
+
+			const content = stdout.trim();
+			if (!content) {
+				reject(new Error("LLM returned empty response"));
+				return;
+			}
+
+			log.info(`chatCompletion — response ${content.length} chars`);
+			resolve(content);
+		});
+
+		proc.on("error", (err) => {
+			log.error(`chatCompletion — spawn error: ${err.message}`);
+			reject(new Error(`Claude CLI spawn error: ${err.message}`));
+		});
 	});
-
-	if (!response.ok) {
-		const errorText = await response.text();
-		log.error(`chatCompletion — ${response.status}: ${errorText}`);
-		throw new Error(`LLM API error ${response.status}: ${errorText}`);
-	}
-
-	const data = (await response.json()) as {
-		choices: Array<{ message: { content: string } }>;
-	};
-
-	const content = data.choices?.[0]?.message?.content;
-	if (!content) {
-		throw new Error("LLM returned empty response");
-	}
-
-	log.info(`chatCompletion — response ${content.length} chars`);
-	return content;
 }

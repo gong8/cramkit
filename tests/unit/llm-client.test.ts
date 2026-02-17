@@ -1,25 +1,54 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { EventEmitter } from "events";
 
-// We test the actual module, mocking global.fetch
-const originalFetch = global.fetch;
+// Mock child_process.spawn
+const mockSpawn = vi.fn();
+vi.mock("child_process", () => ({
+	spawn: (...args: unknown[]) => mockSpawn(...args),
+}));
 
-beforeEach(() => {
-	vi.resetModules();
-	global.fetch = vi.fn();
-});
+// Mock fs and os
+vi.mock("fs", () => ({
+	writeFileSync: vi.fn(),
+	mkdirSync: vi.fn(),
+}));
 
-afterEach(() => {
-	global.fetch = originalFetch;
-});
+vi.mock("os", () => ({
+	tmpdir: () => "/tmp",
+}));
 
-function mockFetchResponse(body: unknown, status = 200) {
-	(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-		ok: status >= 200 && status < 300,
-		status,
-		json: () => Promise.resolve(body),
-		text: () => Promise.resolve(JSON.stringify(body)),
+vi.mock("crypto", () => ({
+	randomUUID: () => "test-uuid-1234",
+}));
+
+function setupMockProcess(stdout: string, exitCode = 0) {
+	mockSpawn.mockImplementation(() => {
+		const proc = new EventEmitter() as EventEmitter & {
+			stdin: { end: ReturnType<typeof vi.fn> };
+			stdout: EventEmitter;
+			stderr: EventEmitter;
+			pid: number;
+			kill: ReturnType<typeof vi.fn>;
+		};
+		proc.stdin = { end: vi.fn() };
+		proc.stdout = new EventEmitter();
+		proc.stderr = new EventEmitter();
+		proc.pid = 12345;
+		proc.kill = vi.fn();
+
+		// Schedule events after listeners are attached
+		process.nextTick(() => {
+			if (stdout) proc.stdout.emit("data", Buffer.from(stdout));
+			proc.emit("close", exitCode);
+		});
+
+		return proc;
 	});
 }
+
+beforeEach(() => {
+	vi.clearAllMocks();
+});
 
 async function loadChatCompletion() {
 	const mod = await import("../../packages/api/src/services/llm-client.js");
@@ -27,34 +56,8 @@ async function loadChatCompletion() {
 }
 
 describe("chatCompletion", () => {
-	it("sends correct request shape", async () => {
-		mockFetchResponse({
-			choices: [{ message: { content: "Hello" } }],
-		});
-
-		const chatCompletion = await loadChatCompletion();
-		await chatCompletion([{ role: "user", content: "Hi" }]);
-
-		expect(global.fetch).toHaveBeenCalledOnce();
-		const [url, options] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-
-		expect(url).toBe("http://localhost:3456/v1/chat/completions");
-		expect(options.method).toBe("POST");
-		expect(options.headers["Content-Type"]).toBe("application/json");
-		expect(options.headers.Authorization).toMatch(/^Bearer /);
-
-		const body = JSON.parse(options.body);
-		expect(body).toHaveProperty("model");
-		expect(body).toHaveProperty("messages");
-		expect(body).toHaveProperty("temperature");
-		expect(body).toHaveProperty("max_tokens");
-		expect(body.messages).toEqual([{ role: "user", content: "Hi" }]);
-	});
-
-	it("returns assistant content string", async () => {
-		mockFetchResponse({
-			choices: [{ message: { content: "The answer is 42" } }],
-		});
+	it("returns CLI stdout as response", async () => {
+		setupMockProcess("The answer is 42");
 
 		const chatCompletion = await loadChatCompletion();
 		const result = await chatCompletion([{ role: "user", content: "question" }]);
@@ -62,59 +65,98 @@ describe("chatCompletion", () => {
 		expect(result).toBe("The answer is 42");
 	});
 
-	it("uses env defaults", async () => {
-		mockFetchResponse({
-			choices: [{ message: { content: "ok" } }],
-		});
+	it("passes correct CLI args", async () => {
+		setupMockProcess("ok");
 
 		const chatCompletion = await loadChatCompletion();
 		await chatCompletion([{ role: "user", content: "test" }]);
 
-		const [url, options] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-		const body = JSON.parse(options.body);
+		expect(mockSpawn).toHaveBeenCalledOnce();
+		const [cmd, args] = mockSpawn.mock.calls[0];
 
-		expect(url).toContain("localhost:3456");
-		expect(body.model).toBe("claude-opus-4-6");
-		expect(body.temperature).toBe(0);
-		expect(body.max_tokens).toBe(4096);
+		expect(cmd).toBe("claude");
+		expect(args).toContain("--print");
+		expect(args).toContain("--output-format");
+		expect(args).toContain("text");
+		expect(args).toContain("--dangerously-skip-permissions");
+		expect(args).toContain("--setting-sources");
+		expect(args).toContain("--no-session-persistence");
+		expect(args).toContain("test");
 	});
 
-	it("respects option overrides", async () => {
-		mockFetchResponse({
-			choices: [{ message: { content: "ok" } }],
-		});
+	it("uses minimal env vars", async () => {
+		setupMockProcess("ok");
+
+		const chatCompletion = await loadChatCompletion();
+		await chatCompletion([{ role: "user", content: "test" }]);
+
+		const spawnOptions = mockSpawn.mock.calls[0][2] as { env: Record<string, unknown> };
+		const envKeys = Object.keys(spawnOptions.env);
+
+		expect(envKeys).toContain("PATH");
+		expect(envKeys).toContain("HOME");
+		expect(envKeys).not.toContain("LLM_BASE_URL");
+		expect(envKeys).not.toContain("LLM_API_KEY");
+	});
+
+	it("respects model option overrides", async () => {
+		setupMockProcess("ok");
 
 		const chatCompletion = await loadChatCompletion();
 		await chatCompletion([{ role: "user", content: "test" }], {
-			model: "custom-model",
-			temperature: 0.7,
+			model: "claude-haiku-latest",
 			maxTokens: 2048,
 		});
 
-		const body = JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
-
-		expect(body.model).toBe("custom-model");
-		expect(body.temperature).toBe(0.7);
-		expect(body.max_tokens).toBe(2048);
+		const args = mockSpawn.mock.calls[0][1] as string[];
+		const modelIdx = args.indexOf("--model");
+		expect(args[modelIdx + 1]).toBe("haiku");
+		const maxIdx = args.indexOf("--max-tokens");
+		expect(args[maxIdx + 1]).toBe("2048");
 	});
 
-	it("throws on HTTP error", async () => {
-		mockFetchResponse("Internal Server Error", 500);
+	it("throws on non-zero exit code", async () => {
+		setupMockProcess("", 1);
 
 		const chatCompletion = await loadChatCompletion();
 
 		await expect(
 			chatCompletion([{ role: "user", content: "test" }]),
-		).rejects.toThrow(/LLM API error 500/);
+		).rejects.toThrow(/Claude CLI error/);
 	});
 
 	it("throws on empty response", async () => {
-		mockFetchResponse({ choices: [] });
+		setupMockProcess("");
 
 		const chatCompletion = await loadChatCompletion();
 
 		await expect(
 			chatCompletion([{ role: "user", content: "test" }]),
 		).rejects.toThrow("LLM returned empty response");
+	});
+
+	it("handles system messages via append-system-prompt-file", async () => {
+		setupMockProcess("ok");
+
+		const chatCompletion = await loadChatCompletion();
+		await chatCompletion([
+			{ role: "system", content: "You are helpful" },
+			{ role: "user", content: "Hi" },
+		]);
+
+		const args = mockSpawn.mock.calls[0][1] as string[];
+		expect(args).toContain("--append-system-prompt-file");
+		// The user prompt should be the last argument
+		expect(args[args.length - 1]).toBe("Hi");
+	});
+
+	it("strips null bytes from content", async () => {
+		setupMockProcess("ok");
+
+		const chatCompletion = await loadChatCompletion();
+		await chatCompletion([{ role: "user", content: "test\0value" }]);
+
+		const args = mockSpawn.mock.calls[0][1] as string[];
+		expect(args[args.length - 1]).toBe("testvalue");
 	});
 });

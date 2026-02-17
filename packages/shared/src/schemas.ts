@@ -75,10 +75,6 @@ export const indexResourceRequestSchema = z.object({
 
 export const chatStreamRequestSchema = z.object({
 	sessionId: z.string(),
-	messages: z.array(
-		z.object({
-			role: z.enum(["user", "assistant"]),
-			content: z.string(),
-		}),
-	),
+	conversationId: z.string(),
+	message: z.string().min(1),
 });
