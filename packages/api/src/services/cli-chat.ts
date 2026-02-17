@@ -110,6 +110,7 @@ function buildCliArgs(
 		"--output-format",
 		"stream-json",
 		"--verbose",
+		"--include-partial-messages",
 		"--model",
 		model,
 		"--dangerously-skip-permissions",

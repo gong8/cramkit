@@ -70,4 +70,6 @@ export const apiClient = {
 
 	listConcepts: (sessionId: string) =>
 		request<unknown[]>(`/graph/sessions/${sessionId}/concepts`),
+
+	getConcept: (conceptId: string) => request<unknown>(`/graph/concepts/${conceptId}`),
 };
