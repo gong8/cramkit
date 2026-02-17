@@ -46,13 +46,13 @@ export async function persistUserMessage(
 		message: string;
 		attachmentIds?: string[];
 		rewindToMessageId?: string;
-		afterMessageId?: string;
+		expectedPriorCount?: number;
 	},
 ) {
-	const { conversationId, message, rewindToMessageId, afterMessageId, attachmentIds } = opts;
+	const { conversationId, message, rewindToMessageId, expectedPriorCount, attachmentIds } = opts;
 
 	if (rewindToMessageId) {
-		// Retry: the target message keeps its ID, content is updated, everything after is deleted
+		// Retry with known CUID: update content, delete everything after
 		const targetMessage = await db.message.findUnique({
 			where: { id: rewindToMessageId },
 		});
@@ -73,34 +73,25 @@ export async function persistUserMessage(
 				data: { content: message },
 			});
 		}
-	} else if (afterMessageId) {
-		// Edit: delete everything after the anchor message, then create the new user message
-		const anchorMessage = await db.message.findUnique({
-			where: { id: afterMessageId },
-		});
-		if (!anchorMessage || anchorMessage.conversationId !== conversationId) {
-			return { error: "Anchor message not found" as const };
-		}
-
-		await db.message.deleteMany({
-			where: {
-				conversationId,
-				createdAt: { gt: anchorMessage.createdAt },
-			},
-		});
-
-		const userMessage = await db.message.create({
-			data: { conversationId, role: "user", content: message },
-		});
-
-		if (attachmentIds && attachmentIds.length > 0) {
-			await db.chatAttachment.updateMany({
-				where: { id: { in: attachmentIds }, messageId: null },
-				data: { messageId: userMessage.id },
-			});
-		}
 	} else {
-		// New message
+		// Trim orphaned messages when the frontend has fewer messages than the DB
+		// (happens when the user edits a message mid-conversation).
+		if (expectedPriorCount !== undefined) {
+			const existing = await db.message.findMany({
+				where: { conversationId },
+				orderBy: { createdAt: "asc" },
+				select: { id: true },
+			});
+
+			if (existing.length > expectedPriorCount) {
+				const idsToDelete = existing.slice(expectedPriorCount).map((m) => m.id);
+				await db.message.deleteMany({
+					where: { id: { in: idsToDelete } },
+				});
+			}
+		}
+
+		// Create the new user message
 		const userMessage = await db.message.create({
 			data: { conversationId, role: "user", content: message },
 		});
@@ -309,10 +300,10 @@ export async function launchChatStream(
 		message: string;
 		attachmentIds?: string[];
 		rewindToMessageId?: string;
-		afterMessageId?: string;
+		expectedPriorCount?: number;
 	},
 ) {
-	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId, afterMessageId } =
+	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId, expectedPriorCount } =
 		opts;
 
 	const persistResult = await persistUserMessage(db, {
@@ -320,7 +311,7 @@ export async function launchChatStream(
 		message,
 		attachmentIds,
 		rewindToMessageId,
-		afterMessageId,
+		expectedPriorCount,
 	});
 	if (persistResult.error) {
 		return c.json({ error: persistResult.error }, 404);
