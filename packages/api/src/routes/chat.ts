@@ -211,6 +211,35 @@ chatRoutes.get("/conversations/:id/stream-status", async (c) => {
 	return c.json({ active: true, status: existing.status });
 });
 
+// Reconnect to an active background stream
+chatRoutes.post("/conversations/:id/stream-reconnect", async (c) => {
+	const { id } = c.req.param();
+	const existingStream = getStream(id);
+
+	if (!existingStream) {
+		return c.json({ error: "No active stream" }, 404);
+	}
+
+	log.info(`POST /chat/conversations/${id}/stream-reconnect — reconnecting`);
+	return streamSSE(c, async (sseStream) => {
+		const handle = subscribe(id, async (event, data) => {
+			try {
+				await sseStream.writeSSE({ data, event });
+			} catch {
+				// Client disconnected during write
+			}
+		});
+
+		if (!handle) {
+			await sseStream.writeSSE({ data: "[DONE]", event: "done" });
+			return;
+		}
+
+		// Wait for all events to be delivered (replay + live)
+		await handle.delivered;
+	});
+});
+
 // Stream chat — persists messages to DB
 chatRoutes.post("/stream", async (c) => {
 	const body = await c.req.json();
@@ -234,11 +263,10 @@ chatRoutes.post("/stream", async (c) => {
 	}
 
 	// Check for active stream — reconnection case
-	const existingStream = getStream(conversationId);
-	if (existingStream) {
+	if (getStream(conversationId)) {
 		log.info(`POST /chat/stream — reconnecting to active stream for ${conversationId}`);
 		return streamSSE(c, async (sseStream) => {
-			const unsub = subscribe(conversationId, async (event, data) => {
+			const handle = subscribe(conversationId, async (event, data) => {
 				try {
 					await sseStream.writeSSE({ data, event });
 				} catch {
@@ -246,13 +274,13 @@ chatRoutes.post("/stream", async (c) => {
 				}
 			});
 
-			if (!unsub) {
+			if (!handle) {
 				await sseStream.writeSSE({ data: "[DONE]", event: "done" });
 				return;
 			}
 
-			// Wait for the background stream to finish
-			await existingStream.done;
+			// Wait for all events to be delivered (replay + live)
+			await handle.delivered;
 		});
 	}
 
@@ -439,11 +467,11 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 	});
 
 	// Register with stream manager — background consumer handles persistence
-	const activeStream = startStream(conversationId, cliStream, db);
+	startStream(conversationId, cliStream, db);
 
 	// Subscribe this SSE connection to the stream
 	return streamSSE(c, async (sseStream) => {
-		const unsub = subscribe(conversationId, async (event, data) => {
+		const handle = subscribe(conversationId, async (event, data) => {
 			try {
 				await sseStream.writeSSE({ data, event });
 			} catch {
@@ -451,12 +479,12 @@ Never fabricate citations. If you did not retrieve content from a tool, do not c
 			}
 		});
 
-		if (!unsub) {
+		if (!handle) {
 			await sseStream.writeSSE({ data: "[DONE]", event: "done" });
 			return;
 		}
 
-		// Wait for the background stream to finish
-		await activeStream.done;
+		// Wait for all events to be delivered (replay + live)
+		await handle.delivered;
 	});
 });

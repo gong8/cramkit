@@ -257,31 +257,79 @@ export function getStream(conversationId: string): ActiveStream | undefined {
 	return activeStreams.get(conversationId);
 }
 
+export interface SubscribeHandle {
+	/** Unsubscribe from the stream */
+	unsubscribe: () => void;
+	/** Resolves when all events (replay + live) have been delivered to the callback */
+	delivered: Promise<void>;
+}
+
 /**
  * Subscribe to a stream. Sends all buffered events first, then live events.
- * Returns an unsubscribe function.
+ * Uses an internal queue to ensure ordered delivery even when the callback is async.
+ * Returns a handle with unsubscribe + delivered promise, or null if no stream exists.
  */
-export function subscribe(conversationId: string, cb: Subscriber): (() => void) | null {
+export function subscribe(conversationId: string, cb: Subscriber): SubscribeHandle | null {
 	const stream = activeStreams.get(conversationId);
 	if (!stream) return null;
 
-	// Send buffered events
-	for (const { event, data } of stream.events) {
-		try {
-			cb(event, data);
-		} catch {
-			// subscriber errored during replay
+	// Queue-based delivery ensures events are sent in order, even for async callbacks
+	const queue: BufferedEvent[] = [];
+	let draining = false;
+	let active = true;
+	let resolveDelivered: () => void;
+	const delivered = new Promise<void>((resolve) => {
+		resolveDelivered = resolve;
+	});
+
+	async function drain() {
+		if (draining) return;
+		draining = true;
+		while (queue.length > 0 && active) {
+			const evt = queue.shift();
+			if (!evt) break;
+			try {
+				await cb(evt.event, evt.data);
+			} catch {
+				// subscriber errored, ignore
+			}
+		}
+		draining = false;
+		// If the stream is done and we've delivered everything, resolve
+		if (stream.status !== "streaming" && queue.length === 0) {
+			resolveDelivered();
 		}
 	}
 
-	// If already complete, don't add as subscriber
-	if (stream.status !== "streaming") {
-		return () => {};
+	function enqueue(event: string, data: string) {
+		queue.push({ event, data });
+		drain();
 	}
 
-	// Add as live subscriber
-	stream.subscribers.add(cb);
-	return () => {
-		stream.subscribers.delete(cb);
+	// Replay buffered events through the queue
+	for (const { event, data } of stream.events) {
+		enqueue(event, data);
+	}
+
+	// If already complete, just let the queue drain — no live subscription needed
+	if (stream.status !== "streaming") {
+		return {
+			unsubscribe: () => {
+				active = false;
+				resolveDelivered();
+			},
+			delivered,
+		};
+	}
+
+	// Add live subscriber that goes through the queue for ordered delivery
+	stream.subscribers.add(enqueue);
+	return {
+		unsubscribe: () => {
+			active = false;
+			stream.subscribers.delete(enqueue);
+			resolveDelivered();
+		},
+		delivered,
 	};
 }

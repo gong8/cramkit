@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const log = createLogger("web");
 
@@ -72,7 +73,7 @@ function ResourceContent({ resourceId }: { resourceId: string }) {
 
 	return (
 		<div className="prose prose-sm max-w-none p-4">
-			<ReactMarkdown>{data.content}</ReactMarkdown>
+			<ReactMarkdown remarkPlugins={[remarkGfm]}>{data.content}</ReactMarkdown>
 		</div>
 	);
 }

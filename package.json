@@ -11,7 +11,10 @@
 		"kill": "lsof -ti :8787,:5173 | xargs kill -9 2>/dev/null; echo 'Killed ports 8787, 5173'",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"test:coverage": "vitest run --coverage"
+		"test:coverage": "vitest run --coverage",
+		"typecheck": "turbo typecheck",
+		"quality": "bash scripts/quality-check.sh",
+		"check": "pnpm lint && pnpm typecheck && pnpm quality && pnpm test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",

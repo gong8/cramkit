@@ -68,13 +68,17 @@ export const indexResourceRequestSchema = z.object({
 	resourceId: z.string(),
 });
 
-export const chatStreamRequestSchema = z.object({
-	sessionId: z.string(),
-	conversationId: z.string(),
-	message: z.string().min(1),
-	attachmentIds: z.array(z.string()).optional(),
-	rewindToMessageId: z.string().optional(),
-});
+export const chatStreamRequestSchema = z
+	.object({
+		sessionId: z.string(),
+		conversationId: z.string(),
+		message: z.string(),
+		attachmentIds: z.array(z.string()).optional(),
+		rewindToMessageId: z.string().optional(),
+	})
+	.refine((data) => data.message.length >= 1 || (data.attachmentIds && data.attachmentIds.length >= 1), {
+		message: "Either message text or at least one attachment is required",
+	});
 
 // --- Import/Export schemas ---
 

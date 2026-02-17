@@ -48,7 +48,9 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
 // ─── Tool label mapping ───
@@ -289,7 +291,7 @@ function UserMessage() {
 function MarkdownText() {
 	return (
 		<MarkdownTextPrimitive
-			remarkPlugins={[remarkMath]}
+			remarkPlugins={[remarkGfm, remarkMath]}
 			rehypePlugins={[rehypeKatex]}
 			components={{
 				CodeHeader,
@@ -301,7 +303,7 @@ function MarkdownText() {
 function AssistantMessage() {
 	return (
 		<MessagePrimitive.Root className="group flex px-4 py-2">
-			<div className="flex flex-col gap-1 max-w-[80%]">
+			<div className="flex flex-col gap-1 max-w-full">
 				<div className="prose prose-sm rounded-2xl bg-muted px-4 py-2">
 					<MessagePrimitive.Content
 						components={{
@@ -460,7 +462,7 @@ function StopButton() {
 		<button
 			type="button"
 			onClick={() => threadRuntime.cancelRun()}
-			className="rounded-lg border border-border bg-background p-2 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+			className="rounded-lg bg-destructive p-2 text-destructive-foreground hover:opacity-90 transition-colors"
 			title="Stop generation (Escape)"
 		>
 			<Square className="h-4 w-4" />
@@ -509,16 +511,91 @@ function ExportButton({
 	);
 }
 
+// ─── Reconnect Stream View ───
+
+interface ReconnectStream {
+	content: string;
+	toolCalls: Map<
+		string,
+		{
+			toolCallId: string;
+			toolName: string;
+			args?: Record<string, unknown>;
+			result?: string;
+			isError?: boolean;
+		}
+	>;
+	thinkingText: string;
+	done: boolean;
+}
+
+function ReconnectStreamView({ stream }: { stream: ReconnectStream }) {
+	const cleanContent = stream.content
+		.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+		.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
+		.replace(/<tool_call[\s\S]*$/, "")
+		.replace(/<tool_result[\s\S]*$/, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+
+	return (
+		<div className="group flex px-4 py-2">
+			<div className="flex flex-col gap-1 max-w-full">
+				<div className="prose prose-sm rounded-2xl bg-muted px-4 py-2">
+					{stream.thinkingText && (
+						<ReasoningDisplay type="reasoning" text={stream.thinkingText} />
+					)}
+					{Array.from(stream.toolCalls.values()).map((tc) => {
+						const hasResult = tc.result !== undefined;
+						const label = getToolLabel(tc.toolName, tc.args ?? {});
+						return (
+							<div
+								key={tc.toolCallId}
+								className="my-1.5 rounded-lg border border-border bg-background text-sm"
+							>
+								<div className="flex items-center gap-2 px-3 py-2">
+									{tc.isError ? (
+										<AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+									) : hasResult ? (
+										<Check className="h-3.5 w-3.5 shrink-0 text-green-600" />
+									) : (
+										<Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+									)}
+									<span
+										className={`flex-1 truncate ${tc.isError ? "text-destructive" : "text-muted-foreground"}`}
+									>
+										{hasResult ? label : `${label}...`}
+									</span>
+								</div>
+							</div>
+						);
+					})}
+					{cleanContent && (
+						<ReactMarkdown
+							remarkPlugins={[remarkGfm, remarkMath]}
+							rehypePlugins={[rehypeKatex]}
+						>
+							{cleanContent}
+						</ReactMarkdown>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
 // ─── Chat Thread ───
 
 function ChatThread({
 	sessionId,
 	conversationId,
 	sessionName,
+	onStreamReconnected,
 }: {
 	sessionId: string;
 	conversationId: string;
 	sessionName: string;
+	onStreamReconnected?: () => void;
 }) {
 	const queryClient = useQueryClient();
 
@@ -651,6 +728,145 @@ function ChatThread({
 		adapters: { attachments: chatAttachmentAdapter, history },
 	});
 
+	// Reconnect to an active background stream on mount
+	const [reconnectStream, setReconnectStream] = useState<ReconnectStream | null>(null);
+	const reconnectViewportRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		let cancelled = false;
+		let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+
+		async function tryReconnect() {
+			try {
+				const status = await fetchStreamStatus(conversationId);
+				if (cancelled || !status.active || status.status !== "streaming") return;
+
+				// Active background stream — reconnect via dedicated endpoint
+				const response = await fetch(
+					`/api/chat/conversations/${conversationId}/stream-reconnect`,
+					{ method: "POST" },
+				);
+
+				if (!response.ok || cancelled) return;
+
+				reader = response.body?.getReader() ?? null;
+				if (!reader) return;
+
+				const state: ReconnectStream = {
+					content: "",
+					toolCalls: new Map(),
+					thinkingText: "",
+					done: false,
+				};
+				setReconnectStream({ ...state });
+
+				const decoder = new TextDecoder();
+				let buffer = "";
+				let currentEventType = "content";
+
+				while (!cancelled) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop() || "";
+
+					let updated = false;
+
+					for (const line of lines) {
+						const trimmed = line.trim();
+						if (!trimmed) continue;
+
+						if (trimmed.startsWith("event: ")) {
+							currentEventType = trimmed.slice(7);
+							continue;
+						}
+
+						if (trimmed.startsWith("data: ")) {
+							const data = trimmed.slice(6);
+							if (data === "[DONE]") {
+								state.done = true;
+								break;
+							}
+
+							try {
+								const parsed = JSON.parse(data);
+								switch (currentEventType) {
+									case "content":
+										if (parsed.content) {
+											state.content += parsed.content;
+											updated = true;
+										}
+										break;
+									case "tool_call_start": {
+										const { toolCallId, toolName } = parsed;
+										state.toolCalls.set(toolCallId, { toolCallId, toolName });
+										updated = true;
+										break;
+									}
+									case "tool_call_args": {
+										const { toolCallId, args } = parsed;
+										const tc = state.toolCalls.get(toolCallId);
+										if (tc) tc.args = args;
+										updated = true;
+										break;
+									}
+									case "tool_result": {
+										const { toolCallId, result, isError } = parsed;
+										const tc = state.toolCalls.get(toolCallId);
+										if (tc) {
+											tc.result = result;
+											tc.isError = isError;
+										}
+										updated = true;
+										break;
+									}
+									case "thinking_delta":
+										if (parsed.text) {
+											state.thinkingText += parsed.text;
+											updated = true;
+										}
+										break;
+								}
+							} catch {
+								// skip unparseable
+							}
+							currentEventType = "content";
+						}
+					}
+
+					if (updated && !cancelled) {
+						setReconnectStream({ ...state, toolCalls: new Map(state.toolCalls) });
+						// Auto-scroll only if user is near the bottom
+						const vp = reconnectViewportRef.current;
+						if (vp) {
+							const nearBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 80;
+							if (nearBottom) {
+								vp.scrollTo({ top: vp.scrollHeight });
+							}
+						}
+					}
+
+					if (state.done) break;
+				}
+
+				// Stream finished — clear reconnect state and reload thread
+				if (!cancelled) {
+					setReconnectStream(null);
+					onStreamReconnected?.();
+				}
+			} catch {
+				if (!cancelled) setReconnectStream(null);
+			}
+		}
+
+		tryReconnect();
+		return () => {
+			cancelled = true;
+			reader?.cancel().catch(() => {});
+		};
+	}, [conversationId, sessionId, onStreamReconnected]);
+
 	// Keyboard shortcuts
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -676,8 +892,8 @@ function ChatThread({
 					<ExportButton sessionName={sessionName} conversationId={conversationId} />
 				</div>
 
-				<ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col overflow-hidden">
-					<ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
+				<ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+					<ThreadPrimitive.Viewport ref={reconnectViewportRef} className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
 						<ThreadPrimitive.Empty>
 							<div className="flex h-full items-center justify-center">
 								<p className="text-muted-foreground">
@@ -692,15 +908,16 @@ function ChatThread({
 								EditComposer,
 							}}
 						/>
+						{reconnectStream && (
+							<ReconnectStreamView stream={reconnectStream} />
+						)}
 					</ThreadPrimitive.Viewport>
 
-					<div className="shrink-0 border-t border-border p-4">
-						<ThreadPrimitive.If running>
-							<div className="flex justify-center pb-2">
-								<StopButton />
-							</div>
-						</ThreadPrimitive.If>
+					<ThreadPrimitive.ScrollToBottom className="absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full border border-border bg-background p-2 shadow-md text-muted-foreground hover:text-foreground hover:bg-accent transition-all z-10 disabled:pointer-events-none disabled:opacity-0">
+						<ChevronDown className="h-4 w-4" />
+					</ThreadPrimitive.ScrollToBottom>
 
+					<div className="shrink-0 border-t border-border p-4">
 						<ComposerPrimitive.Root className="rounded-xl border border-input bg-background">
 							<ComposerPrimitive.Attachments
 								components={{
@@ -718,9 +935,14 @@ function ChatThread({
 									className="flex-1 resize-none bg-transparent text-sm outline-none"
 									autoFocus
 								/>
-								<ComposerPrimitive.Send className="rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 disabled:opacity-50">
-									<Send className="h-4 w-4" />
-								</ComposerPrimitive.Send>
+								<ThreadPrimitive.If running>
+									<StopButton />
+								</ThreadPrimitive.If>
+								<ThreadPrimitive.If running={false}>
+									<ComposerPrimitive.Send className="rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 disabled:opacity-50">
+										<Send className="h-4 w-4" />
+									</ComposerPrimitive.Send>
+								</ThreadPrimitive.If>
 							</div>
 						</ComposerPrimitive.Root>
 					</div>
@@ -1058,42 +1280,12 @@ export function Chat() {
 		});
 	}, [conversations, conversationsFetching, activeConversationId, sessionId, queryClient]);
 
-	// Poll background stream status — when a stream completes, bump the key
-	// to remount ChatThread so it loads the new assistant message from DB.
+	// When a background stream finishes and the ChatThread remounts,
+	// bump this key so it reloads the persisted assistant message from DB.
 	const [threadReloadKey, setThreadReloadKey] = useState(0);
-	const [bgStreaming, setBgStreaming] = useState(false);
-	useEffect(() => {
-		if (!activeConversationId) return;
-		const convId = activeConversationId;
-		let cancelled = false;
-		let timer: ReturnType<typeof setTimeout>;
-
-		async function check() {
-			try {
-				const status = await fetchStreamStatus(convId);
-				if (cancelled) return;
-				if (status.active && status.status === "streaming") {
-					setBgStreaming(true);
-					timer = setTimeout(check, 1500);
-				} else if (status.active && status.status === "complete") {
-					setBgStreaming(false);
-					// Stream completed while we were away — remount ChatThread
-					setThreadReloadKey((k) => k + 1);
-				} else {
-					setBgStreaming(false);
-				}
-			} catch {
-				if (!cancelled) setBgStreaming(false);
-			}
-		}
-
-		check();
-		return () => {
-			cancelled = true;
-			clearTimeout(timer);
-			setBgStreaming(false);
-		};
-	}, [activeConversationId]);
+	const handleStreamReconnected = useCallback(() => {
+		setThreadReloadKey((k) => k + 1);
+	}, []);
 
 	const handleSelectConversation = useCallback(
 		(convId: string) => {
@@ -1136,31 +1328,13 @@ export function Chat() {
 
 				<div className="min-h-0 flex-1 overflow-hidden">
 					{activeConversationId ? (
-						bgStreaming ? (
-							<div className="flex h-full flex-col">
-								<ChatThread
-									key={`${activeConversationId}-${threadReloadKey}`}
-									sessionId={sessionId}
-									conversationId={activeConversationId}
-									sessionName={session?.name || "Chat"}
-								/>
-								<div className="shrink-0 border-t border-border px-4 py-3">
-									<div className="flex items-center gap-2 justify-center">
-										<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-										<span className="text-sm text-muted-foreground">
-											Generating response in background...
-										</span>
-									</div>
-								</div>
-							</div>
-						) : (
-							<ChatThread
-								key={`${activeConversationId}-${threadReloadKey}`}
-								sessionId={sessionId}
-								conversationId={activeConversationId}
-								sessionName={session?.name || "Chat"}
-							/>
-						)
+						<ChatThread
+							key={`${activeConversationId}-${threadReloadKey}`}
+							sessionId={sessionId}
+							conversationId={activeConversationId}
+							sessionName={session?.name || "Chat"}
+							onStreamReconnected={handleStreamReconnected}
+						/>
 					) : (
 						<EmptyState sessionId={sessionId} onCreated={handleSelectConversation} />
 					)}
