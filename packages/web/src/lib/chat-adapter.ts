@@ -292,6 +292,20 @@ export function createCramKitChatAdapter(
 			const attachmentIds = extractAttachmentIds(lastMessage);
 			const rewindToMessageId = extractRewindId(lastMessage);
 
+			// When editing a message, assistant-ui generates a new ID for it (not a CUID).
+			// In that case, find the last CUID in the messages array (the message before the
+			// edited one) so the backend can delete everything after it.
+			let afterMessageId: string | undefined;
+			if (!rewindToMessageId && messages.length >= 2) {
+				for (let i = messages.length - 2; i >= 0; i--) {
+					const cuid = extractRewindId(messages[i]);
+					if (cuid) {
+						afterMessageId = cuid;
+						break;
+					}
+				}
+			}
+
 			const response = await fetch(`${BASE_URL}/chat/stream`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -301,6 +315,7 @@ export function createCramKitChatAdapter(
 					message: userText,
 					attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
 					rewindToMessageId,
+					afterMessageId,
 				}),
 				signal: abortSignal,
 			});

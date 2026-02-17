@@ -87,6 +87,7 @@ export const chatStreamRequestSchema = z
 		message: z.string(),
 		attachmentIds: z.array(z.string()).optional(),
 		rewindToMessageId: z.string().optional(),
+		afterMessageId: z.string().optional(),
 	})
 	.refine(
 		(data) => data.message.length >= 1 || (data.attachmentIds && data.attachmentIds.length >= 1),

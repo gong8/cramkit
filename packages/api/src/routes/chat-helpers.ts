@@ -46,11 +46,13 @@ export async function persistUserMessage(
 		message: string;
 		attachmentIds?: string[];
 		rewindToMessageId?: string;
+		afterMessageId?: string;
 	},
 ) {
-	const { conversationId, message, rewindToMessageId, attachmentIds } = opts;
+	const { conversationId, message, rewindToMessageId, afterMessageId, attachmentIds } = opts;
 
 	if (rewindToMessageId) {
+		// Retry: the target message keeps its ID, content is updated, everything after is deleted
 		const targetMessage = await db.message.findUnique({
 			where: { id: rewindToMessageId },
 		});
@@ -71,7 +73,34 @@ export async function persistUserMessage(
 				data: { content: message },
 			});
 		}
+	} else if (afterMessageId) {
+		// Edit: delete everything after the anchor message, then create the new user message
+		const anchorMessage = await db.message.findUnique({
+			where: { id: afterMessageId },
+		});
+		if (!anchorMessage || anchorMessage.conversationId !== conversationId) {
+			return { error: "Anchor message not found" as const };
+		}
+
+		await db.message.deleteMany({
+			where: {
+				conversationId,
+				createdAt: { gt: anchorMessage.createdAt },
+			},
+		});
+
+		const userMessage = await db.message.create({
+			data: { conversationId, role: "user", content: message },
+		});
+
+		if (attachmentIds && attachmentIds.length > 0) {
+			await db.chatAttachment.updateMany({
+				where: { id: { in: attachmentIds }, messageId: null },
+				data: { messageId: userMessage.id },
+			});
+		}
 	} else {
+		// New message
 		const userMessage = await db.message.create({
 			data: { conversationId, role: "user", content: message },
 		});
@@ -280,15 +309,18 @@ export async function launchChatStream(
 		message: string;
 		attachmentIds?: string[];
 		rewindToMessageId?: string;
+		afterMessageId?: string;
 	},
 ) {
-	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId } = opts;
+	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId, afterMessageId } =
+		opts;
 
 	const persistResult = await persistUserMessage(db, {
 		conversationId,
 		message,
 		attachmentIds,
 		rewindToMessageId,
+		afterMessageId,
 	});
 	if (persistResult.error) {
 		return c.json({ error: persistResult.error }, 404);
