@@ -200,7 +200,7 @@ function ResourceFilter({
 											onChange={() => toggleResource(r.id)}
 											className="rounded"
 										/>
-										<span className="truncate text-muted-foreground">{r.label || r.name}</span>
+										<span className="truncate text-muted-foreground">{r.name}</span>
 									</label>
 								))}
 							</div>

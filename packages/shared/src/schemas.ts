@@ -16,7 +16,7 @@ export const SplitModeEnum = z.enum(["auto", "split", "single"]);
 
 const sessionOptionalFields = {
 	module: nopt(z.string()),
-	examDate: nopt(z.string().date()),
+	examDate: nopt(z.union([z.string().date(), z.string().datetime()])),
 	scope: nopt(z.string()),
 	notes: nopt(z.string()),
 };
