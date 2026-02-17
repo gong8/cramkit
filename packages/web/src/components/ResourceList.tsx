@@ -1,8 +1,7 @@
-import { deleteResource, indexResource, removeFileFromResource, type Resource } from "@/lib/api";
+import { deleteResource, indexResource, removeFileFromResource, type BatchResource, type Resource } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQueryClient } from "@tanstack/react-query";
 import { BrainCircuit, FileText, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
 
 const log = createLogger("web");
 
@@ -32,11 +31,20 @@ const ROLE_LABELS: Record<string, string> = {
 interface ResourceListProps {
 	resources: Resource[];
 	sessionId: string;
+	batchResources: BatchResource[] | null;
+	onIndexResource: (resourceId: string) => void;
 }
 
-export function ResourceList({ resources, sessionId }: ResourceListProps) {
+export function ResourceList({ resources, sessionId, batchResources, onIndexResource }: ResourceListProps) {
 	const queryClient = useQueryClient();
-	const [indexingResources, setIndexingResources] = useState<Set<string>>(new Set());
+
+	// Build a map of batch resource statuses for quick lookup
+	const batchStatusMap = new Map<string, BatchResource["status"]>();
+	if (batchResources) {
+		for (const br of batchResources) {
+			batchStatusMap.set(br.id, br.status);
+		}
+	}
 
 	const handleDeleteResource = async (resourceId: string) => {
 		log.info(`handleDeleteResource — ${resourceId}`);
@@ -60,141 +68,119 @@ export function ResourceList({ resources, sessionId }: ResourceListProps) {
 		}
 	};
 
-	const handleIndex = async (resourceId: string) => {
-		log.info(`handleIndex — indexing resource ${resourceId}`);
-		setIndexingResources((prev) => new Set(prev).add(resourceId));
-		try {
-			await indexResource(sessionId, resourceId);
-			log.info(`handleIndex — queued resource ${resourceId}`);
-			// Poll for completion
-			const poll = setInterval(async () => {
-				const session = await queryClient.fetchQuery({
-					queryKey: ["session", sessionId],
-					staleTime: 0,
-				}) as { resources?: Resource[] };
-				const resource = session.resources?.find((r) => r.id === resourceId);
-				if (resource?.isGraphIndexed) {
-					clearInterval(poll);
-					setIndexingResources((prev) => {
-						const next = new Set(prev);
-						next.delete(resourceId);
-						return next;
-					});
-					queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
-				}
-			}, 2000);
-		} catch (err) {
-			log.error(`handleIndex — failed`, err);
-			setIndexingResources((prev) => {
-				const next = new Set(prev);
-				next.delete(resourceId);
-				return next;
-			});
-		}
-	};
-
 	if (resources.length === 0) {
 		return <p className="text-sm text-muted-foreground">No resources uploaded yet.</p>;
 	}
 
 	return (
 		<div className="space-y-3">
-			{resources.map((resource) => (
-				<div key={resource.id} className="rounded-md border border-border">
-					{/* Resource header */}
-					<div className="flex items-center justify-between px-3 py-2">
-						<div className="flex items-center gap-3">
-							<span
-								className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-									TYPE_COLORS[resource.type] || TYPE_COLORS.OTHER
-								}`}
-							>
-								{TYPE_LABELS[resource.type] || resource.type}
-							</span>
-							<span className="text-sm font-medium">{resource.name}</span>
-							{resource.label === "includes_mark_scheme" && (
-								<span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-									+ Mark Scheme
-								</span>
-							)}
-							{resource.label === "includes_solutions" && (
-								<span className="rounded bg-purple-50 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">
-									+ Solutions
-								</span>
-							)}
-						</div>
-						<div className="flex items-center gap-2">
-							<span
-								className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
-							>
-								{resource.isIndexed ? "Ready" : "Processing"}
-							</span>
-							{resource.isIndexed && !resource.isGraphIndexed && !indexingResources.has(resource.id) && (
-								<button
-									onClick={() => handleIndex(resource.id)}
-									className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
-									title="Index for knowledge graph"
-								>
-									<BrainCircuit className="h-3.5 w-3.5" />
-									Index
-								</button>
-							)}
-							{indexingResources.has(resource.id) && (
-								<span className="text-xs text-amber-600">Indexing...</span>
-							)}
-							{resource.isGraphIndexed && !indexingResources.has(resource.id) && (
-								<>
-									<span className="text-xs text-violet-600">Indexed</span>
-									<button
-										onClick={() => handleIndex(resource.id)}
-										className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-violet-500/10 hover:text-violet-600"
-										title="Reindex for knowledge graph"
-									>
-										<RefreshCw className="h-3 w-3" />
-										Reindex
-									</button>
-								</>
-							)}
-							<button
-								onClick={() => handleDeleteResource(resource.id)}
-								className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-							>
-								<Trash2 className="h-4 w-4" />
-							</button>
-						</div>
-					</div>
+			{resources.map((resource) => {
+				const batchStatus = batchStatusMap.get(resource.id);
+				const isBusy = batchStatus === "pending" || batchStatus === "indexing";
 
-					{/* Files within resource */}
-					{resource.files.length > 0 && (
-						<div className="border-t border-border/50 bg-muted/20">
-							{resource.files.map((file) => (
-								<div
-									key={file.id}
-									className="flex items-center justify-between px-3 py-1.5 text-sm"
+				return (
+					<div key={resource.id} className="rounded-md border border-border">
+						{/* Resource header */}
+						<div className="flex items-center justify-between px-3 py-2">
+							<div className="flex items-center gap-3">
+								<span
+									className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+										TYPE_COLORS[resource.type] || TYPE_COLORS.OTHER
+									}`}
 								>
-									<div className="flex items-center gap-2">
-										<FileText className="h-3.5 w-3.5 text-muted-foreground" />
-										<span className="text-muted-foreground">{file.filename}</span>
-										{file.role !== "PRIMARY" && (
-											<span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-												{ROLE_LABELS[file.role] || file.role}
-											</span>
+									{TYPE_LABELS[resource.type] || resource.type}
+								</span>
+								<span className="text-sm font-medium">{resource.name}</span>
+								{resource.label === "includes_mark_scheme" && (
+									<span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+										+ Mark Scheme
+									</span>
+								)}
+								{resource.label === "includes_solutions" && (
+									<span className="rounded bg-purple-50 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">
+										+ Solutions
+									</span>
+								)}
+							</div>
+							<div className="flex items-center gap-2">
+								<span
+									className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
+								>
+									{resource.isIndexed ? "Ready" : "Processing"}
+								</span>
+								{/* Show batch status */}
+								{batchStatus === "indexing" && (
+									<span className="text-xs text-amber-600">Indexing...</span>
+								)}
+								{batchStatus === "pending" && (
+									<span className="text-xs text-muted-foreground">Queued</span>
+								)}
+								{/* Index button — hidden when resource is busy */}
+								{resource.isIndexed && !resource.isGraphIndexed && !isBusy && (
+									<button
+										onClick={() => onIndexResource(resource.id)}
+										className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
+										title="Index for knowledge graph"
+									>
+										<BrainCircuit className="h-3.5 w-3.5" />
+										Index
+									</button>
+								)}
+								{/* Reindex button — hidden when resource is busy */}
+								{resource.isGraphIndexed && !isBusy && (
+									<>
+										<span className="text-xs text-violet-600">Indexed</span>
+										<button
+											onClick={() => onIndexResource(resource.id)}
+											className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-violet-500/10 hover:text-violet-600"
+											title="Reindex for knowledge graph"
+										>
+											<RefreshCw className="h-3 w-3" />
+											Reindex
+										</button>
+									</>
+								)}
+								<button
+									onClick={() => handleDeleteResource(resource.id)}
+									className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+								>
+									<Trash2 className="h-4 w-4" />
+								</button>
+							</div>
+						</div>
+
+						{/* Files within resource */}
+						{resource.files.length > 0 && (
+							<div className="border-t border-border/50 bg-muted/20">
+								{resource.files.map((file) => (
+									<div
+										key={file.id}
+										className="flex items-center justify-between px-3 py-1.5 text-sm"
+									>
+										<div className="flex items-center gap-2">
+											<FileText className="h-3.5 w-3.5 text-muted-foreground" />
+											<span className="text-muted-foreground">{file.filename}</span>
+											{file.role !== "PRIMARY" && (
+												<span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+													{ROLE_LABELS[file.role] || file.role}
+												</span>
+											)}
+										</div>
+										{resource.files.length > 1 && (
+											<button
+												onClick={() => handleRemoveFile(resource.id, file.id)}
+												className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+											>
+												<Trash2 className="h-3.5 w-3.5" />
+											</button>
 										)}
 									</div>
-									{resource.files.length > 1 && (
-										<button
-											onClick={() => handleRemoveFile(resource.id, file.id)}
-											className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-										>
-											<Trash2 className="h-3.5 w-3.5" />
-										</button>
-									)}
-								</div>
-							))}
-						</div>
-					)}
-				</div>
-			))}
+								))}
+							</div>
+						)}
+					</div>
+				);
+			})}
 		</div>
 	);
 }

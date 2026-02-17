@@ -110,7 +110,7 @@ graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
-	enqueueGraphIndexing(parsed.data.resourceId);
+	enqueueSessionGraphIndexing(sessionId, [parsed.data.resourceId]);
 	log.info(`POST /graph/sessions/${sessionId}/index-resource — queued ${parsed.data.resourceId}`);
 	return c.json({ ok: true, resourceId: parsed.data.resourceId });
 });
@@ -204,20 +204,53 @@ graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	});
 	const avgDurationMs = durationStats._avg.graphIndexDurationMs ?? null;
 
+	// Enrich batch with per-resource details
+	let batchPayload = null;
+	if (batch) {
+		const completedSet = new Set(batch.completedResourceIds);
+		const batchResources = await db.resource.findMany({
+			where: { id: { in: batch.resourceIds } },
+			select: { id: true, name: true, type: true, graphIndexDurationMs: true },
+		});
+		const resourceMap = new Map(batchResources.map((r) => [r.id, r]));
+
+		const resources = batch.resourceIds.map((id) => {
+			const r = resourceMap.get(id);
+			let status: "pending" | "indexing" | "completed" | "cancelled";
+			if (completedSet.has(id)) {
+				status = "completed";
+			} else if (batch.currentResourceId === id) {
+				status = "indexing";
+			} else if (batch.cancelled) {
+				status = "cancelled";
+			} else {
+				status = "pending";
+			}
+			return {
+				id,
+				name: r?.name ?? "Unknown",
+				type: r?.type ?? "OTHER",
+				status,
+				durationMs: completedSet.has(id) ? (r?.graphIndexDurationMs ?? null) : null,
+			};
+		});
+
+		batchPayload = {
+			batchTotal: batch.resourceIds.length,
+			batchCompleted: batch.completedResourceIds.length,
+			currentResourceId: batch.currentResourceId,
+			startedAt: batch.startedAt,
+			cancelled: batch.cancelled,
+			resources,
+		};
+	}
+
 	log.info(`GET /graph/sessions/${sessionId}/index-status — total=${total}, indexed=${indexed}, inProgress=${inProgress}`);
 	return c.json({
 		total,
 		indexed,
 		inProgress,
 		avgDurationMs,
-		batch: batch
-			? {
-					batchTotal: batch.resourceIds.length,
-					batchCompleted: batch.completedResourceIds.length,
-					currentResourceId: batch.currentResourceId,
-					startedAt: batch.startedAt,
-					cancelled: batch.cancelled,
-				}
-			: null,
+		batch: batchPayload,
 	});
 });

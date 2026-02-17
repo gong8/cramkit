@@ -293,10 +293,10 @@ export async function processResource(resourceId: string): Promise<void> {
 			}
 		}
 
-		// Step 4: Mark resource as indexed
+		// Step 4: Mark resource as indexed (reset graph index since chunks changed)
 		await db.resource.update({
 			where: { id: resourceId },
-			data: { isIndexed: true },
+			data: { isIndexed: true, isGraphIndexed: false, graphIndexDurationMs: null },
 		});
 
 		log.info(`processResource — completed "${resource.name}"`);

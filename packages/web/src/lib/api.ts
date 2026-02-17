@@ -94,12 +94,21 @@ export interface SessionGraph {
 	resources: GraphResource[];
 }
 
+export interface BatchResource {
+	id: string;
+	name: string;
+	type: string;
+	status: "pending" | "indexing" | "completed" | "cancelled";
+	durationMs: number | null;
+}
+
 export interface BatchStatus {
 	batchTotal: number;
 	batchCompleted: number;
 	currentResourceId: string | null;
 	startedAt: number;
 	cancelled: boolean;
+	resources: BatchResource[];
 }
 
 export interface IndexStatus {

@@ -16,6 +16,12 @@ export async function chatCompletion(
 
 	log.info(`chatCompletion — model=${model}, messages=${messages.length}, temperature=${temperature}`);
 
+	// Strip null bytes from message content — PDF extraction can leave them in
+	const sanitizedMessages = messages.map((m) => ({
+		...m,
+		content: m.content.replaceAll("\0", ""),
+	}));
+
 	const response = await fetch(`${LLM_BASE_URL}/chat/completions`, {
 		method: "POST",
 		headers: {
@@ -24,7 +30,7 @@ export async function chatCompletion(
 		},
 		body: JSON.stringify({
 			model,
-			messages,
+			messages: sanitizedMessages,
 			temperature,
 			max_tokens: maxTokens,
 		}),
