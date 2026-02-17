@@ -11,12 +11,11 @@ async function seedGraphData() {
 		data: { name: "PDE Test Session" },
 	});
 
-	const file = await db.file.create({
+	const resource = await db.resource.create({
 		data: {
 			sessionId: session.id,
-			filename: "PDE_Lectures.pdf",
+			name: "PDE Lectures",
 			type: "LECTURE_NOTES",
-			rawPath: "/tmp/test.pdf",
 			isIndexed: true,
 		},
 	});
@@ -27,7 +26,7 @@ async function seedGraphData() {
 		chunks.push(
 			await db.chunk.create({
 				data: {
-					fileId: file.id,
+					resourceId: resource.id,
 					index: i,
 					title: `Section ${i + 1}`,
 					content: `Content for section ${i + 1} about PDEs`,
@@ -62,13 +61,13 @@ async function seedGraphData() {
 		},
 	});
 
-	// Create relationships: file -> concept
+	// Create relationships: resource -> concept
 	await db.relationship.create({
 		data: {
 			sessionId: session.id,
-			sourceType: "file",
-			sourceId: file.id,
-			sourceLabel: file.filename,
+			sourceType: "resource",
+			sourceId: resource.id,
+			sourceLabel: resource.name,
 			targetType: "concept",
 			targetId: heatEq.id,
 			targetLabel: "Heat Equation",
@@ -105,7 +104,7 @@ async function seedGraphData() {
 		},
 	});
 
-	return { session, file, chunks, concepts: { heatEq, waveEq, sepVars } };
+	return { session, resource, chunks, concepts: { heatEq, waveEq, sepVars } };
 }
 
 beforeEach(async () => {
@@ -140,16 +139,16 @@ describe("searchGraph", () => {
 		expect(results.length).toBeGreaterThan(0);
 	});
 
-	it("follows file-concept → file-chunks path", async () => {
-		const { session, file, chunks } = await seedGraphData();
+	it("follows resource-concept → resource-chunks path", async () => {
+		const { session, resource, chunks } = await seedGraphData();
 
-		// Heat Equation is linked to the file, so its chunks should be returned
+		// Heat Equation is linked to the resource, so its chunks should be returned
 		const results = await searchGraph(session.id, "Heat Equation", 10);
 
 		expect(results.length).toBeGreaterThan(0);
-		// Results should include chunks from the linked file
-		const resultFileIds = results.map((r) => r.fileId);
-		expect(resultFileIds).toContain(file.id);
+		// Results should include chunks from the linked resource
+		const resultResourceIds = results.map((r) => r.resourceId);
+		expect(resultResourceIds).toContain(resource.id);
 	});
 
 	it("returns relatedConcepts annotation", async () => {
@@ -173,13 +172,13 @@ describe("searchGraph", () => {
 	});
 
 	it("respects limit parameter", async () => {
-		const { session, file, concepts } = await seedGraphData();
+		const { session, resource, concepts } = await seedGraphData();
 
 		// Add many more chunks linked to the same concept
 		for (let i = 5; i < 25; i++) {
 			const chunk = await db.chunk.create({
 				data: {
-					fileId: file.id,
+					resourceId: resource.id,
 					index: i,
 					title: `Extra Section ${i}`,
 					content: `Extra content ${i}`,
@@ -205,21 +204,20 @@ describe("searchGraph", () => {
 	});
 
 	it("full PDE graph: search 'Separation Of Variables'", async () => {
-		const { session, file, chunks, concepts } = await seedGraphData();
+		const { session, resource, chunks, concepts } = await seedGraphData();
 
-		// Add a problem sheet file with chunk linked to separation of variables
-		const sheetFile = await db.file.create({
+		// Add a problem sheet resource with chunk linked to separation of variables
+		const sheetResource = await db.resource.create({
 			data: {
 				sessionId: session.id,
-				filename: "PDE_Sheet_1.pdf",
+				name: "PDE Sheet 1",
 				type: "PROBLEM_SHEET",
-				rawPath: "/tmp/sheet1.pdf",
 				isIndexed: true,
 			},
 		});
 		const sheetChunk = await db.chunk.create({
 			data: {
-				fileId: sheetFile.id,
+				resourceId: sheetResource.id,
 				index: 0,
 				title: "Problem Sheet 1",
 				content: "Apply separation of variables to the heat equation",
@@ -241,8 +239,8 @@ describe("searchGraph", () => {
 		const results = await searchGraph(session.id, "Separation Of Variables", 10);
 
 		expect(results.length).toBeGreaterThanOrEqual(2);
-		const fileTypes = results.map((r) => r.fileType);
-		expect(fileTypes).toContain("LECTURE_NOTES");
-		expect(fileTypes).toContain("PROBLEM_SHEET");
+		const resourceTypes = results.map((r) => r.resourceType);
+		expect(resourceTypes).toContain("LECTURE_NOTES");
+		expect(resourceTypes).toContain("PROBLEM_SHEET");
 	});
 });

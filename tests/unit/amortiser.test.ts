@@ -10,12 +10,11 @@ async function seedForAmortiser() {
 		data: { name: "Amortiser Test Session" },
 	});
 
-	const file = await db.file.create({
+	const resource = await db.resource.create({
 		data: {
 			sessionId: session.id,
-			filename: "test.pdf",
+			name: "Test Resource",
 			type: "LECTURE_NOTES",
-			rawPath: "/tmp/test.pdf",
 			isIndexed: true,
 		},
 	});
@@ -25,7 +24,7 @@ async function seedForAmortiser() {
 		chunks.push(
 			await db.chunk.create({
 				data: {
-					fileId: file.id,
+					resourceId: resource.id,
 					index: i,
 					content: `Chunk content ${i}`,
 				},
@@ -42,7 +41,7 @@ async function seedForAmortiser() {
 		},
 	});
 
-	return { session, file, chunks, concept };
+	return { session, resource, chunks, concept };
 }
 
 beforeEach(async () => {
@@ -51,11 +50,11 @@ beforeEach(async () => {
 
 describe("amortiseSearchResults", () => {
 	it("creates chunk-concept relationships", async () => {
-		const { session, chunks, concept } = await seedForAmortiser();
+		const { session, resource, chunks, concept } = await seedForAmortiser();
 
 		const contentResults = chunks.slice(0, 2).map((c) => ({
 			chunkId: c.id,
-			fileId: c.fileId,
+			resourceId: resource.id,
 		}));
 
 		await amortiseSearchResults(session.id, "Heat Equation", contentResults);
@@ -73,10 +72,10 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("createdBy is 'amortised', confidence is 0.6", async () => {
-		const { session, chunks } = await seedForAmortiser();
+		const { session, resource, chunks } = await seedForAmortiser();
 
 		await amortiseSearchResults(session.id, "Heat Equation", [
-			{ chunkId: chunks[0].id, fileId: chunks[0].fileId },
+			{ chunkId: chunks[0].id, resourceId: resource.id },
 		]);
 
 		const rel = await db.relationship.findFirst({
@@ -89,9 +88,9 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("skips existing relationships", async () => {
-		const { session, chunks, concept } = await seedForAmortiser();
+		const { session, resource, chunks, concept } = await seedForAmortiser();
 
-		const contentResults = [{ chunkId: chunks[0].id, fileId: chunks[0].fileId }];
+		const contentResults = [{ chunkId: chunks[0].id, resourceId: resource.id }];
 
 		await amortiseSearchResults(session.id, "Heat Equation", contentResults);
 		const countAfterFirst = await db.relationship.count({
@@ -110,12 +109,11 @@ describe("amortiseSearchResults", () => {
 	it("caps at 10 new relationships", async () => {
 		const session = await db.session.create({ data: { name: "Cap Test" } });
 
-		const file = await db.file.create({
+		const resource = await db.resource.create({
 			data: {
 				sessionId: session.id,
-				filename: "big.pdf",
+				name: "Big Resource",
 				type: "LECTURE_NOTES",
-				rawPath: "/tmp/big.pdf",
 				isIndexed: true,
 			},
 		});
@@ -125,7 +123,7 @@ describe("amortiseSearchResults", () => {
 		for (let i = 0; i < 20; i++) {
 			chunks.push(
 				await db.chunk.create({
-					data: { fileId: file.id, index: i, content: `chunk ${i}` },
+					data: { resourceId: resource.id, index: i, content: `chunk ${i}` },
 				}),
 			);
 		}
@@ -137,7 +135,7 @@ describe("amortiseSearchResults", () => {
 			});
 		}
 
-		const contentResults = chunks.map((c) => ({ chunkId: c.id, fileId: c.fileId }));
+		const contentResults = chunks.map((c) => ({ chunkId: c.id, resourceId: resource.id }));
 
 		await amortiseSearchResults(session.id, "Heat", contentResults);
 
@@ -149,10 +147,10 @@ describe("amortiseSearchResults", () => {
 	});
 
 	it("does nothing when no concepts match query", async () => {
-		const { session, chunks } = await seedForAmortiser();
+		const { session, resource, chunks } = await seedForAmortiser();
 
 		await amortiseSearchResults(session.id, "quantum mechanics", [
-			{ chunkId: chunks[0].id, fileId: chunks[0].fileId },
+			{ chunkId: chunks[0].id, resourceId: resource.id },
 		]);
 
 		const rels = await db.relationship.findMany({
@@ -178,7 +176,7 @@ describe("amortiseSearchResults", () => {
 		// Even with invalid session ID, amortiser should swallow errors
 		await expect(
 			amortiseSearchResults("nonexistent-session", "test", [
-				{ chunkId: "bad-id", fileId: "bad-id" },
+				{ chunkId: "bad-id", resourceId: "bad-id" },
 			]),
 		).resolves.toBeUndefined();
 	});

@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../packages/api/src/services/graph-indexer.js", () => ({
-	indexFileGraph: vi.fn().mockResolvedValue(undefined),
+	indexResourceGraph: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../packages/api/src/services/file-processor.js", () => ({
-	processFile: vi.fn().mockResolvedValue(undefined),
+vi.mock("../../packages/api/src/services/resource-processor.js", () => ({
+	processResource: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { indexFileGraph } from "../../packages/api/src/services/graph-indexer.js";
-import { processFile } from "../../packages/api/src/services/file-processor.js";
+import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
+import { processResource } from "../../packages/api/src/services/resource-processor.js";
 import {
 	enqueueGraphIndexing,
 	enqueueSessionGraphIndexing,
@@ -19,45 +19,45 @@ import {
 } from "../../packages/api/src/lib/queue.js";
 
 beforeEach(() => {
-	vi.mocked(indexFileGraph).mockReset().mockResolvedValue(undefined);
-	vi.mocked(processFile).mockReset().mockResolvedValue(undefined);
+	vi.mocked(indexResourceGraph).mockReset().mockResolvedValue(undefined);
+	vi.mocked(processResource).mockReset().mockResolvedValue(undefined);
 });
 
 describe("queue", () => {
-	it("enqueueGraphIndexing calls indexFileGraph", async () => {
-		vi.mocked(indexFileGraph).mockResolvedValue(undefined);
+	it("enqueueGraphIndexing calls indexResourceGraph", async () => {
+		vi.mocked(indexResourceGraph).mockResolvedValue(undefined);
 
-		enqueueGraphIndexing("file-1");
+		enqueueGraphIndexing("resource-1");
 
 		// Wait for the queue to process
 		await vi.waitFor(() => {
-			expect(indexFileGraph).toHaveBeenCalledWith("file-1");
+			expect(indexResourceGraph).toHaveBeenCalledWith("resource-1");
 		});
 	});
 
-	it("enqueueSessionGraphIndexing enqueues all files", async () => {
-		const fileIds = ["f1", "f2", "f3", "f4", "f5"];
+	it("enqueueSessionGraphIndexing enqueues all resources", async () => {
+		const resourceIds = ["r1", "r2", "r3", "r4", "r5"];
 
-		enqueueSessionGraphIndexing("session-1", fileIds);
+		enqueueSessionGraphIndexing("session-1", resourceIds);
 
 		await vi.waitFor(() => {
-			expect(indexFileGraph).toHaveBeenCalledTimes(5);
+			expect(indexResourceGraph).toHaveBeenCalledTimes(5);
 		});
 
-		for (const id of fileIds) {
-			expect(indexFileGraph).toHaveBeenCalledWith(id);
+		for (const id of resourceIds) {
+			expect(indexResourceGraph).toHaveBeenCalledWith(id);
 		}
 	});
 
 	it("getIndexingQueueSize returns pending + active", () => {
 		// Create long-running tasks to observe queue size
-		vi.mocked(indexFileGraph).mockImplementation(
+		vi.mocked(indexResourceGraph).mockImplementation(
 			() => new Promise((resolve) => setTimeout(resolve, 100)),
 		);
 
-		enqueueGraphIndexing("f1");
-		enqueueGraphIndexing("f2");
-		enqueueGraphIndexing("f3");
+		enqueueGraphIndexing("r1");
+		enqueueGraphIndexing("r2");
+		enqueueGraphIndexing("r3");
 
 		// Immediately after enqueuing, some should be pending
 		const size = getIndexingQueueSize();
@@ -69,15 +69,15 @@ describe("queue", () => {
 		let maxConcurrent = 0;
 		const completed: string[] = [];
 
-		vi.mocked(indexFileGraph).mockImplementation(async (fileId: string) => {
+		vi.mocked(indexResourceGraph).mockImplementation(async (resourceId: string) => {
 			concurrent++;
 			maxConcurrent = Math.max(maxConcurrent, concurrent);
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			concurrent--;
-			completed.push(fileId);
+			completed.push(resourceId);
 		});
 
-		const ids = ["conc-f1", "conc-f2", "conc-f3", "conc-f4", "conc-f5"];
+		const ids = ["conc-r1", "conc-r2", "conc-r3", "conc-r4", "conc-r5"];
 		for (const id of ids) {
 			enqueueGraphIndexing(id);
 		}
@@ -101,24 +101,24 @@ describe("queue", () => {
 		let processingRunning = false;
 		let indexingRanWhileProcessing = false;
 
-		vi.mocked(processFile).mockImplementation(async () => {
+		vi.mocked(processResource).mockImplementation(async () => {
 			processingRunning = true;
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			processingRunning = false;
 		});
 
-		vi.mocked(indexFileGraph).mockImplementation(async () => {
+		vi.mocked(indexResourceGraph).mockImplementation(async () => {
 			if (processingRunning) indexingRanWhileProcessing = true;
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		});
 
-		enqueueProcessing("file-a");
-		enqueueGraphIndexing("file-b");
+		enqueueProcessing("resource-a");
+		enqueueGraphIndexing("resource-b");
 
 		await vi.waitFor(
 			() => {
-				expect(processFile).toHaveBeenCalledTimes(1);
-				expect(indexFileGraph).toHaveBeenCalledTimes(1);
+				expect(processResource).toHaveBeenCalledTimes(1);
+				expect(indexResourceGraph).toHaveBeenCalledTimes(1);
 			},
 			{ timeout: 2000 },
 		);

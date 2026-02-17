@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createConceptSchema, indexFileRequestSchema } from "@cramkit/shared";
+import { createConceptSchema, indexResourceRequestSchema } from "@cramkit/shared";
 
 describe("createConceptSchema", () => {
 	it("accepts valid input", () => {
@@ -33,14 +33,14 @@ describe("createConceptSchema", () => {
 	});
 });
 
-describe("indexFileRequestSchema", () => {
-	it("accepts valid fileId", () => {
-		const result = indexFileRequestSchema.safeParse({ fileId: "clxyz123" });
+describe("indexResourceRequestSchema", () => {
+	it("accepts valid resourceId", () => {
+		const result = indexResourceRequestSchema.safeParse({ resourceId: "clxyz123" });
 		expect(result.success).toBe(true);
 	});
 
-	it("rejects missing fileId", () => {
-		const result = indexFileRequestSchema.safeParse({});
+	it("rejects missing resourceId", () => {
+		const result = indexResourceRequestSchema.safeParse({});
 		expect(result.success).toBe(false);
 	});
 });

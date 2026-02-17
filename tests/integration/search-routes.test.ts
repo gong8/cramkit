@@ -21,12 +21,11 @@ function getApp() {
 async function seedSearchData() {
 	const session = await db.session.create({ data: { name: "Search Test" } });
 
-	const file = await db.file.create({
+	const resource = await db.resource.create({
 		data: {
 			sessionId: session.id,
-			filename: "PDE_Lectures.pdf",
+			name: "PDE Lectures",
 			type: "LECTURE_NOTES",
-			rawPath: "/tmp/test.pdf",
 			isIndexed: true,
 		},
 	});
@@ -34,7 +33,7 @@ async function seedSearchData() {
 	// Create chunks with searchable content
 	const chunkWithContent = await db.chunk.create({
 		data: {
-			fileId: file.id,
+			resourceId: resource.id,
 			index: 0,
 			title: "Heat Equation Introduction",
 			content: "The heat equation is a parabolic PDE that models diffusion processes.",
@@ -44,7 +43,7 @@ async function seedSearchData() {
 
 	const chunkGraphOnly = await db.chunk.create({
 		data: {
-			fileId: file.id,
+			resourceId: resource.id,
 			index: 1,
 			title: "Section 2",
 			content: "This section covers some advanced mathematical techniques for boundary analysis.",
@@ -53,7 +52,7 @@ async function seedSearchData() {
 
 	const chunkBoth = await db.chunk.create({
 		data: {
-			fileId: file.id,
+			resourceId: resource.id,
 			index: 2,
 			title: "Wave Equation",
 			content: "The wave equation describes wave propagation phenomena.",
@@ -106,7 +105,7 @@ async function seedSearchData() {
 		},
 	});
 
-	return { session, file, chunkWithContent, chunkGraphOnly, chunkBoth, heatConcept, waveConcept };
+	return { session, resource, chunkWithContent, chunkGraphOnly, chunkBoth, heatConcept, waveConcept };
 }
 
 beforeEach(async () => {
@@ -212,12 +211,11 @@ describe("search routes", () => {
 
 	it("respects limit across merged results", async () => {
 		const session = await db.session.create({ data: { name: "Limit Test" } });
-		const file = await db.file.create({
+		const resource = await db.resource.create({
 			data: {
 				sessionId: session.id,
-				filename: "big.pdf",
+				name: "Big Resource",
 				type: "LECTURE_NOTES",
-				rawPath: "/tmp/big.pdf",
 				isIndexed: true,
 			},
 		});
@@ -226,7 +224,7 @@ describe("search routes", () => {
 		for (let i = 0; i < 10; i++) {
 			await db.chunk.create({
 				data: {
-					fileId: file.id,
+					resourceId: resource.id,
 					index: i,
 					content: `PDE content section ${i}`,
 				},

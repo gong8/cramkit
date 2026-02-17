@@ -19,7 +19,7 @@ vi.mock("../../packages/api/src/lib/queue.js", () => ({
 
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
 import { enqueueGraphIndexing, enqueueSessionGraphIndexing } from "../../packages/api/src/lib/queue.js";
-import { indexFileGraph } from "../../packages/api/src/services/graph-indexer.js";
+import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
 import { graphRoutes } from "../../packages/api/src/routes/graph.js";
 
 const db = getDb();
@@ -51,9 +51,9 @@ describe("graph routes", () => {
 
 	it("GET /graph/sessions/:id/concepts — after indexing", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { session, files } = await seedPdeSession(db);
+		const { session, resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const app = getApp();
 		const res = await app.request(`/graph/sessions/${session.id}/concepts`);
@@ -70,9 +70,9 @@ describe("graph routes", () => {
 
 	it("GET /graph/concepts/:id — returns concept + relationships", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
 		const app = getApp();
@@ -94,9 +94,9 @@ describe("graph routes", () => {
 
 	it("DELETE /graph/concepts/:id — removes concept + relationships", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files, session } = await seedPdeSession(db);
+		const { resources, session } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
 		const app = getApp();
@@ -123,9 +123,9 @@ describe("graph routes", () => {
 
 	it("GET /graph/related — by concept", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const concept = await db.concept.findFirst({ where: { name: "Heat Equation" } });
 		const app = getApp();
@@ -145,28 +145,28 @@ describe("graph routes", () => {
 		expect(body.error).toMatch(/type and id/i);
 	});
 
-	it("POST /graph/sessions/:id/index-file — queues indexing", async () => {
-		const { session, files } = await seedPdeSession(db);
+	it("POST /graph/sessions/:id/index-resource — queues indexing", async () => {
+		const { session, resources } = await seedPdeSession(db);
 
 		const app = getApp();
-		const res = await app.request(`/graph/sessions/${session.id}/index-file`, {
+		const res = await app.request(`/graph/sessions/${session.id}/index-resource`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ fileId: files[0].id }),
+			body: JSON.stringify({ resourceId: resources[0].id }),
 		});
 
 		expect(res.status).toBe(200);
 		const body = await res.json() as any;
 		expect(body.ok).toBe(true);
-		expect(body.fileId).toBe(files[0].id);
-		expect(enqueueGraphIndexing).toHaveBeenCalledWith(files[0].id);
+		expect(body.resourceId).toBe(resources[0].id);
+		expect(enqueueGraphIndexing).toHaveBeenCalledWith(resources[0].id);
 	});
 
-	it("POST /graph/sessions/:id/index-file — invalid body → 400", async () => {
+	it("POST /graph/sessions/:id/index-resource — invalid body → 400", async () => {
 		const session = await db.session.create({ data: { name: "Test" } });
 		const app = getApp();
 
-		const res = await app.request(`/graph/sessions/${session.id}/index-file`, {
+		const res = await app.request(`/graph/sessions/${session.id}/index-resource`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({}),
@@ -175,7 +175,7 @@ describe("graph routes", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("POST /graph/sessions/:id/index-all — queues unindexed files", async () => {
+	it("POST /graph/sessions/:id/index-all — queues unindexed resources", async () => {
 		const { session } = await seedPdeSession(db);
 
 		const app = getApp();
@@ -186,17 +186,17 @@ describe("graph routes", () => {
 		expect(res.status).toBe(200);
 		const body = await res.json() as any;
 		expect(body.ok).toBe(true);
-		// All 11 files are isIndexed but not isGraphIndexed
+		// All 11 resources are isIndexed but not isGraphIndexed
 		expect(body.queued).toBe(11);
 		expect(enqueueSessionGraphIndexing).toHaveBeenCalled();
 	});
 
 	it("GET /graph/sessions/:id/index-status — returns progress", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { session, files } = await seedPdeSession(db);
+		const { session, resources } = await seedPdeSession(db);
 
-		// Index one file directly
-		await indexFileGraph(files[0].id);
+		// Index one resource directly
+		await indexResourceGraph(resources[0].id);
 
 		const app = getApp();
 		const res = await app.request(`/graph/sessions/${session.id}/index-status`);
@@ -211,7 +211,7 @@ describe("graph routes", () => {
 	});
 
 	it("full PDE flow: index-all → poll status → verify concepts", async () => {
-		const { session, files } = await seedPdeSession(db);
+		const { session, resources } = await seedPdeSession(db);
 
 		vi.mocked(chatCompletion).mockImplementation(async (messages) => {
 			const userMsg = messages.find((m) => m.role === "user")?.content || "";
@@ -220,9 +220,9 @@ describe("graph routes", () => {
 			return JSON.stringify(problemSheetResponse);
 		});
 
-		// Index all files directly (not via queue to avoid timing issues)
-		for (const file of files) {
-			await indexFileGraph(file.id);
+		// Index all resources directly (not via queue to avoid timing issues)
+		for (const resource of resources) {
+			await indexResourceGraph(resource.id);
 		}
 
 		const app = getApp();

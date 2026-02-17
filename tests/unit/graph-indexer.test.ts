@@ -13,7 +13,7 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 }));
 
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
-import { indexFileGraph } from "../../packages/api/src/services/graph-indexer.js";
+import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
 
 const db = getDb();
 
@@ -22,16 +22,16 @@ beforeEach(async () => {
 	vi.mocked(chatCompletion).mockReset();
 });
 
-describe("indexFileGraph", () => {
+describe("indexResourceGraph", () => {
 	it("indexes lecture notes → creates concepts", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files } = await seedPdeSession(db);
-		const lectureFile = files[0]; // PDE_Lectures_Part1.pdf
+		const { resources } = await seedPdeSession(db);
+		const lectureResource = resources[0]; // PDE Lectures Part 1
 
-		await indexFileGraph(lectureFile.id);
+		await indexResourceGraph(lectureResource.id);
 
 		const concepts = await db.concept.findMany({
-			where: { sessionId: lectureFile.sessionId },
+			where: { sessionId: lectureResource.sessionId },
 		});
 
 		expect(concepts.length).toBeGreaterThanOrEqual(lectureNotesResponse.concepts.length);
@@ -45,15 +45,22 @@ describe("indexFileGraph", () => {
 		expect(heatEq?.aliases).toBe("diffusion equation");
 	});
 
-	it("indexes lecture notes → creates file-concept relationships", async () => {
+	it("indexes lecture notes → creates resource-concept relationships", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files } = await seedPdeSession(db);
-		const lectureFile = files[0];
+		const { resources } = await seedPdeSession(db);
+		const lectureResource = resources[0];
 
-		await indexFileGraph(lectureFile.id);
+		await indexResourceGraph(lectureResource.id);
 
 		const rels = await db.relationship.findMany({
-			where: { sessionId: lectureFile.sessionId, sourceType: "file", sourceId: lectureFile.id },
+			where: {
+				sessionId: lectureResource.sessionId,
+				createdBy: "system",
+				OR: [
+					{ sourceType: "resource", sourceId: lectureResource.id },
+					{ sourceType: "chunk" },
+				],
+			},
 		});
 
 		expect(rels.length).toBe(lectureNotesResponse.file_concept_links.length);
@@ -66,10 +73,10 @@ describe("indexFileGraph", () => {
 
 	it("indexes past paper → creates question-concept links", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(pastPaperResponse));
-		const { files } = await seedPdeSession(db);
-		const pastPaper = files[6]; // PDE_2020.pdf
+		const { resources } = await seedPdeSession(db);
+		const pastPaper = resources[6]; // PDE 2020 Exam
 
-		await indexFileGraph(pastPaper.id);
+		await indexResourceGraph(pastPaper.id);
 
 		const rels = await db.relationship.findMany({
 			where: { sessionId: pastPaper.sessionId, createdBy: "system" },
@@ -81,10 +88,10 @@ describe("indexFileGraph", () => {
 
 	it("indexes problem sheet → creates concept-concept links", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(problemSheetResponse));
-		const { files } = await seedPdeSession(db);
-		const sheet = files[2]; // PDE_Sheet_1.pdf
+		const { resources } = await seedPdeSession(db);
+		const sheet = resources[2]; // PDE Problem Sheet 1
 
-		await indexFileGraph(sheet.id);
+		await indexResourceGraph(sheet.id);
 
 		const rels = await db.relationship.findMany({
 			where: {
@@ -107,12 +114,12 @@ describe("indexFileGraph", () => {
 				question_concept_links: [],
 			}),
 		);
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const concepts = await db.concept.findMany({
-			where: { sessionId: files[0].sessionId },
+			where: { sessionId: resources[0].sessionId },
 		});
 		const names = concepts.map((c) => c.name);
 		expect(names).toContain("Heat Equation");
@@ -121,18 +128,18 @@ describe("indexFileGraph", () => {
 
 	it("reuses existing concepts (no duplicates)", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		// Index first file
-		await indexFileGraph(files[0].id);
+		// Index first resource
+		await indexResourceGraph(resources[0].id);
 		const countAfterFirst = await db.concept.count({
-			where: { sessionId: files[0].sessionId },
+			where: { sessionId: resources[0].sessionId },
 		});
 
-		// Index second file with same concepts
-		await indexFileGraph(files[1].id);
+		// Index second resource with same concepts
+		await indexResourceGraph(resources[1].id);
 		const countAfterSecond = await db.concept.count({
-			where: { sessionId: files[0].sessionId },
+			where: { sessionId: resources[0].sessionId },
 		});
 
 		// Same concepts referenced → count should not double
@@ -141,15 +148,15 @@ describe("indexFileGraph", () => {
 
 	it("re-indexing deletes old system relationships", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 		const relsAfterFirst = await db.relationship.count({
-			where: { sessionId: files[0].sessionId, createdBy: "system" },
+			where: { sessionId: resources[0].sessionId, createdBy: "system" },
 		});
 		expect(relsAfterFirst).toBeGreaterThan(0);
 
-		// Re-index same file with different response
+		// Re-index same resource with different response
 		vi.mocked(chatCompletion).mockResolvedValue(
 			JSON.stringify({
 				concepts: [{ name: "New Concept Only", description: "test" }],
@@ -159,30 +166,30 @@ describe("indexFileGraph", () => {
 			}),
 		);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const systemRels = await db.relationship.findMany({
-			where: { sessionId: files[0].sessionId, sourceId: files[0].id, createdBy: "system" },
+			where: { sessionId: resources[0].sessionId, sourceId: resources[0].id, createdBy: "system" },
 		});
 
-		// Only the new relationship should exist for this file
+		// Only the new relationship should exist for this resource
 		expect(systemRels.length).toBe(1);
 		expect(systemRels[0].targetLabel).toBe("New Concept Only");
 	});
 
 	it("re-indexing preserves non-system relationships", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files, chunks } = await seedPdeSession(db);
+		const { resources, chunks } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		// Manually create an amortised relationship
 		const concept = await db.concept.findFirst({
-			where: { sessionId: files[0].sessionId },
+			where: { sessionId: resources[0].sessionId },
 		});
 		await db.relationship.create({
 			data: {
-				sessionId: files[0].sessionId,
+				sessionId: resources[0].sessionId,
 				sourceType: "chunk",
 				sourceId: chunks[0].id,
 				targetType: "concept",
@@ -194,83 +201,82 @@ describe("indexFileGraph", () => {
 		});
 
 		// Re-index
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const amortisedRels = await db.relationship.findMany({
-			where: { sessionId: files[0].sessionId, createdBy: "amortised" },
+			where: { sessionId: resources[0].sessionId, createdBy: "amortised" },
 		});
 		expect(amortisedRels.length).toBe(1);
 	});
 
 	it("sets isGraphIndexed = true on completion", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
-		const file = await db.file.findUnique({ where: { id: files[0].id } });
-		expect(file?.isGraphIndexed).toBe(true);
+		const resource = await db.resource.findUnique({ where: { id: resources[0].id } });
+		expect(resource?.isGraphIndexed).toBe(true);
 	});
 
-	it("skips file not yet content-indexed", async () => {
+	it("skips resource not yet content-indexed", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(lectureNotesResponse));
 		const { session } = await seedPdeSession(db);
 
-		// Create a non-indexed file
-		const unindexedFile = await db.file.create({
+		// Create a non-indexed resource
+		const unindexedResource = await db.resource.create({
 			data: {
 				sessionId: session.id,
-				filename: "not_indexed.pdf",
+				name: "Not Indexed",
 				type: "OTHER",
-				rawPath: "/tmp/not_indexed.pdf",
 				isIndexed: false,
 			},
 		});
 
-		await indexFileGraph(unindexedFile.id);
+		await indexResourceGraph(unindexedResource.id);
 
 		expect(chatCompletion).not.toHaveBeenCalled();
-		const file = await db.file.findUnique({ where: { id: unindexedFile.id } });
-		expect(file?.isGraphIndexed).toBe(false);
+		const resource = await db.resource.findUnique({ where: { id: unindexedResource.id } });
+		expect(resource?.isGraphIndexed).toBe(false);
 	});
 
-	it("skips file not found", async () => {
-		await indexFileGraph("nonexistent-id");
+	it("skips resource not found", async () => {
+		await indexResourceGraph("nonexistent-id");
 		expect(chatCompletion).not.toHaveBeenCalled();
 	});
 
 	it("handles LLM returning markdown-wrapped JSON", async () => {
 		const wrapped = "```json\n" + JSON.stringify(lectureNotesResponse) + "\n```";
 		vi.mocked(chatCompletion).mockResolvedValue(wrapped);
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const concepts = await db.concept.findMany({
-			where: { sessionId: files[0].sessionId },
+			where: { sessionId: resources[0].sessionId },
 		});
 		expect(concepts.length).toBeGreaterThan(0);
 	});
 
 	it("handles LLM returning invalid JSON", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue("This is not JSON at all {{{");
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
 		// Should not throw
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
-		const file = await db.file.findUnique({ where: { id: files[0].id } });
-		expect(file?.isGraphIndexed).toBe(false);
+		const resource = await db.resource.findUnique({ where: { id: resources[0].id } });
+		expect(resource?.isGraphIndexed).toBe(false);
 	});
 
 	it("handles LLM returning unknown concept names in links", async () => {
 		vi.mocked(chatCompletion).mockResolvedValue(JSON.stringify(responseWithUnknownConcepts));
-		const { files } = await seedPdeSession(db);
+		const { resources } = await seedPdeSession(db);
 
-		await indexFileGraph(files[0].id);
+		await indexResourceGraph(resources[0].id);
 
 		const rels = await db.relationship.findMany({
-			where: { sessionId: files[0].sessionId, createdBy: "system" },
+			where: { sessionId: resources[0].sessionId, createdBy: "system" },
 		});
 
 		// Only the valid Heat Equation link should exist, not Quantum Field Theory/String Theory/Nonexistent
@@ -281,8 +287,8 @@ describe("indexFileGraph", () => {
 		expect(targetLabels).not.toContain("Nonexistent Concept");
 	});
 
-	it("full PDE session: index all 11 files sequentially", async () => {
-		const { files, session } = await seedPdeSession(db);
+	it("full PDE session: index all 11 resources sequentially", async () => {
+		const { resources, session } = await seedPdeSession(db);
 
 		// Lecture notes get lectureNotesResponse, past papers get pastPaperResponse, sheets get problemSheetResponse
 		vi.mocked(chatCompletion).mockImplementation(async (messages) => {
@@ -292,8 +298,8 @@ describe("indexFileGraph", () => {
 			return JSON.stringify(problemSheetResponse);
 		});
 
-		for (const file of files) {
-			await indexFileGraph(file.id);
+		for (const resource of resources) {
+			await indexResourceGraph(resource.id);
 		}
 
 		const concepts = await db.concept.findMany({ where: { sessionId: session.id } });
@@ -303,14 +309,14 @@ describe("indexFileGraph", () => {
 		expect(concepts.length).toBeGreaterThanOrEqual(8); // At least the lecture notes concepts
 		expect(relationships.length).toBeGreaterThan(0);
 
-		// Cross-file concept reuse: "Method Of Characteristics" should exist only once
+		// Cross-resource concept reuse: "Method Of Characteristics" should exist only once
 		const mocConcepts = concepts.filter((c) => c.name === "Method Of Characteristics");
 		expect(mocConcepts.length).toBe(1);
 
-		// All files should be marked as graph-indexed
-		const indexedFiles = await db.file.findMany({
+		// All resources should be marked as graph-indexed
+		const indexedResources = await db.resource.findMany({
 			where: { sessionId: session.id, isGraphIndexed: true },
 		});
-		expect(indexedFiles.length).toBe(11);
+		expect(indexedResources.length).toBe(11);
 	});
 });

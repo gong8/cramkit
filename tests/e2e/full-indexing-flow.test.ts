@@ -12,7 +12,7 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 }));
 
 import { chatCompletion } from "../../packages/api/src/services/llm-client.js";
-import { indexFileGraph } from "../../packages/api/src/services/graph-indexer.js";
+import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";
 import { searchGraph } from "../../packages/api/src/services/graph-search.js";
 import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
 
@@ -25,17 +25,17 @@ beforeEach(async () => {
 
 describe("full indexing flow", () => {
 	it("complete PDE lifecycle: upload → index → search → amortise → re-index → delete", async () => {
-		// Step 1: Create session + seed 11 files with chunks
-		const { session, files, chunks } = await seedPdeSession(db);
+		// Step 1: Create session + seed 11 resources with chunks
+		const { session, resources, chunks } = await seedPdeSession(db);
 
 		// Verify initial state
-		for (const file of files) {
-			const f = await db.file.findUnique({ where: { id: file.id } });
-			expect(f?.isIndexed).toBe(true);
-			expect(f?.isGraphIndexed).toBe(false);
+		for (const resource of resources) {
+			const r = await db.resource.findUnique({ where: { id: resource.id } });
+			expect(r?.isIndexed).toBe(true);
+			expect(r?.isGraphIndexed).toBe(false);
 		}
 
-		// Setup LLM mock per file type
+		// Setup LLM mock per resource type
 		vi.mocked(chatCompletion).mockImplementation(async (messages) => {
 			const userMsg = messages.find((m) => m.role === "user")?.content || "";
 			if (userMsg.includes("LECTURE_NOTES")) return JSON.stringify(lectureNotesResponse);
@@ -43,16 +43,16 @@ describe("full indexing flow", () => {
 			return JSON.stringify(problemSheetResponse);
 		});
 
-		// Step 2: Index all files
-		for (const file of files) {
-			await indexFileGraph(file.id);
+		// Step 2: Index all resources
+		for (const resource of resources) {
+			await indexResourceGraph(resource.id);
 		}
 
-		// Verify all files marked as graph-indexed
-		const indexedFiles = await db.file.findMany({
+		// Verify all resources marked as graph-indexed
+		const indexedResources = await db.resource.findMany({
 			where: { sessionId: session.id, isGraphIndexed: true },
 		});
-		expect(indexedFiles.length).toBe(11);
+		expect(indexedResources.length).toBe(11);
 
 		// Step 3: Verify concept deduplication
 		const concepts = await db.concept.findMany({ where: { sessionId: session.id } });
@@ -62,35 +62,35 @@ describe("full indexing flow", () => {
 		const heatEquationCount = conceptNames.filter((n) => n === "Heat Equation").length;
 		expect(heatEquationCount).toBe(1);
 
-		// "Method Of Characteristics" also appears in multiple file type responses
+		// "Method Of Characteristics" also appears in multiple resource type responses
 		const mocCount = conceptNames.filter((n) => n === "Method Of Characteristics").length;
 		expect(mocCount).toBe(1);
 
-		// Step 4: Verify cross-file relationships
+		// Step 4: Verify cross-resource relationships
 		const allRels = await db.relationship.findMany({ where: { sessionId: session.id } });
 		expect(allRels.length).toBeGreaterThan(0);
 
-		// Find file-concept rels from different file types pointing to same concept
+		// Find resource-concept rels from different resource types pointing to same concept
 		const heatEquation = concepts.find((c) => c.name === "Heat Equation")!;
 		const heatRels = allRels.filter(
 			(r) => r.targetType === "concept" && r.targetId === heatEquation.id,
 		);
 		// Should have relationships from lecture notes AND past papers AND problem sheets
-		const sourceFileIds = [...new Set(heatRels.filter((r) => r.sourceType === "file").map((r) => r.sourceId))];
-		expect(sourceFileIds.length).toBeGreaterThan(1);
+		const sourceResourceIds = [...new Set(heatRels.filter((r) => r.sourceType === "resource").map((r) => r.sourceId))];
+		expect(sourceResourceIds.length).toBeGreaterThan(1);
 
 		// Step 5: Search "Method of Characteristics"
 		const searchResults = await searchGraph(session.id, "Method Of Characteristics", 20);
 		expect(searchResults.length).toBeGreaterThan(0);
 
-		// Should return results from multiple file types
-		const fileTypes = [...new Set(searchResults.map((r) => r.fileType))];
-		expect(fileTypes.length).toBeGreaterThan(1);
+		// Should return results from multiple resource types
+		const resourceTypes = [...new Set(searchResults.map((r) => r.resourceType))];
+		expect(resourceTypes.length).toBeGreaterThan(1);
 
 		// Step 6: Verify amortisation
 		const contentResults = searchResults.map((r) => ({
 			chunkId: r.chunkId,
-			fileId: r.fileId,
+			resourceId: r.resourceId,
 		}));
 		await amortiseSearchResults(session.id, "Method Of Characteristics", contentResults);
 
@@ -103,8 +103,8 @@ describe("full indexing flow", () => {
 		const reSearchResults = await searchGraph(session.id, "Method Of Characteristics", 20);
 		expect(reSearchResults.length).toBeGreaterThanOrEqual(searchResults.length);
 
-		// Step 8: Re-index a single file
-		const fileToReindex = files[0]; // Lecture notes Part 1
+		// Step 8: Re-index a single resource
+		const resourceToReindex = resources[0]; // Lecture notes Part 1
 		const amortisedBefore = await db.relationship.count({
 			where: { sessionId: session.id, createdBy: "amortised" },
 		});
@@ -120,14 +120,14 @@ describe("full indexing flow", () => {
 			}),
 		);
 
-		await indexFileGraph(fileToReindex.id);
+		await indexResourceGraph(resourceToReindex.id);
 
-		// System rels for this file should be replaced
-		const systemRelsForFile = await db.relationship.findMany({
-			where: { sessionId: session.id, sourceId: fileToReindex.id, createdBy: "system" },
+		// System rels for this resource should be replaced
+		const systemRelsForResource = await db.relationship.findMany({
+			where: { sessionId: session.id, sourceId: resourceToReindex.id, createdBy: "system" },
 		});
-		expect(systemRelsForFile.length).toBe(1);
-		expect(systemRelsForFile[0].targetLabel).toBe("Heat Equation");
+		expect(systemRelsForResource.length).toBe(1);
+		expect(systemRelsForResource[0].targetLabel).toBe("Heat Equation");
 
 		// Amortised rels should be preserved
 		const amortisedAfter = await db.relationship.count({
