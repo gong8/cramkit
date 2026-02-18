@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@cramkit/shared";
@@ -106,6 +106,219 @@ export async function chatCompletion(
 		proc.on("error", (err) => {
 			log.error(`chatCompletion — spawn error: ${err.message}`);
 			reject(new Error(`Claude CLI spawn error: ${err.message}`));
+		});
+	});
+}
+
+interface ToolDefinition {
+	name: string;
+	description: string;
+	inputSchema: Record<string, unknown>;
+}
+
+const BLOCKED_BUILTIN_TOOLS = [
+	"Bash",
+	"Read",
+	"Write",
+	"Edit",
+	"Glob",
+	"Grep",
+	"WebFetch",
+	"WebSearch",
+	"Task",
+	"TaskOutput",
+	"NotebookEdit",
+	"EnterPlanMode",
+	"ExitPlanMode",
+	"TodoWrite",
+	"AskUserQuestion",
+	"Skill",
+	"TeamCreate",
+	"TeamDelete",
+	"SendMessage",
+	"TaskStop",
+	"ToolSearch",
+];
+
+export async function chatCompletionWithTool<T>(
+	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+	tool: ToolDefinition,
+	options?: { model?: string; maxTokens?: number },
+): Promise<T> {
+	const model = getCliModel(options?.model || LLM_MODEL);
+	log.info(
+		`chatCompletionWithTool — model=${model}, tool=${tool.name}, messages=${messages.length}`,
+	);
+
+	const clean = messages.map((m) => ({ ...m, content: m.content.replaceAll("\0", "") }));
+
+	const systemParts = clean.filter((m) => m.role === "system").map((m) => m.content);
+	const prompt = clean
+		.filter((m) => m.role !== "system")
+		.map((m) =>
+			m.role === "assistant"
+				? `<previous_response>\n${m.content}\n</previous_response>`
+				: m.content,
+		)
+		.join("\n\n")
+		.trim();
+	if (!prompt) {
+		throw new Error("No user prompt found in messages");
+	}
+
+	const tempDir = join(tmpdir(), `cramkit-tool-${randomUUID().slice(0, 8)}`);
+	mkdirSync(tempDir, { recursive: true });
+
+	const toolSchemaPath = join(tempDir, "tool-schema.json");
+	writeFileSync(toolSchemaPath, JSON.stringify(tool));
+
+	const resultPath = join(tempDir, "result.json");
+	const mcpScript = `#!/usr/bin/env node
+const readline = require("readline");
+const fs = require("fs");
+
+const toolDef = JSON.parse(fs.readFileSync(${JSON.stringify(toolSchemaPath)}, "utf-8"));
+const resultPath = ${JSON.stringify(resultPath)};
+
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+
+rl.on("line", (line) => {
+  let req;
+  try { req = JSON.parse(line); } catch { return; }
+  const id = req.id;
+  switch (req.method) {
+    case "initialize":
+      send({ jsonrpc: "2.0", id, result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "extractor", version: "1.0.0" },
+      }});
+      break;
+    case "notifications/initialized":
+      break;
+    case "tools/list":
+      send({ jsonrpc: "2.0", id, result: { tools: [{
+        name: toolDef.name,
+        description: toolDef.description,
+        inputSchema: toolDef.inputSchema,
+      }]}});
+      break;
+    case "tools/call": {
+      const args = req.params?.arguments || {};
+      fs.writeFileSync(resultPath, JSON.stringify(args, null, 2));
+      send({ jsonrpc: "2.0", id, result: {
+        content: [{ type: "text", text: "Submitted successfully." }],
+      }});
+      break;
+    }
+    default:
+      if (id !== undefined) {
+        send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+      }
+  }
+});
+`;
+	const mcpScriptPath = join(tempDir, "extractor-mcp.js");
+	writeFileSync(mcpScriptPath, mcpScript);
+
+	const mcpConfig = {
+		mcpServers: {
+			extractor: {
+				type: "stdio",
+				command: "node",
+				args: [mcpScriptPath],
+			},
+		},
+	};
+	const mcpConfigPath = join(tempDir, "mcp-config.json");
+	writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig));
+
+	const args = [
+		"--print",
+		"--output-format",
+		"text",
+		"--model",
+		model,
+		"--mcp-config",
+		mcpConfigPath,
+		"--strict-mcp-config",
+		"--dangerously-skip-permissions",
+		"--max-turns",
+		"2",
+		"--disallowedTools",
+		...BLOCKED_BUILTIN_TOOLS,
+		"--setting-sources",
+		"",
+		"--no-session-persistence",
+	];
+
+	if (options?.maxTokens) {
+		args.push("--max-tokens", String(options.maxTokens));
+	}
+
+	if (systemParts.length > 0) {
+		const systemPromptPath = join(tempDir, "system-prompt.txt");
+		writeFileSync(systemPromptPath, systemParts.join("\n\n"));
+		args.push("--append-system-prompt-file", systemPromptPath);
+	}
+
+	args.push(prompt);
+
+	return new Promise<T>((resolve, reject) => {
+		const { PATH, HOME, SHELL, TERM } = process.env;
+		const proc = spawn("claude", args, {
+			cwd: tempDir,
+			env: { PATH, HOME, SHELL, TERM },
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+
+		proc.stdin?.end();
+
+		let stderr = "";
+
+		proc.stderr?.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString();
+		});
+
+		proc.on("close", (code) => {
+			try {
+				if (code !== 0) {
+					log.error(
+						`chatCompletionWithTool — CLI exited with code ${code}: ${stderr.slice(0, 500)}`,
+					);
+					reject(new Error(`Claude CLI error (exit code ${code}): ${stderr.slice(0, 500)}`));
+					return;
+				}
+
+				if (!existsSync(resultPath)) {
+					reject(new Error("Model did not call the extraction tool — no result.json produced"));
+					return;
+				}
+
+				const raw = readFileSync(resultPath, "utf-8");
+				const parsed = JSON.parse(raw) as T;
+				log.info(`chatCompletionWithTool — got result (${raw.length} chars)`);
+				resolve(parsed);
+			} catch (err) {
+				reject(err instanceof Error ? err : new Error(String(err)));
+			} finally {
+				try {
+					rmSync(tempDir, { recursive: true, force: true });
+				} catch {
+					// best-effort cleanup
+				}
+			}
+		});
+
+		proc.on("error", (err) => {
+			log.error(`chatCompletionWithTool — spawn error: ${err.message}`);
+			reject(new Error(`Claude CLI spawn error: ${err.message}`));
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {
+				// best-effort cleanup
+			}
 		});
 	});
 }

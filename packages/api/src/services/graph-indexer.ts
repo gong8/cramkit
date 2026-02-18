@@ -1,7 +1,7 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
 import { findChunkByLabel, fuzzyMatchTitle, toTitleCase } from "./graph-indexer-utils.js";
-import { chatCompletion } from "./llm-client.js";
+import { chatCompletionWithTool } from "./llm-client.js";
 
 const log = createLogger("api");
 
@@ -89,6 +89,90 @@ interface ChunkInfo {
 	parentId: string | null;
 	diskPath: string | null;
 }
+
+const EXTRACTION_TOOL = {
+	name: "submit_extraction",
+	description: "Submit the extracted concepts and relationships from the academic material",
+	inputSchema: {
+		type: "object",
+		properties: {
+			concepts: {
+				type: "array",
+				items: {
+					type: "object",
+					properties: {
+						name: { type: "string", description: "Concept name in Title Case" },
+						description: { type: "string", description: "Brief description" },
+						aliases: {
+							type: "string",
+							description: "Comma-separated alternative names",
+						},
+					},
+					required: ["name"],
+				},
+			},
+			file_concept_links: {
+				type: "array",
+				items: {
+					type: "object",
+					properties: {
+						conceptName: { type: "string" },
+						relationship: {
+							type: "string",
+							enum: ["covers", "introduces", "applies", "references", "proves"],
+						},
+						confidence: { type: "number", minimum: 0, maximum: 1 },
+						chunkTitle: {
+							type: "string",
+							description: "Section title this concept appears in",
+						},
+					},
+					required: ["conceptName", "relationship"],
+				},
+			},
+			concept_concept_links: {
+				type: "array",
+				items: {
+					type: "object",
+					properties: {
+						sourceConcept: { type: "string" },
+						targetConcept: { type: "string" },
+						relationship: {
+							type: "string",
+							enum: [
+								"prerequisite",
+								"related_to",
+								"extends",
+								"generalizes",
+								"special_case_of",
+								"contradicts",
+							],
+						},
+						confidence: { type: "number", minimum: 0, maximum: 1 },
+					},
+					required: ["sourceConcept", "targetConcept", "relationship"],
+				},
+			},
+			question_concept_links: {
+				type: "array",
+				items: {
+					type: "object",
+					properties: {
+						questionLabel: { type: "string" },
+						conceptName: { type: "string" },
+						relationship: {
+							type: "string",
+							enum: ["tests", "applies", "requires"],
+						},
+						confidence: { type: "number", minimum: 0, maximum: 1 },
+					},
+					required: ["questionLabel", "conceptName", "relationship"],
+				},
+			},
+		},
+		required: ["concepts", "file_concept_links", "concept_concept_links", "question_concept_links"],
+	},
+};
 
 function buildStructuredContent(chunks: ChunkInfo[], previewLimit: number | null): string {
 	const childMap = new Map<string | null, ChunkInfo[]>();
@@ -195,13 +279,7 @@ Rules:
 ${PROMPT_RULES[config.promptStyle]}
 - Confidence should reflect how strongly the relationship holds${crossLinkNote}${existingConceptsList}
 
-Respond with ONLY valid JSON in this exact format:
-{
-  "concepts": [{ "name": "...", "description": "...", "aliases": "..." }],
-  "file_concept_links": [{ "conceptName": "...", "relationship": "...", "confidence": 0.9${hasTree ? ', "chunkTitle": "..."' : ""} }],
-  "concept_concept_links": [{ "sourceConcept": "...", "targetConcept": "...", "relationship": "...", "confidence": 0.8 }],
-  "question_concept_links": [{ "questionLabel": "...", "conceptName": "...", "relationship": "...", "confidence": 0.9 }]
-}`,
+Call the submit_extraction tool with your extracted concepts and relationships.`,
 		},
 		{
 			role: "user",
@@ -224,26 +302,17 @@ async function extractWithRetries(
 	resourceId: string,
 ): Promise<ExtractionResult> {
 	for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
-		let rawResponse = "";
 		try {
-			rawResponse = await chatCompletion(messages);
-			const jsonMatch = rawResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, rawResponse];
-			return JSON.parse(jsonMatch[1]?.trim()) as ExtractionResult;
+			return await chatCompletionWithTool<ExtractionResult>(messages, EXTRACTION_TOOL);
 		} catch (error) {
-			if (error instanceof SyntaxError) {
-				log.error(
-					`indexResourceGraph — JSON parse failed for "${resourceName}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS}). Response starts with: "${rawResponse.slice(0, 300)}"`,
-				);
-			} else {
-				log.error(
-					`indexResourceGraph — LLM call failed for "${resourceName}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS})`,
-					error,
-				);
-			}
+			log.error(
+				`indexResourceGraph — extraction failed for "${resourceName}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS})`,
+				error,
+			);
 			if (attempt === MAX_LLM_ATTEMPTS) {
 				throw new GraphIndexError(
 					`Giving up on "${resourceName}" after ${MAX_LLM_ATTEMPTS} attempts`,
-					error instanceof SyntaxError ? "parse_error" : "llm_error",
+					"llm_error",
 					resourceId,
 				);
 			}
