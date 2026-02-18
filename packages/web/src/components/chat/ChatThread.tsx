@@ -54,6 +54,10 @@ export function ChatThread({
 					}
 				} finally {
 					adapterStreamingRef.current = false;
+					// Refetch conversations to pick up LLM-generated title
+					queryClient.invalidateQueries({
+						queryKey: ["conversations", sessionId],
+					});
 				}
 			},
 		};

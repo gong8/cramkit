@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@cramkit/shared";
 import { createLogger } from "@cramkit/shared";
 import { enqueueEnrichment } from "../lib/queue.js";
+import { generateConversationTitle } from "./title-generator.js";
 import type { ToolCallData } from "./cli-chat.js";
 import { LineBuffer } from "./line-buffer.js";
 
@@ -215,6 +216,13 @@ async function finalizeStream(
 		maybeEnqueueEnrichment(db, stream.conversationId, stream.toolCallsData).catch((e) => {
 			log.warn("finalizeStream — enrichment enqueue failed", e);
 		});
+
+		// Generate LLM title after first exchange (fire-before-done so the
+		// frontend's post-stream refetch picks it up immediately).
+		const title = await generateConversationTitle(db, stream.conversationId);
+		if (title) {
+			emit("title", JSON.stringify({ title }));
+		}
 	}
 
 	stream.status = status;
