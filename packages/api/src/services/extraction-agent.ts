@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@cramkit/shared";
+import { CancellationError } from "./errors.js";
 import { BLOCKED_BUILTIN_TOOLS, LLM_MODEL, getCliModel } from "./llm-client.js";
 
 const log = createLogger("api");
@@ -407,7 +408,12 @@ export interface ExtractionResult {
 	}>;
 }
 
-export async function runExtractionAgent(input: ExtractionAgentInput): Promise<ExtractionResult> {
+export async function runExtractionAgent(
+	input: ExtractionAgentInput,
+	signal?: AbortSignal,
+): Promise<ExtractionResult> {
+	if (signal?.aborted) throw new CancellationError("Extraction cancelled before start");
+
 	const config = THOROUGHNESS_CONFIGS[input.thoroughness];
 	const model = getCliModel(LLM_MODEL);
 
@@ -490,12 +496,27 @@ export async function runExtractionAgent(input: ExtractionAgentInput): Promise<E
 			proc.stdin?.end();
 
 			let stderr = "";
+			let aborted = false;
+
+			const onAbort = () => {
+				aborted = true;
+				proc.kill("SIGTERM");
+				log.info(`runExtractionAgent — killing process for "${input.resource.name}" (cancelled)`);
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
 
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
 			});
 
 			proc.on("close", (code) => {
+				signal?.removeEventListener("abort", onAbort);
+
+				if (aborted || signal?.aborted) {
+					reject(new CancellationError("Extraction cancelled"));
+					return;
+				}
+
 				if (code !== 0) {
 					log.error(`runExtractionAgent — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
 					reject(new Error(`Extraction agent error (exit code ${code}): ${stderr.slice(0, 500)}`));
@@ -520,6 +541,7 @@ export async function runExtractionAgent(input: ExtractionAgentInput): Promise<E
 			});
 
 			proc.on("error", (err) => {
+				signal?.removeEventListener("abort", onAbort);
 				log.error(`runExtractionAgent — spawn error: ${err.message}`);
 				reject(new Error(`Extraction agent spawn error: ${err.message}`));
 			});

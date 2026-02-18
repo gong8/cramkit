@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
+import { CancellationError } from "./errors.js";
 import type { ExtractionAgentInput, ExtractionResult } from "./extraction-agent.js";
 import { runExtractionAgent } from "./extraction-agent.js";
 import { findChunkByLabel, fuzzyMatchTitle, toTitleCase } from "./graph-indexer-utils.js";
@@ -34,11 +35,14 @@ const MAX_LLM_ATTEMPTS = 3;
 async function extractWithRetries(
 	input: ExtractionAgentInput,
 	resourceId: string,
+	signal?: AbortSignal,
 ): Promise<ExtractionResult> {
 	for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
+		if (signal?.aborted) throw new CancellationError("Extraction cancelled");
 		try {
-			return await runExtractionAgent(input);
+			return await runExtractionAgent(input, signal);
 		} catch (error) {
+			if (error instanceof CancellationError) throw error;
 			log.error(
 				`indexResourceGraph — extraction failed for "${input.resource.name}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS})`,
 				error,
@@ -299,6 +303,7 @@ async function writeResultToDb(
 export async function indexResourceGraph(
 	resourceId: string,
 	thoroughness?: Thoroughness,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const db = getDb();
 
@@ -382,7 +387,9 @@ export async function indexResourceGraph(
 		thoroughness: mode,
 	};
 
-	const result = await extractWithRetries(agentInput, resourceId);
+	const result = await extractWithRetries(agentInput, resourceId, signal);
+
+	if (signal?.aborted) throw new CancellationError("Cancelled before DB write");
 
 	await writeResultToDb(
 		db,

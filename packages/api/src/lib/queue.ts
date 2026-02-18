@@ -1,6 +1,7 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import PQueue from "p-queue";
 import { runCrossLinkingAgent } from "../services/cross-linker.js";
+import { CancellationError } from "../services/errors.js";
 import { toTitleCase } from "../services/graph-indexer-utils.js";
 import {
 	GraphIndexError,
@@ -12,6 +13,9 @@ import { processResource } from "../services/resource-processor.js";
 const log = createLogger("api");
 const queue = new PQueue({ concurrency: 1 });
 const indexingQueue = new PQueue({ concurrency: 1 });
+
+// In-memory abort controllers for active batches (allows cancellation to kill running processes)
+const batchAbortControllers = new Map<string, AbortController>();
 
 // In-memory cross-linking status tracking (not persisted — only relevant during active batches)
 const crossLinkStatus = new Map<
@@ -35,7 +39,7 @@ export function enqueueGraphIndexing(resourceId: string, thoroughness?: Thorough
 
 const PHASE_1_TYPES = new Set(["LECTURE_NOTES", "SPECIFICATION"]);
 
-async function runIndexJob(jobId: string): Promise<void> {
+async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 	const db = getDb();
 
 	const job = await db.indexJob.findUnique({
@@ -44,7 +48,7 @@ async function runIndexJob(jobId: string): Promise<void> {
 	});
 	if (!job) return;
 
-	if (job.batch.status === "cancelled") {
+	if (job.batch.status === "cancelled" || signal?.aborted) {
 		await db.indexJob.update({ where: { id: jobId }, data: { status: "cancelled" } });
 		return;
 	}
@@ -56,7 +60,11 @@ async function runIndexJob(jobId: string): Promise<void> {
 
 	try {
 		const startTime = Date.now();
-		await indexResourceGraph(job.resourceId, (job.thoroughness as Thoroughness) || undefined);
+		await indexResourceGraph(
+			job.resourceId,
+			(job.thoroughness as Thoroughness) || undefined,
+			signal,
+		);
 		await db.indexJob.update({
 			where: { id: jobId },
 			data: { status: "completed", completedAt: new Date(), durationMs: Date.now() - startTime },
@@ -66,6 +74,14 @@ async function runIndexJob(jobId: string): Promise<void> {
 			data: { completed: { increment: 1 } },
 		});
 	} catch (error) {
+		if (error instanceof CancellationError) {
+			await db.indexJob.update({
+				where: { id: jobId },
+				data: { status: "cancelled" },
+			});
+			log.info(`runIndexJob — job ${jobId} cancelled`);
+			return;
+		}
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		const errorType = error instanceof GraphIndexError ? error.errorType : ("unknown" as const);
 		await db.indexJob.update({
@@ -86,16 +102,20 @@ async function isBatchCancelled(batchId: string): Promise<boolean> {
 	return batch?.status === "cancelled";
 }
 
-async function runCrossLinking(sessionId: string, batchId: string): Promise<void> {
+async function runCrossLinking(
+	sessionId: string,
+	batchId: string,
+	signal?: AbortSignal,
+): Promise<void> {
 	const db = getDb();
 
-	if (await isBatchCancelled(batchId)) return;
+	if ((await isBatchCancelled(batchId)) || signal?.aborted) return;
 
 	crossLinkStatus.set(batchId, { status: "running" });
 
 	try {
 		log.info(`runCrossLinking — session ${sessionId}, starting cross-linking pass`);
-		const result = await runCrossLinkingAgent(sessionId);
+		const result = await runCrossLinkingAgent(sessionId, signal);
 
 		let linksAdded = 0;
 		if (result.links.length > 0) {
@@ -169,6 +189,11 @@ async function runCrossLinking(sessionId: string, batchId: string): Promise<void
 
 		crossLinkStatus.set(batchId, { status: "completed", linksAdded });
 	} catch (error) {
+		if (error instanceof CancellationError) {
+			crossLinkStatus.set(batchId, { status: "skipped" });
+			log.info(`runCrossLinking — session ${sessionId} cancelled`);
+			return;
+		}
 		const msg = error instanceof Error ? error.message : String(error);
 		log.error(`runCrossLinking — session ${sessionId} failed: ${msg}`);
 		crossLinkStatus.set(batchId, { status: "failed", error: msg });
@@ -190,49 +215,65 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 	});
 	if (!batch) return;
 
-	const sessionId = batch.sessionId;
-	const phase1Jobs = batch.jobs.filter((j) => PHASE_1_TYPES.has(j.resource.type));
-	const phase2Jobs = batch.jobs.filter((j) => !PHASE_1_TYPES.has(j.resource.type));
+	const controller = new AbortController();
+	batchAbortControllers.set(batchId, controller);
+	const { signal } = controller;
 
-	// Phase 1: sequential (lectures/specs establish concepts)
-	log.info(
-		`runPhasedBatch — batch ${batchId}: Phase 1 — ${phase1Jobs.length} lecture/spec resources (sequential)`,
-	);
-	for (const job of phase1Jobs) {
-		if (await isBatchCancelled(batchId)) break;
-		await runIndexJob(job.id);
-	}
+	try {
+		const sessionId = batch.sessionId;
+		const phase1Jobs = batch.jobs.filter((j) => PHASE_1_TYPES.has(j.resource.type));
+		const phase2Jobs = batch.jobs.filter((j) => !PHASE_1_TYPES.has(j.resource.type));
 
-	// Phase 2: parallel (papers/sheets/other link to concepts)
-	if (!(await isBatchCancelled(batchId)) && phase2Jobs.length > 0) {
+		// Phase 1: sequential (lectures/specs establish concepts)
 		log.info(
-			`runPhasedBatch — batch ${batchId}: Phase 2 — ${phase2Jobs.length} paper/sheet resources (parallel, concurrency=3)`,
+			`runPhasedBatch — batch ${batchId}: Phase 1 — ${phase1Jobs.length} lecture/spec resources (sequential)`,
 		);
-		const phase2Queue = new PQueue({ concurrency: 3 });
-		for (const job of phase2Jobs) {
-			phase2Queue.add(async () => {
-				if (await isBatchCancelled(batchId)) return;
-				await runIndexJob(job.id);
-			});
+		for (const job of phase1Jobs) {
+			if (signal.aborted || (await isBatchCancelled(batchId))) break;
+			await runIndexJob(job.id, signal);
 		}
-		await phase2Queue.onIdle();
-	}
 
-	// Phase 3: cross-linking pass
-	if (!(await isBatchCancelled(batchId))) {
-		log.info(`runPhasedBatch — batch ${batchId}: Phase 3 — cross-linking`);
-		await runCrossLinking(sessionId, batchId);
-	}
-
-	// Finalize batch status
-	const finalBatch = await db.indexBatch.findUnique({ where: { id: batchId } });
-	if (finalBatch && finalBatch.status !== "cancelled") {
-		if (finalBatch.completed + finalBatch.failed >= finalBatch.total) {
-			await db.indexBatch.update({
-				where: { id: batchId },
-				data: { status: "completed", completedAt: new Date() },
-			});
+		// Phase 2: parallel (papers/sheets/other link to concepts)
+		if (!signal.aborted && !(await isBatchCancelled(batchId)) && phase2Jobs.length > 0) {
+			log.info(
+				`runPhasedBatch — batch ${batchId}: Phase 2 — ${phase2Jobs.length} paper/sheet resources (parallel, concurrency=3)`,
+			);
+			const phase2Queue = new PQueue({ concurrency: 3 });
+			for (const job of phase2Jobs) {
+				phase2Queue.add(
+					async () => {
+						if (signal.aborted || (await isBatchCancelled(batchId))) return;
+						await runIndexJob(job.id, signal);
+					},
+					{ signal },
+				);
+			}
+			try {
+				await phase2Queue.onIdle();
+			} catch (error) {
+				// PQueue throws AbortError when signal is aborted — suppress it
+				if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
+			}
 		}
+
+		// Phase 3: cross-linking pass
+		if (!signal.aborted && !(await isBatchCancelled(batchId))) {
+			log.info(`runPhasedBatch — batch ${batchId}: Phase 3 — cross-linking`);
+			await runCrossLinking(sessionId, batchId, signal);
+		}
+
+		// Finalize batch status
+		const finalBatch = await db.indexBatch.findUnique({ where: { id: batchId } });
+		if (finalBatch && finalBatch.status !== "cancelled") {
+			if (finalBatch.completed + finalBatch.failed >= finalBatch.total) {
+				await db.indexBatch.update({
+					where: { id: batchId },
+					data: { status: "completed", completedAt: new Date() },
+				});
+			}
+		}
+	} finally {
+		batchAbortControllers.delete(batchId);
 	}
 }
 
@@ -304,6 +345,13 @@ export async function cancelSessionIndexing(sessionId: string): Promise<boolean>
 		where: { batchId: batch.id, status: "pending" },
 		data: { status: "cancelled" },
 	});
+
+	// Abort in-flight processes (kills spawned claude CLI processes via SIGTERM)
+	const controller = batchAbortControllers.get(batch.id);
+	if (controller) {
+		controller.abort();
+		batchAbortControllers.delete(batch.id);
+	}
 
 	crossLinkStatus.delete(batch.id);
 	log.info(`cancelSessionIndexing — session ${sessionId}, batch ${batch.id} cancelled`);

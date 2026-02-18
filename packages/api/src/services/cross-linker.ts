@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger, getDb } from "@cramkit/shared";
+import { CancellationError } from "./errors.js";
 import { BLOCKED_BUILTIN_TOOLS, LLM_MODEL, getCliModel } from "./llm-client.js";
 
 const log = createLogger("api");
@@ -162,7 +163,11 @@ rl.on("line", (line) => {
 `;
 }
 
-export async function runCrossLinkingAgent(sessionId: string): Promise<CrossLinkResult> {
+export async function runCrossLinkingAgent(
+	sessionId: string,
+	signal?: AbortSignal,
+): Promise<CrossLinkResult> {
+	if (signal?.aborted) throw new CancellationError("Cross-linking cancelled before start");
 	const db = getDb();
 	const model = getCliModel(LLM_MODEL);
 
@@ -311,12 +316,27 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 			proc.stdin?.end();
 
 			let stderr = "";
+			let aborted = false;
+
+			const onAbort = () => {
+				aborted = true;
+				proc.kill("SIGTERM");
+				log.info(`runCrossLinkingAgent — killing process for session ${sessionId} (cancelled)`);
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
 
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
 			});
 
 			proc.on("close", (code) => {
+				signal?.removeEventListener("abort", onAbort);
+
+				if (aborted || signal?.aborted) {
+					reject(new CancellationError("Cross-linking cancelled"));
+					return;
+				}
+
 				if (code !== 0) {
 					log.error(`runCrossLinkingAgent — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
 					reject(
@@ -344,6 +364,7 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 			});
 
 			proc.on("error", (err) => {
+				signal?.removeEventListener("abort", onAbort);
 				log.error(`runCrossLinkingAgent — spawn error: ${err.message}`);
 				reject(new Error(`Cross-linking agent spawn error: ${err.message}`));
 			});
