@@ -8,6 +8,18 @@ import { lectureNotesResponse } from "../fixtures/llm-responses.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
+	getCliModel: vi.fn().mockReturnValue("sonnet"),
+	LLM_MODEL: "sonnet",
+	BLOCKED_BUILTIN_TOOLS: [],
+}));
+
+vi.mock("../../packages/api/src/services/extraction-agent.js", () => ({
+	runExtractionAgent: vi.fn().mockImplementation(async (input: { resource: { type: string } }) => {
+		const { chatCompletion: cc } = await import("../../packages/api/src/services/llm-client.js");
+		const raw = await cc([{ role: "user", content: input.resource.type }]);
+		const text = raw.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+		return JSON.parse(text);
+	}),
 }));
 
 vi.mock("../../packages/api/src/lib/queue.js", () => ({
@@ -151,7 +163,11 @@ describe("graph routes", () => {
 		const body = (await res.json()) as Record<string, unknown>;
 		expect(body.ok).toBe(true);
 		expect(body.resourceId).toBe(resources[0].id);
-		expect(enqueueSessionGraphIndexing).toHaveBeenCalledWith(session.id, [resources[0].id]);
+		expect(enqueueSessionGraphIndexing).toHaveBeenCalledWith(
+			session.id,
+			[resources[0].id],
+			"standard",
+		);
 	});
 
 	it("POST /graph/sessions/:id/index-resource — invalid body → 400", async () => {

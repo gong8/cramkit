@@ -11,7 +11,7 @@ import {
 	relationshipExportSchema,
 	resourceExportSchema,
 } from "@cramkit/shared";
-import type { ImportStats } from "@cramkit/shared";
+import type { FileRole, ImportStats } from "@cramkit/shared";
 import JSZip from "jszip";
 
 const log = createLogger("import");
@@ -141,7 +141,7 @@ async function importResourceFiles(
 	files: Array<{
 		id: string;
 		filename: string;
-		role: string;
+		role: FileRole;
 		processedPath?: string | null;
 		pageCount?: number | null;
 		fileSize?: number | null;

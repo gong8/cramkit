@@ -28,7 +28,11 @@ const batchAbortControllers = new Map<string, AbortController>();
 // In-memory cross-linking status tracking (not persisted — only relevant during active batches)
 const crossLinkStatus = new Map<
 	string,
-	{ status: "pending" | "running" | "completed" | "failed"; error?: string; linksAdded?: number }
+	{
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		error?: string;
+		linksAdded?: number;
+	}
 >();
 
 // In-memory metadata extraction status tracking

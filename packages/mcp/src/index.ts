@@ -38,7 +38,7 @@ export const forceGraphReads =
 	existsSync(FLAG_FILE);
 
 log.info(
-	`force-graph-reads: ${forceGraphReads ? "ACTIVE — graph-only mode, blocking: " + [...BLOCKED_TOOLS].join(", ") : "inactive"}` +
+	`force-graph-reads: ${forceGraphReads ? `ACTIVE — graph-only mode, blocking: ${[...BLOCKED_TOOLS].join(", ")}` : "inactive"}` +
 		` (argv=${process.argv.includes("--force-graph-reads")},` +
 		` env=${process.env.FORCE_GRAPH_READS === "1"},` +
 		` file=${existsSync(FLAG_FILE)})`,

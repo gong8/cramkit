@@ -12,8 +12,7 @@ function sumBy<T>(arr: T[], fn: (item: T) => number): number {
 	return arr.reduce((sum, item) => sum + fn(item), 0);
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: generic utility
-function pick<T extends Record<string, any>, K extends keyof T>(obj: T, keys: K[]): Pick<T, K> {
+function pick<T extends Record<string, unknown>, K extends keyof T>(obj: T, keys: K[]): Pick<T, K> {
 	const result = {} as Pick<T, K>;
 	for (const key of keys) {
 		result[key] = obj[key];
@@ -120,8 +119,17 @@ function appendJson(archive: archiver.Archiver, data: unknown, zipPath: string):
 	archive.append(JSON.stringify(data, null, 2), { name: zipPath });
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-function buildManifest(session: any): ExportManifest {
+function buildManifest(session: {
+	name: string;
+	module: string | null;
+	examDate: Date | null;
+	scope: string | null;
+	notes: string | null;
+	resources: { id: string; files: unknown[]; chunks: unknown[] }[];
+	concepts: unknown[];
+	relationships: unknown[];
+	conversations: { id: string; messages: unknown[] }[];
+}): ExportManifest {
 	return {
 		version: 1,
 		exportedAt: new Date().toISOString(),
@@ -132,22 +140,56 @@ function buildManifest(session: any): ExportManifest {
 			scope: session.scope,
 			notes: session.notes,
 		},
-		resourceIds: session.resources.map((r: { id: string }) => r.id),
-		conversationIds: session.conversations.map((c: { id: string }) => c.id),
+		resourceIds: session.resources.map((r) => r.id),
+		conversationIds: session.conversations.map((c) => c.id),
 		stats: {
 			resourceCount: session.resources.length,
-			fileCount: sumBy(session.resources, (r: { files: unknown[] }) => r.files.length),
-			chunkCount: sumBy(session.resources, (r: { chunks: unknown[] }) => r.chunks.length),
+			fileCount: sumBy(session.resources, (r) => r.files.length),
+			chunkCount: sumBy(session.resources, (r) => r.chunks.length),
 			conceptCount: session.concepts.length,
 			relationshipCount: session.relationships.length,
 			conversationCount: session.conversations.length,
-			messageCount: sumBy(session.conversations, (c: { messages: unknown[] }) => c.messages.length),
+			messageCount: sumBy(session.conversations, (c) => c.messages.length),
 		},
 	};
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-function mapResourceExport(resource: any): ResourceExport {
+function mapResourceExport(resource: {
+	id: string;
+	name: string;
+	type: string;
+	label: string | null;
+	splitMode: string;
+	isIndexed: boolean;
+	isGraphIndexed: boolean;
+	metadata: string | null;
+	isMetaIndexed: boolean;
+	metaIndexDurationMs: number | null;
+	files: Array<{
+		id: string;
+		filename: string;
+		role: string;
+		pageCount: number | null;
+		fileSize: number | null;
+		processedPath: string | null;
+	}>;
+	chunks: Array<{
+		id: string;
+		sourceFileId: string | null;
+		parentId: string | null;
+		index: number;
+		depth: number;
+		nodeType: string;
+		slug: string | null;
+		diskPath: string | null;
+		title: string | null;
+		content: string;
+		startPage: number | null;
+		endPage: number | null;
+		keywords: string | null;
+		metadata: string | null;
+	}>;
+}): ResourceExport {
 	return {
 		...pick(resource, [
 			"id",
@@ -161,15 +203,13 @@ function mapResourceExport(resource: any): ResourceExport {
 			"metaIndexDurationMs",
 		]),
 		type: resource.type as ResourceExport["type"],
-		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-		files: resource.files.map((f: any) => ({
+		files: resource.files.map((f) => ({
 			...pick(f, ["id", "filename", "pageCount", "fileSize"]),
 			role: f.role as "PRIMARY" | "MARK_SCHEME" | "SOLUTIONS" | "SUPPLEMENT",
 			rawPath: `raw/${f.filename}`,
 			processedPath: f.processedPath ? `processed/${basename(f.processedPath)}` : null,
 		})),
-		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-		chunks: resource.chunks.map((c: any) =>
+		chunks: resource.chunks.map((c) =>
 			pick(c, [
 				"id",
 				"sourceFileId",
@@ -193,8 +233,20 @@ function mapResourceExport(resource: any): ResourceExport {
 async function addResourcesToArchive(
 	archive: archiver.Archiver,
 	sessionId: string,
-	// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-	resources: any[],
+	resources: Array<
+		Parameters<typeof mapResourceExport>[0] & {
+			files: Array<{
+				id: string;
+				filename: string;
+				role: string;
+				pageCount: number | null;
+				fileSize: number | null;
+				rawPath: string;
+				processedPath: string | null;
+			}>;
+			paperQuestions?: Array<Record<string, unknown>>;
+		}
+	>,
 ): Promise<void> {
 	for (const resource of resources) {
 		const prefix = `resources/${resource.id}`;
@@ -203,10 +255,11 @@ async function addResourcesToArchive(
 		appendJson(archive, mapResourceExport(resource), `${prefix}/resource.json`);
 
 		// Export PaperQuestion records for this resource
-		if (resource.paperQuestions?.length > 0) {
+		const paperQuestions = resource.paperQuestions;
+		if (paperQuestions && paperQuestions.length > 0) {
 			appendJson(
 				archive,
-				resource.paperQuestions.map((q: Record<string, unknown>) =>
+				paperQuestions.map((q: Record<string, unknown>) =>
 					pick(q, [
 						"id",
 						"resourceId",
@@ -241,22 +294,37 @@ async function addResourcesToArchive(
 	}
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-function mapMessage(m: any) {
+function mapMessage(
+	m: Record<string, unknown> & {
+		attachments: Array<Record<string, unknown> & { messageId: string | null }>;
+	},
+) {
 	return {
 		...pick(m, ["id", "role", "content", "toolCalls"]),
 		attachments: m.attachments
-			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-			.filter((a: any) => a.messageId !== null)
-			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-			.map((a: any) => pick(a, ["id", "filename", "contentType", "fileSize"])),
+			.filter((a) => a.messageId !== null)
+			.map((a) => pick(a, ["id", "filename", "contentType", "fileSize"])),
 	};
 }
 
 async function addConversationsToArchive(
 	archive: archiver.Archiver,
-	// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-	conversations: any[],
+	conversations: Array<{
+		id: string;
+		title: string | null;
+		messages: Array<
+			Record<string, unknown> & {
+				attachments: Array<
+					Record<string, unknown> & {
+						messageId: string | null;
+						id: string;
+						filename: string;
+						diskPath: string;
+					}
+				>;
+			}
+		>;
+	}>,
 ): Promise<void> {
 	for (const conv of conversations) {
 		appendJson(
@@ -265,10 +333,8 @@ async function addConversationsToArchive(
 			`conversations/${conv.id}.json`,
 		);
 
-		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-		const attachments = conv.messages.flatMap((m: any) =>
-			// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
-			m.attachments.filter((a: any) => a.messageId !== null),
+		const attachments = conv.messages.flatMap((m) =>
+			m.attachments.filter((a) => a.messageId !== null),
 		);
 		for (const att of attachments) {
 			const ext = att.filename.split(".").pop() ?? "bin";

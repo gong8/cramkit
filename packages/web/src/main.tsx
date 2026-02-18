@@ -7,8 +7,9 @@ import "./index.css";
 
 const queryClient = new QueryClient();
 
-// biome-ignore lint/style/noNonNullAssertion: root element always exists in index.html
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("Root element not found");
+createRoot(root).render(
 	<StrictMode>
 		<QueryClientProvider client={queryClient}>
 			<RouterProvider router={router} />

@@ -92,17 +92,10 @@ export function ConversationItem({
 	}
 
 	return (
-		<div
-			role="button"
-			tabIndex={0}
+		<button
+			type="button"
 			onClick={onSelect}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					onSelect();
-				}
-			}}
-			className={`group flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
+			className={`group flex w-full cursor-pointer items-center gap-2 rounded-lg border-none bg-transparent px-2 py-1.5 text-left text-sm transition-colors ${
 				isActive ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-accent/50"
 			}`}
 		>
@@ -131,6 +124,6 @@ export function ConversationItem({
 					<Trash2 className="h-3 w-3" />
 				</button>
 			</span>
-		</div>
+		</button>
 	);
 }

@@ -411,7 +411,7 @@ async function prepareInvocation(options: CliChatOptions): Promise<{
 	const cliNewImagePaths =
 		hasImages && options.newImages?.length
 			? (options.images ?? [])
-					.map((orig, i) => (newImageSet.has(orig) ? cliImagePaths![i] : null))
+					.map((orig, i) => (newImageSet.has(orig) ? cliImagePaths?.[i] : null))
 					.filter((p): p is string => p !== null)
 			: undefined;
 

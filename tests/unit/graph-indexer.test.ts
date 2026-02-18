@@ -8,6 +8,18 @@ import {
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
+	getCliModel: vi.fn().mockReturnValue("sonnet"),
+	LLM_MODEL: "sonnet",
+	BLOCKED_BUILTIN_TOOLS: [],
+}));
+
+vi.mock("../../packages/api/src/services/extraction-agent.js", () => ({
+	runExtractionAgent: vi.fn().mockImplementation(async (input: { resource: { type: string } }) => {
+		const { chatCompletion: cc } = await import("../../packages/api/src/services/llm-client.js");
+		const raw = await cc([{ role: "user", content: input.resource.type }]);
+		const text = raw.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+		return JSON.parse(text);
+	}),
 }));
 
 import { indexResourceGraph } from "../../packages/api/src/services/graph-indexer.js";

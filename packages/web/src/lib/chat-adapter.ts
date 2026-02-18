@@ -154,33 +154,31 @@ function buildContentParts(state: SseState): ContentPart[] {
 	];
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: assistant-ui message types are loosely typed
-function extractAttachmentIds(message: any): string[] {
-	if (!message?.attachments || !Array.isArray(message.attachments)) return [];
-	return (
-		message.attachments
-			.filter(
-				// biome-ignore lint/suspicious/noExplicitAny: dynamic attachment shape
-				(att: any) => typeof att?.id === "string" && att.id,
-			)
-			// biome-ignore lint/suspicious/noExplicitAny: dynamic attachment shape
-			.map((att: any) => att.id as string)
-	);
+function extractAttachmentIds(message: unknown): string[] {
+	const msg = message as Record<string, unknown> | null | undefined;
+	if (!msg?.attachments || !Array.isArray(msg.attachments)) return [];
+	return msg.attachments
+		.filter((att: unknown) => {
+			const a = att as Record<string, unknown> | null | undefined;
+			return typeof a?.id === "string" && a.id;
+		})
+		.map((att: unknown) => (att as Record<string, unknown>).id as string);
 }
 
 const CUID_PATTERN = /^c[a-z0-9]{20,}$/;
 
-// biome-ignore lint/suspicious/noExplicitAny: assistant-ui message types are loosely typed
-function extractRewindId(message: any): string | undefined {
-	if (!message?.id) return undefined;
-	const msgId = message.id as string;
+function extractRewindId(message: unknown): string | undefined {
+	const msg = message as Record<string, unknown> | null | undefined;
+	if (!msg?.id) return undefined;
+	const msgId = msg.id as string;
 	return CUID_PATTERN.test(msgId) ? msgId : undefined;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: assistant-ui message types are loosely typed
-function extractUserText(message: any): string {
+function extractUserText(message: unknown): string {
+	const msg = message as Record<string, unknown> | null | undefined;
+	if (!msg?.content || !Array.isArray(msg.content)) return "";
 	return (
-		message?.content
+		msg.content
 			.filter((part: { type: string }) => part.type === "text")
 			.map((part: { text: string }) => part.text)
 			.join("") || ""
@@ -189,43 +187,42 @@ function extractUserText(message: any): string {
 
 function handleSseEvent(
 	eventType: string,
-	// biome-ignore lint/suspicious/noExplicitAny: SSE event data is dynamically typed
-	parsed: any,
+	parsed: Record<string, unknown>,
 	state: SseState,
 ): boolean {
 	switch (eventType) {
 		case "content":
 			if (parsed.content) {
-				state.textContent += parsed.content;
+				state.textContent += parsed.content as string;
 				return true;
 			}
 			return false;
 
 		case "tool_call_start":
-			state.toolCalls.set(parsed.toolCallId, {
-				toolCallId: parsed.toolCallId,
-				toolName: parsed.toolName,
+			state.toolCalls.set(parsed.toolCallId as string, {
+				toolCallId: parsed.toolCallId as string,
+				toolName: parsed.toolName as string,
 			});
 			return true;
 
 		case "tool_call_args": {
-			const tc = state.toolCalls.get(parsed.toolCallId);
-			if (tc) tc.args = parsed.args;
+			const tc = state.toolCalls.get(parsed.toolCallId as string);
+			if (tc) tc.args = parsed.args as Record<string, unknown>;
 			return true;
 		}
 
 		case "tool_result": {
-			const tc = state.toolCalls.get(parsed.toolCallId);
+			const tc = state.toolCalls.get(parsed.toolCallId as string);
 			if (tc) {
-				tc.result = parsed.result;
-				tc.isError = parsed.isError;
+				tc.result = parsed.result as string;
+				tc.isError = parsed.isError as boolean;
 			}
 			return true;
 		}
 
 		case "thinking_delta":
 			if (parsed.text) {
-				state.thinkingText += parsed.text;
+				state.thinkingText += parsed.text as string;
 				return true;
 			}
 			return false;

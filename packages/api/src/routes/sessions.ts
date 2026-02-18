@@ -15,8 +15,15 @@ async function findSessionOr404(c: Context, id: string) {
 	return session;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: accepts any Zod schema
-function validateOrError(c: Context, schema: { safeParse: (d: any) => any }, body: unknown) {
+function validateOrError<T>(
+	c: Context,
+	schema: {
+		safeParse: (
+			d: unknown,
+		) => { success: true; data: T } | { success: false; error: { flatten: () => unknown } };
+	},
+	body: unknown,
+) {
 	const parsed = schema.safeParse(body);
 	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 	return { data: parsed.data };
