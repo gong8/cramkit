@@ -7,6 +7,7 @@ export type {
 	ChatMessage,
 	Concept,
 	ConversationSummary,
+	GraphLogEntry,
 	GraphResource,
 	GraphThoroughness,
 	ImportResult,
@@ -27,6 +28,7 @@ import type {
 	ChatMessage,
 	Concept,
 	ConversationSummary,
+	GraphLogEntry,
 	GraphThoroughness,
 	ImportResult,
 	IndexStatus,
@@ -240,6 +242,10 @@ export function fetchConcepts(sessionId: string): Promise<Concept[]> {
 
 export function fetchSessionGraph(sessionId: string): Promise<SessionGraph> {
 	return request(`/graph/sessions/${sessionId}/full`);
+}
+
+export function fetchGraphLog(sessionId: string, limit = 20): Promise<GraphLogEntry[]> {
+	return request(`/graph/sessions/${sessionId}/graph-log?limit=${limit}`);
 }
 
 // Conversation operations

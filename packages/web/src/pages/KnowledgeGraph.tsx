@@ -71,6 +71,7 @@ export function KnowledgeGraph() {
 
 			<div className="flex flex-1 overflow-hidden">
 				<GraphSidebar
+					sessionId={sessionId}
 					fullGraph={g.fullGraph}
 					stats={g.stats}
 					disabledNodeTypes={g.disabledNodeTypes}

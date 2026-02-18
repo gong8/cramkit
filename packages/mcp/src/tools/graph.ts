@@ -61,4 +61,23 @@ export const graphTools = {
 		parameters: z.object({ conceptId }),
 		execute: async ({ conceptId }: { conceptId: string }) => apiClient.getConcept(conceptId),
 	},
+
+	get_graph_log: {
+		description:
+			"View the indexing and enrichment history for a session. Shows a log of all graph mutations from every source: indexer (extraction), enricher (chat-based), cross-linker, and amortiser. Each entry includes concepts/relationships created, duration, and source details.",
+		parameters: z.object({
+			sessionId,
+			source: z
+				.string()
+				.optional()
+				.describe("Filter by source: 'indexer', 'enricher', 'cross-linker', or 'amortiser'"),
+			limit: z.number().optional().describe("Max entries to return (default 50)"),
+		}),
+		execute: async ({
+			sessionId,
+			source,
+			limit,
+		}: { sessionId: string; source?: string; limit?: number }) =>
+			apiClient.getGraphLog(sessionId, source, limit),
+	},
 };

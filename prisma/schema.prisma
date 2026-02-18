@@ -24,6 +24,7 @@ model Session {
 
   conversations  Conversation[]
   indexBatches   IndexBatch[]
+  graphLogs      GraphLog[]
 }
 
 model Resource {
@@ -225,4 +226,25 @@ model IndexJob {
   @@index([batchId])
   @@index([resourceId])
   @@index([status])
+}
+
+model GraphLog {
+  id                   String   @id @default(cuid())
+  sessionId            String
+  source               String
+  action               String
+  resourceId           String?
+  conversationId       String?
+  conceptsCreated      Int      @default(0)
+  conceptsUpdated      Int      @default(0)
+  relationshipsCreated Int      @default(0)
+  durationMs           Int?
+  details              String?
+  createdAt            DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([source])
+  @@index([createdAt])
 }

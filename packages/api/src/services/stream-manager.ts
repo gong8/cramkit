@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@cramkit/shared";
 import { createLogger } from "@cramkit/shared";
+import { enqueueEnrichment } from "../lib/queue.js";
 import type { ToolCallData } from "./cli-chat.js";
 import { LineBuffer } from "./line-buffer.js";
 
@@ -127,6 +128,81 @@ function parseSSELine(
 	return { type, data };
 }
 
+function extractAccessedEntities(toolCalls: ToolCallData[]): {
+	entities: Array<{ type: string; id: string }>;
+	sessionId: string | null;
+} {
+	const entities: Array<{ type: string; id: string }> = [];
+	const linkedPairs = new Set<string>();
+	let sessionId: string | null = null;
+
+	for (const tc of toolCalls) {
+		const tool = tc.toolName.replace(/^mcp__cramkit__/, "");
+		const args = tc.args;
+
+		if (args.sessionId && typeof args.sessionId === "string") {
+			sessionId = args.sessionId;
+		}
+
+		switch (tool) {
+			case "get_concept":
+				if (args.conceptId) entities.push({ type: "concept", id: args.conceptId as string });
+				break;
+			case "get_chunk":
+				if (args.chunkId) entities.push({ type: "chunk", id: args.chunkId as string });
+				break;
+			case "get_related":
+				if (args.id && args.type)
+					entities.push({ type: args.type as string, id: args.id as string });
+				break;
+			case "get_resource_info":
+			case "get_resource_content":
+				if (args.resourceId) entities.push({ type: "resource", id: args.resourceId as string });
+				break;
+			case "create_link":
+				if (args.sourceId && args.targetId) {
+					linkedPairs.add(`${args.sourceType}:${args.sourceId}`);
+					linkedPairs.add(`${args.targetType}:${args.targetId}`);
+				}
+				break;
+		}
+	}
+
+	// Deduplicate and exclude entities the agent already explicitly linked
+	const seen = new Set<string>();
+	const deduped = entities.filter((e) => {
+		const key = `${e.type}:${e.id}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+
+	return { entities: deduped, sessionId };
+}
+
+async function maybeEnqueueEnrichment(
+	db: PrismaClient,
+	conversationId: string,
+	toolCalls: ToolCallData[],
+): Promise<void> {
+	if (toolCalls.length === 0) return;
+
+	const { entities, sessionId: extractedSessionId } = extractAccessedEntities(toolCalls);
+	if (entities.length < 2) return;
+
+	let sessionId = extractedSessionId;
+	if (!sessionId) {
+		const conversation = await db.conversation.findUnique({
+			where: { id: conversationId },
+			select: { sessionId: true },
+		});
+		sessionId = conversation?.sessionId ?? null;
+	}
+	if (!sessionId) return;
+
+	enqueueEnrichment(sessionId, conversationId, entities);
+}
+
 async function finalizeStream(
 	stream: ActiveStream,
 	db: PrismaClient,
@@ -134,6 +210,13 @@ async function finalizeStream(
 	status: "complete" | "error",
 ): Promise<void> {
 	await safePersist(db, stream.conversationId, stream);
+
+	if (status === "complete") {
+		maybeEnqueueEnrichment(db, stream.conversationId, stream.toolCallsData).catch((e) => {
+			log.warn("finalizeStream — enrichment enqueue failed", e);
+		});
+	}
+
 	stream.status = status;
 	if (status === "error") {
 		emit("error", JSON.stringify({ error: "Stream failed" }));

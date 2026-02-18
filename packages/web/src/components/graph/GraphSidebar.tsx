@@ -1,5 +1,7 @@
-import type { GraphResource } from "@/lib/api.js";
-import { ArrowRight } from "lucide-react";
+import { type GraphLogEntry, type GraphResource, fetchGraphLog } from "@/lib/api.js";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
+import { useState } from "react";
 import type { GraphNode } from "reagraph";
 import { NodePicker } from "./NodePicker.js";
 import type { FullGraphData, GraphStats } from "./constants.js";
@@ -11,6 +13,7 @@ import {
 } from "./constants.js";
 
 export function GraphSidebar({
+	sessionId,
 	fullGraph,
 	stats,
 	disabledNodeTypes,
@@ -37,6 +40,7 @@ export function GraphSidebar({
 	onClearPath,
 	onNavigateToNode,
 }: {
+	sessionId: string;
 	fullGraph: FullGraphData;
 	stats: GraphStats | null;
 	disabledNodeTypes: Set<string>;
@@ -111,6 +115,8 @@ export function GraphSidebar({
 				onClearPath={onClearPath}
 				onNavigateToNode={onNavigateToNode}
 			/>
+
+			<ActivityLogPanel sessionId={sessionId} />
 		</div>
 	);
 }
@@ -423,6 +429,98 @@ function PathfindingPanel({
 						</div>
 					</div>
 				)}
+			</div>
+		</div>
+	);
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+	indexer: "Indexer",
+	enricher: "Enricher",
+	"cross-linker": "Cross-linker",
+	amortiser: "Amortiser",
+};
+
+const SOURCE_COLORS: Record<string, string> = {
+	indexer: "#3b82f6",
+	enricher: "#8b5cf6",
+	"cross-linker": "#f59e0b",
+	amortiser: "#6b7280",
+};
+
+function formatDuration(ms: number | null): string {
+	if (ms === null) return "";
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+	return `${Math.round(ms / 60_000)}m`;
+}
+
+function formatRelativeTime(dateStr: string): string {
+	const now = Date.now();
+	const then = new Date(dateStr).getTime();
+	const diff = now - then;
+	if (diff < 60_000) return "just now";
+	if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+	if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+	return `${Math.round(diff / 86_400_000)}d ago`;
+}
+
+function ActivityLogPanel({ sessionId }: { sessionId: string }) {
+	const [expanded, setExpanded] = useState(false);
+
+	const { data: entries } = useQuery({
+		queryKey: ["graph-log", sessionId],
+		queryFn: () => fetchGraphLog(sessionId, 20),
+		enabled: expanded,
+		refetchInterval: expanded ? 15_000 : false,
+	});
+
+	return (
+		<div className="border-t border-border p-3">
+			<button
+				type="button"
+				className="flex w-full items-center gap-1 text-xs font-semibold uppercase text-muted-foreground"
+				onClick={() => setExpanded((v) => !v)}
+			>
+				{expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+				Activity Log
+			</button>
+			{expanded && (
+				<div className="mt-2 space-y-1.5">
+					{!entries && <p className="text-xs text-muted-foreground">Loading...</p>}
+					{entries?.length === 0 && (
+						<p className="text-xs text-muted-foreground">No activity yet.</p>
+					)}
+					{entries?.map((entry) => (
+						<ActivityLogEntry key={entry.id} entry={entry} />
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function ActivityLogEntry({ entry }: { entry: GraphLogEntry }) {
+	const color = SOURCE_COLORS[entry.source] || "#6b7280";
+	const label = SOURCE_LABELS[entry.source] || entry.source;
+
+	const parts: string[] = [];
+	if (entry.conceptsCreated > 0) parts.push(`${entry.conceptsCreated} concepts`);
+	if (entry.relationshipsCreated > 0) parts.push(`${entry.relationshipsCreated} rels`);
+	if (parts.length === 0) parts.push("no changes");
+
+	return (
+		<div className="rounded bg-accent/30 px-2 py-1.5 text-xs">
+			<div className="flex items-center justify-between">
+				<div className="flex items-center gap-1.5">
+					<span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+					<span className="font-medium">{label}</span>
+				</div>
+				<span className="text-muted-foreground">{formatRelativeTime(entry.createdAt)}</span>
+			</div>
+			<div className="mt-0.5 flex items-center justify-between text-muted-foreground">
+				<span>{parts.join(", ")}</span>
+				{entry.durationMs !== null && <span>{formatDuration(entry.durationMs)}</span>}
 			</div>
 		</div>
 	);

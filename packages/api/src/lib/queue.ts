@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import PQueue from "p-queue";
+import { type EnrichmentResult, runChatEnrichment } from "../services/chat-enricher.js";
 import { runCrossLinkingAgent } from "../services/cross-linker.js";
 import { CancellationError } from "../services/errors.js";
 import { toTitleCase } from "../services/graph-indexer-utils.js";
@@ -29,6 +30,123 @@ export function enqueueProcessing(resourceId: string): void {
 }
 
 export const getQueueSize = () => queue.size + queue.pending;
+
+const enrichmentQueue = new PQueue({ concurrency: 1 });
+
+export function enqueueEnrichment(
+	sessionId: string,
+	conversationId: string,
+	entities: Array<{ type: string; id: string }>,
+): void {
+	enrichmentQueue.add(async () => {
+		const startTime = Date.now();
+		try {
+			const result = await runChatEnrichment({
+				sessionId,
+				conversationId,
+				accessedEntities: entities,
+			});
+			await writeEnrichmentResults(sessionId, conversationId, result, startTime);
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			log.error(
+				`enqueueEnrichment — session ${sessionId}, conversation ${conversationId} failed: ${msg}`,
+			);
+		}
+	});
+	log.info(
+		`enqueueEnrichment — session ${sessionId}, conversation ${conversationId}, ${entities.length} entities, queue size: ${enrichmentQueue.size + enrichmentQueue.pending}`,
+	);
+}
+
+async function writeEnrichmentResults(
+	sessionId: string,
+	conversationId: string,
+	result: EnrichmentResult,
+	startTime: number,
+): Promise<void> {
+	const db = getDb();
+	let relationshipsCreated = 0;
+
+	if (result.links.length > 0) {
+		const concepts = await db.concept.findMany({
+			where: { sessionId },
+			select: { id: true, name: true },
+		});
+		const conceptMap = new Map(concepts.map((c) => [c.name, c.id]));
+
+		const relationships: Array<{
+			sessionId: string;
+			sourceType: string;
+			sourceId: string;
+			sourceLabel: string;
+			targetType: string;
+			targetId: string;
+			targetLabel: string;
+			relationship: string;
+			confidence: number;
+			createdBy: string;
+		}> = [];
+
+		for (const link of result.links) {
+			const sourceName = toTitleCase(link.sourceConcept);
+			const targetName = toTitleCase(link.targetConcept);
+			const sourceId = conceptMap.get(sourceName);
+			const targetId = conceptMap.get(targetName);
+			if (!sourceId || !targetId) continue;
+
+			relationships.push({
+				sessionId,
+				sourceType: "concept",
+				sourceId,
+				sourceLabel: sourceName,
+				targetType: "concept",
+				targetId,
+				targetLabel: targetName,
+				relationship: link.relationship,
+				confidence: link.confidence ?? 0.7,
+				createdBy: "enricher",
+			});
+		}
+
+		if (relationships.length > 0) {
+			const existing = await db.relationship.findMany({
+				where: {
+					sessionId,
+					sourceType: "concept",
+					targetType: "concept",
+				},
+				select: { sourceId: true, targetId: true, relationship: true },
+			});
+			const existingKeys = new Set(
+				existing.map((r) => `${r.sourceId}:${r.targetId}:${r.relationship}`),
+			);
+
+			const newRels = relationships.filter(
+				(r) => !existingKeys.has(`${r.sourceId}:${r.targetId}:${r.relationship}`),
+			);
+
+			if (newRels.length > 0) {
+				await db.relationship.createMany({ data: newRels });
+				relationshipsCreated = newRels.length;
+				log.info(
+					`writeEnrichmentResults — session ${sessionId}: added ${newRels.length} enricher links`,
+				);
+			}
+		}
+	}
+
+	await db.graphLog.create({
+		data: {
+			sessionId,
+			source: "enricher",
+			action: "enrich",
+			conversationId,
+			relationshipsCreated,
+			durationMs: Date.now() - startTime,
+		},
+	});
+}
 
 export function enqueueGraphIndexing(resourceId: string, thoroughness?: Thoroughness): void {
 	indexingQueue.add(() => indexResourceGraph(resourceId, thoroughness));
@@ -112,6 +230,7 @@ async function runCrossLinking(
 	if ((await isBatchCancelled(batchId)) || signal?.aborted) return;
 
 	crossLinkStatus.set(batchId, { status: "running" });
+	const crossLinkStart = Date.now();
 
 	try {
 		log.info(`runCrossLinking — session ${sessionId}, starting cross-linking pass`);
@@ -188,6 +307,20 @@ async function runCrossLinking(
 		}
 
 		crossLinkStatus.set(batchId, { status: "completed", linksAdded });
+
+		try {
+			await db.graphLog.create({
+				data: {
+					sessionId,
+					source: "cross-linker",
+					action: "cross-link",
+					relationshipsCreated: linksAdded,
+					durationMs: Date.now() - crossLinkStart,
+				},
+			});
+		} catch (e) {
+			log.warn("runCrossLinking — failed to write GraphLog", e);
+		}
 	} catch (error) {
 		if (error instanceof CancellationError) {
 			crossLinkStatus.set(batchId, { status: "skipped" });

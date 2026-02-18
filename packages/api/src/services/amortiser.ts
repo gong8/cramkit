@@ -18,6 +18,7 @@ export async function amortiseSearchResults(
 ): Promise<void> {
 	try {
 		const db = getDb();
+		const amortiseStart = Date.now();
 
 		const terms = query
 			.toLowerCase()
@@ -88,6 +89,21 @@ export async function amortiseSearchResults(
 				`amortiseSearchResults — created ${toCreate.length} new relationships` +
 					` for query "${query}"`,
 			);
+
+			try {
+				await db.graphLog.create({
+					data: {
+						sessionId,
+						source: "amortiser",
+						action: "amortise",
+						relationshipsCreated: toCreate.length,
+						durationMs: Date.now() - amortiseStart,
+						details: JSON.stringify({ query }),
+					},
+				});
+			} catch (e) {
+				log.warn("amortiseSearchResults — failed to write GraphLog", e);
+			}
 		}
 	} catch (error) {
 		log.error("amortiseSearchResults — failed", error);
@@ -103,6 +119,7 @@ export async function amortiseRead(
 		if (entities.length === 0 || matchText.length === 0) return;
 
 		const db = getDb();
+		const amortiseStart = Date.now();
 		const text = matchText.toLowerCase();
 
 		const allConcepts = await db.concept.findMany({
@@ -172,6 +189,23 @@ export async function amortiseRead(
 		if (toCreate.length > 0) {
 			await db.relationship.createMany({ data: toCreate });
 			log.info(`amortiseRead — created ${toCreate.length} new relationships`);
+
+			try {
+				await db.graphLog.create({
+					data: {
+						sessionId,
+						source: "amortiser",
+						action: "amortise",
+						relationshipsCreated: toCreate.length,
+						durationMs: Date.now() - amortiseStart,
+						details: JSON.stringify({
+							matchText: matchText.slice(0, 200),
+						}),
+					},
+				});
+			} catch (e) {
+				log.warn("amortiseRead — failed to write GraphLog", e);
+			}
 		}
 	} catch (error) {
 		log.error("amortiseRead — failed", error);

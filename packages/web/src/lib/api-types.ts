@@ -164,6 +164,21 @@ export interface StreamStatus {
 	status: "streaming" | "complete" | "error" | null;
 }
 
+export interface GraphLogEntry {
+	id: string;
+	sessionId: string;
+	source: string;
+	action: string;
+	resourceId: string | null;
+	conversationId: string | null;
+	conceptsCreated: number;
+	conceptsUpdated: number;
+	relationshipsCreated: number;
+	durationMs: number | null;
+	details: string | null;
+	createdAt: string;
+}
+
 export interface ImportResult {
 	sessionId: string;
 	stats: {

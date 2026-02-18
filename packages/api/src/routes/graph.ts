@@ -201,6 +201,28 @@ graphRoutes.get("/sessions/:sessionId/full", async (c) => {
 	return c.json({ concepts, relationships, resources, chunkResourceMap });
 });
 
+graphRoutes.get("/sessions/:sessionId/graph-log", async (c) => {
+	const db = getDb();
+	const sessionId = c.req.param("sessionId");
+	const source = c.req.query("source");
+	const limitParam = c.req.query("limit");
+	const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
+
+	const where: Record<string, unknown> = { sessionId };
+	if (source) where.source = source;
+
+	const entries = await db.graphLog.findMany({
+		where,
+		orderBy: { createdAt: "desc" },
+		take: limit,
+	});
+
+	log.info(
+		`GET /graph/sessions/${sessionId}/graph-log — ${entries.length} entries (source=${source ?? "all"})`,
+	);
+	return c.json(entries);
+});
+
 graphRoutes.get("/sessions/:sessionId/index-status", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");

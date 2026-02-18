@@ -403,6 +403,23 @@ export async function indexResourceGraph(
 		result.file_concept_links.length +
 		result.concept_concept_links.length +
 		result.question_concept_links.length;
+
+	try {
+		await db.graphLog.create({
+			data: {
+				sessionId: resource.sessionId,
+				source: "indexer",
+				action: "extract",
+				resourceId,
+				conceptsCreated: result.concepts.length,
+				relationshipsCreated: totalRels,
+				durationMs: Date.now() - startTime,
+			},
+		});
+	} catch (e) {
+		log.warn("indexResourceGraph — failed to write GraphLog", e);
+	}
+
 	log.info(
 		`indexResourceGraph — completed "${resource.name}": ${result.concepts.length} concepts, ${totalRels} relationships`,
 	);

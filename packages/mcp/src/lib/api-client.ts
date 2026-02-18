@@ -69,4 +69,12 @@ export const apiClient = {
 	listConcepts: (sessionId: string) => request<unknown[]>(`/graph/sessions/${sessionId}/concepts`),
 
 	getConcept: (conceptId: string) => request<unknown>(`/graph/concepts/${conceptId}`),
+
+	getGraphLog: (sessionId: string, source?: string, limit?: number) => {
+		const params = new URLSearchParams();
+		if (source) params.set("source", source);
+		if (limit) params.set("limit", String(limit));
+		const qs = params.toString();
+		return request<unknown[]>(`/graph/sessions/${sessionId}/graph-log${qs ? `?${qs}` : ""}`);
+	},
 };
