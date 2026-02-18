@@ -15,6 +15,7 @@ import {
 	type Thoroughness,
 	indexResourceGraph,
 } from "../services/graph-indexer.js";
+import { indexResourceMetadata } from "../services/metadata-indexer.js";
 import { processResource } from "../services/resource-processor.js";
 
 const log = createLogger("api");
@@ -28,6 +29,18 @@ const batchAbortControllers = new Map<string, AbortController>();
 const crossLinkStatus = new Map<
 	string,
 	{ status: "pending" | "running" | "completed" | "failed"; error?: string; linksAdded?: number }
+>();
+
+// In-memory metadata extraction status tracking
+const metadataStatus = new Map<
+	string,
+	{
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		total?: number;
+		completed?: number;
+		failed?: number;
+		error?: string;
+	}
 >();
 
 // In-memory cleanup status tracking
@@ -433,6 +446,110 @@ async function runGraphCleanup(
 	}
 }
 
+async function runMetadataExtraction(
+	sessionId: string,
+	batchId: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	const db = getDb();
+
+	if ((await isBatchCancelled(batchId)) || signal?.aborted) return;
+
+	// Find all successfully graph-indexed resources in this batch
+	const batch = await db.indexBatch.findUnique({
+		where: { id: batchId },
+		include: {
+			jobs: {
+				where: { status: "completed" },
+				select: { resourceId: true },
+			},
+		},
+	});
+	if (!batch || batch.jobs.length === 0) {
+		metadataStatus.set(batchId, { status: "skipped" });
+		return;
+	}
+
+	// Only process resources that are graph-indexed but not yet meta-indexed
+	const resources = await db.resource.findMany({
+		where: {
+			id: { in: batch.jobs.map((j) => j.resourceId) },
+			isGraphIndexed: true,
+			isMetaIndexed: false,
+		},
+		select: { id: true, name: true },
+	});
+
+	if (resources.length === 0) {
+		metadataStatus.set(batchId, { status: "completed", total: 0, completed: 0, failed: 0 });
+		return;
+	}
+
+	metadataStatus.set(batchId, {
+		status: "running",
+		total: resources.length,
+		completed: 0,
+		failed: 0,
+	});
+
+	const metaQueue = new PQueue({ concurrency: 3 });
+	let completed = 0;
+	let failed = 0;
+
+	for (const resource of resources) {
+		metaQueue.add(
+			async () => {
+				if (signal?.aborted || (await isBatchCancelled(batchId))) return;
+				try {
+					await indexResourceMetadata(resource.id, signal);
+					completed++;
+					metadataStatus.set(batchId, {
+						status: "running",
+						total: resources.length,
+						completed,
+						failed,
+					});
+				} catch (error) {
+					if (error instanceof CancellationError) return;
+					failed++;
+					const msg = error instanceof Error ? error.message : String(error);
+					log.error(`runMetadataExtraction — "${resource.name}" failed: ${msg}`);
+					metadataStatus.set(batchId, {
+						status: "running",
+						total: resources.length,
+						completed,
+						failed,
+					});
+					// Non-fatal: don't fail the batch
+				}
+			},
+			{ signal },
+		);
+	}
+
+	try {
+		await metaQueue.onIdle();
+	} catch (error) {
+		if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
+	}
+
+	if (signal?.aborted || (await isBatchCancelled(batchId))) {
+		metadataStatus.set(batchId, { status: "skipped" });
+		return;
+	}
+
+	metadataStatus.set(batchId, {
+		status: "completed",
+		total: resources.length,
+		completed,
+		failed,
+	});
+
+	log.info(
+		`runMetadataExtraction — session ${sessionId}: ${completed}/${resources.length} completed, ${failed} failed`,
+	);
+}
+
 async function runPhasedBatch(batchId: string): Promise<void> {
 	const db = getDb();
 
@@ -500,6 +617,12 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 			await runGraphCleanup(sessionId, batchId, signal);
 		}
 
+		// Phase 5: metadata extraction (per-resource, parallel, concurrency=3)
+		if (!signal.aborted && !(await isBatchCancelled(batchId))) {
+			log.info(`runPhasedBatch — batch ${batchId}: Phase 5 — metadata extraction`);
+			await runMetadataExtraction(sessionId, batchId, signal);
+		}
+
 		// Finalize batch status
 		const finalBatch = await db.indexBatch.findUnique({ where: { id: batchId } });
 		if (finalBatch && finalBatch.status !== "cancelled") {
@@ -553,9 +676,10 @@ export async function enqueueSessionGraphIndexing(
 		include: { jobs: true },
 	});
 
-	// Initialize cross-link and cleanup status
+	// Initialize cross-link, cleanup, and metadata status
 	crossLinkStatus.set(batch.id, { status: "pending" });
 	cleanupStatus.set(batch.id, { status: "pending" });
+	metadataStatus.set(batch.id, { status: "pending" });
 
 	// Enqueue a single phased batch run (keeps concurrency=1 at batch level)
 	indexingQueue.add(() => runPhasedBatch(batch.id));
@@ -594,12 +718,13 @@ export async function cancelSessionIndexing(sessionId: string): Promise<boolean>
 
 	crossLinkStatus.delete(batch.id);
 	cleanupStatus.delete(batch.id);
+	metadataStatus.delete(batch.id);
 	log.info(`cancelSessionIndexing — session ${sessionId}, batch ${batch.id} cancelled`);
 	return true;
 }
 
 export interface PhaseInfo {
-	current: 1 | 2 | 3 | 4 | null;
+	current: 1 | 2 | 3 | 4 | 5 | null;
 	phase1: { total: number; completed: number; failed: number; mode: "sequential" };
 	phase2: {
 		total: number;
@@ -623,6 +748,12 @@ export interface PhaseInfo {
 			integrityFixes: number;
 			conceptsMerged: number;
 		};
+	};
+	phase5: {
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		total?: number;
+		completed?: number;
+		failed?: number;
 	};
 }
 
@@ -727,6 +858,19 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 		phase4Status = { status: "pending" };
 	}
 
+	// Determine metadata extraction status
+	const mdStatus = metadataStatus.get(batch.id);
+	let phase5Status: PhaseInfo["phase5"];
+	if (batch.status === "cancelled") {
+		phase5Status = { status: "skipped" };
+	} else if (mdStatus) {
+		phase5Status = { ...mdStatus };
+	} else if (batch.status === "completed") {
+		phase5Status = { status: "completed" };
+	} else {
+		phase5Status = { status: "pending" };
+	}
+
 	// Determine current phase
 	let currentPhase: PhaseInfo["current"] = null;
 	if (batch.status === "running") {
@@ -738,6 +882,8 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 			currentPhase = 3;
 		} else if (phase4Status.status === "running") {
 			currentPhase = 4;
+		} else if (phase5Status.status === "running") {
+			currentPhase = 5;
 		}
 	}
 
@@ -767,6 +913,7 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 			},
 			phase3: phase3Status,
 			phase4: phase4Status,
+			phase5: phase5Status,
 		},
 		resources,
 	};
@@ -792,6 +939,7 @@ export async function resumeInterruptedBatches(): Promise<void> {
 
 		crossLinkStatus.set(batch.id, { status: "pending" });
 		cleanupStatus.set(batch.id, { status: "pending" });
+		metadataStatus.set(batch.id, { status: "pending" });
 		indexingQueue.add(() => runPhasedBatch(batch.id));
 
 		const pendingCount = batch.jobs.filter(
@@ -831,6 +979,7 @@ export async function retryFailedJobs(sessionId: string): Promise<number> {
 
 	crossLinkStatus.set(batch.id, { status: "pending" });
 	cleanupStatus.set(batch.id, { status: "pending" });
+	metadataStatus.set(batch.id, { status: "pending" });
 	indexingQueue.add(() => runPhasedBatch(batch.id));
 
 	log.info(`retryFailedJobs — session ${sessionId}, retrying ${failedJobIds.length} jobs`);

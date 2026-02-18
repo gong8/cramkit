@@ -70,6 +70,19 @@ export const apiClient = {
 
 	getConcept: (conceptId: string) => request<unknown>(`/graph/concepts/${conceptId}`),
 
+	// Questions
+	listPaperQuestions: (resourceId: string) =>
+		request<unknown[]>(`/questions/resources/${resourceId}/questions`),
+
+	getPaperQuestion: (questionId: string) => request<unknown>(`/questions/${questionId}`),
+
+	listSessionQuestions: (sessionId: string) =>
+		request<unknown[]>(`/questions/sessions/${sessionId}/questions`),
+
+	// Resource metadata
+	getResourceMetadata: (resourceId: string) =>
+		request<unknown>(`/resources/${resourceId}/metadata`),
+
 	getGraphLog: (sessionId: string, source?: string, limit?: number) => {
 		const params = new URLSearchParams();
 		if (source) params.set("source", source);

@@ -1,6 +1,10 @@
 import type { z } from "zod";
 import { FileRoleEnum, ResourceTypeEnum } from "./schemas.js";
-import type { exportManifestSchema, resourceExportSchema } from "./schemas.js";
+import type {
+	exportManifestSchema,
+	paperQuestionExportSchema,
+	resourceExportSchema,
+} from "./schemas.js";
 
 export const ResourceType = ResourceTypeEnum.enum;
 export type ResourceType = z.infer<typeof ResourceTypeEnum>;
@@ -26,7 +30,17 @@ export interface ResourceSummary {
 	label: string | null;
 	isIndexed: boolean;
 	isGraphIndexed: boolean;
+	isMetaIndexed: boolean;
 	fileCount: number;
+}
+
+export interface PaperQuestionSummary {
+	id: string;
+	questionNumber: string;
+	parentNumber: string | null;
+	marks: number | null;
+	questionType: string | null;
+	commandWords: string | null;
 }
 
 export interface ChunkSummary {
@@ -41,6 +55,7 @@ export interface ChunkSummary {
 
 export type ExportManifest = z.infer<typeof exportManifestSchema>;
 export type ResourceExport = z.infer<typeof resourceExportSchema>;
+export type PaperQuestionExport = z.infer<typeof paperQuestionExportSchema>;
 
 export interface ImportStats {
 	sessionId: string;

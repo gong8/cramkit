@@ -19,6 +19,10 @@ vi.mock("../../packages/api/src/services/resource-processor.js", () => ({
 	processResource: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../packages/api/src/services/metadata-indexer.js", () => ({
+	indexResourceMetadata: vi.fn().mockResolvedValue(undefined),
+}));
+
 import {
 	enqueueGraphIndexing,
 	enqueueProcessing,
@@ -40,7 +44,7 @@ describe("queue", () => {
 		enqueueGraphIndexing("resource-1");
 
 		await vi.waitFor(() => {
-			expect(indexResourceGraph).toHaveBeenCalledWith("resource-1");
+			expect(indexResourceGraph).toHaveBeenCalledWith("resource-1", undefined);
 		});
 	});
 
@@ -68,7 +72,11 @@ describe("queue", () => {
 		});
 
 		for (const id of resourceIds) {
-			expect(indexResourceGraph).toHaveBeenCalledWith(id);
+			expect(indexResourceGraph).toHaveBeenCalledWith(
+				id,
+				expect.any(String),
+				expect.any(AbortSignal),
+			);
 		}
 	});
 
@@ -134,7 +142,7 @@ describe("queue", () => {
 		await vi.waitFor(
 			() => {
 				expect(processResource).toHaveBeenCalledWith("resource-a");
-				expect(indexResourceGraph).toHaveBeenCalledWith("resource-b");
+				expect(indexResourceGraph).toHaveBeenCalledWith("resource-b", undefined);
 			},
 			{ timeout: 2000 },
 		);

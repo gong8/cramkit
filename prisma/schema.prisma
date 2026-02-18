@@ -25,6 +25,7 @@ model Session {
   conversations  Conversation[]
   indexBatches   IndexBatch[]
   graphLogs      GraphLog[]
+  paperQuestions PaperQuestion[]
 }
 
 model Resource {
@@ -38,9 +39,13 @@ model Resource {
   isIndexed      Boolean @default(false)
   isGraphIndexed Boolean @default(false)
   graphIndexDurationMs Int?
+  metadata              String?
+  isMetaIndexed         Boolean @default(false)
+  metaIndexDurationMs   Int?
   files     File[]
   chunks    Chunk[]
   indexJobs IndexJob[]
+  paperQuestions PaperQuestion[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([sessionId])
@@ -96,6 +101,7 @@ model Chunk {
   startPage Int?
   endPage   Int?
   keywords  String?
+  metadata  String?
 
   createdAt DateTime @default(now())
 
@@ -137,6 +143,9 @@ model Concept {
   name        String
   description String?
   aliases     String?
+  content     String?
+  contentType String?
+  metadata    String?
 
   createdBy   String  @default("system")
   createdAt   DateTime @default(now())
@@ -228,6 +237,31 @@ model IndexJob {
   @@index([batchId])
   @@index([resourceId])
   @@index([status])
+}
+
+model PaperQuestion {
+  id         String   @id @default(cuid())
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  chunkId    String?
+
+  questionNumber  String
+  parentNumber    String?
+  marks           Int?
+  questionType    String?
+  commandWords    String?
+  content         String
+  markSchemeText  String?
+  solutionText    String?
+  metadata        String?
+
+  createdAt DateTime @default(now())
+
+  @@index([resourceId])
+  @@index([sessionId])
+  @@index([questionNumber, resourceId])
 }
 
 model GraphLog {

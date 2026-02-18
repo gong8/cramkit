@@ -132,6 +132,7 @@ export const chunkExportSchema = z.object({
 	startPage: nopt(z.number().int()),
 	endPage: nopt(z.number().int()),
 	keywords: nopt(z.string()),
+	metadata: nopt(z.string()),
 });
 
 export const resourceExportSchema = z.object({
@@ -142,6 +143,9 @@ export const resourceExportSchema = z.object({
 	splitMode: z.string(),
 	isIndexed: z.boolean(),
 	isGraphIndexed: z.boolean(),
+	metadata: nopt(z.string()),
+	isMetaIndexed: z.boolean().optional(),
+	metaIndexDurationMs: nopt(z.number().int()),
 	files: z.array(fileExportSchema),
 	chunks: z.array(chunkExportSchema),
 });
@@ -151,7 +155,25 @@ export const conceptExportSchema = z.object({
 	name: z.string(),
 	description: nopt(z.string()),
 	aliases: nopt(z.string()),
+	content: nopt(z.string()),
+	contentType: nopt(z.string()),
+	metadata: nopt(z.string()),
 	createdBy: z.string(),
+});
+
+export const paperQuestionExportSchema = z.object({
+	id: z.string(),
+	resourceId: z.string(),
+	chunkId: nopt(z.string()),
+	questionNumber: z.string(),
+	parentNumber: nopt(z.string()),
+	marks: nopt(z.number().int()),
+	questionType: nopt(z.string()),
+	commandWords: nopt(z.string()),
+	content: z.string(),
+	markSchemeText: nopt(z.string()),
+	solutionText: nopt(z.string()),
+	metadata: nopt(z.string()),
 });
 
 export const relationshipExportSchema = z.object({

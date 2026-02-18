@@ -5,6 +5,7 @@ import { cors } from "./middleware/cors.js";
 import { chatRoutes } from "./routes/chat.js";
 import { chunksRoutes } from "./routes/chunks.js";
 import { graphRoutes } from "./routes/graph.js";
+import { questionsRoutes } from "./routes/questions.js";
 import { relationshipsRoutes } from "./routes/relationships.js";
 import { resourcesRoutes } from "./routes/resources.js";
 import { searchRoutes } from "./routes/search.js";
@@ -21,6 +22,7 @@ app.use("*", cors());
 
 app.route("/sessions", sessionsRoutes);
 app.route("/resources", resourcesRoutes);
+app.route("/questions", questionsRoutes);
 app.route("/chunks", chunksRoutes);
 app.route("/relationships", relationshipsRoutes);
 app.route("/search", searchRoutes);

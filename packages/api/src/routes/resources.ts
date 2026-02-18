@@ -292,6 +292,33 @@ resourcesRoutes.get("/:id/content", async (c) => {
 	return c.json({ id: result.id, name: result.name, type: result.type, content });
 });
 
+resourcesRoutes.get("/:id/metadata", async (c) => {
+	const db = getDb();
+	const resourceId = c.req.param("id");
+	const result = await findResourceOr404(c, resourceId);
+	if (result instanceof Response) return result;
+
+	const chunks = await db.chunk.findMany({
+		where: { resourceId, metadata: { not: null } },
+		select: { id: true, title: true, metadata: true },
+	});
+
+	const chunkMetadata = chunks.map((ch) => ({
+		id: ch.id,
+		title: ch.title,
+		metadata: ch.metadata ? JSON.parse(ch.metadata) : null,
+	}));
+
+	log.info(`GET /resources/${resourceId}/metadata`);
+	return c.json({
+		resourceId,
+		metadata: result.metadata ? JSON.parse(result.metadata) : null,
+		isMetaIndexed: result.isMetaIndexed,
+		metaIndexDurationMs: result.metaIndexDurationMs,
+		chunks: chunkMetadata,
+	});
+});
+
 resourcesRoutes.get("/:id/tree", async (c) => {
 	const db = getDb();
 	const resourceId = c.req.param("id");

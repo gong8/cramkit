@@ -132,7 +132,7 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 	const overFetchLimit = parsed.data.limit * 3;
 	const queryTerms = parsed.data.q.split(/\s+/).filter((t) => t.length > 1);
 
-	const [contentChunks, graphResults] = await Promise.all([
+	const [contentChunks, graphResults, questionResults, conceptResults] = await Promise.all([
 		db.chunk.findMany({
 			where: {
 				resource: { sessionId },
@@ -150,9 +150,93 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 			take: overFetchLimit,
 		}),
 		searchGraph(sessionId, parsed.data.q, overFetchLimit),
+		// Search PaperQuestion content
+		db.paperQuestion.findMany({
+			where: {
+				sessionId,
+				OR: queryTerms.map((term) => ({
+					content: { contains: term },
+				})),
+			},
+			include: {
+				resource: { select: { id: true, name: true, type: true } },
+			},
+			take: overFetchLimit,
+		}),
+		// Search Concept content (verbatim definitions, theorems, etc.)
+		db.concept.findMany({
+			where: {
+				sessionId,
+				content: { not: null },
+				OR: queryTerms.map((term) => ({
+					OR: [{ content: { contains: term } }, { name: { contains: term } }],
+				})),
+			},
+			take: overFetchLimit,
+		}),
 	]);
 
+	// Convert PaperQuestion matches into ContentResult format
+	const questionContentResults: ContentResult[] = questionResults.map((q) => ({
+		chunkId: q.chunkId ?? q.id,
+		resourceId: q.resource.id,
+		resourceName: q.resource.name,
+		resourceType: q.resource.type,
+		title: `Q${q.questionNumber}${q.marks ? ` [${q.marks} marks]` : ""}`,
+		content: q.content,
+		source: "content" as const,
+		score: 2,
+		keywords: [],
+	}));
+
+	// Convert Concept content matches into ContentResult format
+	const conceptContentResults: ContentResult[] = conceptResults
+		.filter((c) => c.content)
+		.map((c) => ({
+			chunkId: c.id,
+			resourceId: "",
+			resourceName: "",
+			resourceType: "",
+			title: `${c.name}${c.contentType ? ` (${c.contentType})` : ""}`,
+			content: c.content as string,
+			source: "graph" as const,
+			score: 3,
+			keywords: [],
+			relatedConcepts: [{ name: c.name, relationship: c.contentType ?? "defines" }],
+		}));
+
 	const allResults = buildContentResults(contentChunks, graphResults, queryTerms, parsed.data.q);
+
+	// Merge additional results and re-score
+	for (const qr of questionContentResults) {
+		const { score, matchedKeywords } = scoreChunk(
+			{ title: qr.title, content: qr.content, keywords: null, nodeType: "question" },
+			queryTerms,
+			parsed.data.q,
+			false,
+		);
+		qr.score += score;
+		qr.keywords = matchedKeywords;
+		allResults.push(qr);
+	}
+	for (const cr of conceptContentResults) {
+		const { score, matchedKeywords } = scoreChunk(
+			{
+				title: cr.title,
+				content: cr.content,
+				keywords: null,
+				nodeType: "definition",
+			},
+			queryTerms,
+			parsed.data.q,
+			true,
+		);
+		cr.score += score;
+		cr.keywords = matchedKeywords;
+		allResults.push(cr);
+	}
+
+	allResults.sort((a, b) => b.score - a.score);
 	const merged = allResults.slice(0, parsed.data.limit);
 
 	log.info(

@@ -36,6 +36,7 @@ export async function exportSession(sessionId: string): Promise<Buffer> {
 				include: {
 					files: true,
 					chunks: { orderBy: { index: "asc" } },
+					paperQuestions: { orderBy: { questionNumber: "asc" } },
 				},
 			},
 			concepts: true,
@@ -72,7 +73,16 @@ export async function exportSession(sessionId: string): Promise<Buffer> {
 	appendJson(
 		archive,
 		session.concepts.map((c: Record<string, unknown>) =>
-			pick(c, ["id", "name", "description", "aliases", "createdBy"]),
+			pick(c, [
+				"id",
+				"name",
+				"description",
+				"aliases",
+				"content",
+				"contentType",
+				"metadata",
+				"createdBy",
+			]),
 		),
 		"concepts.json",
 	);
@@ -139,7 +149,17 @@ function buildManifest(session: any): ExportManifest {
 // biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 function mapResourceExport(resource: any): ResourceExport {
 	return {
-		...pick(resource, ["id", "name", "label", "splitMode", "isIndexed", "isGraphIndexed"]),
+		...pick(resource, [
+			"id",
+			"name",
+			"label",
+			"splitMode",
+			"isIndexed",
+			"isGraphIndexed",
+			"metadata",
+			"isMetaIndexed",
+			"metaIndexDurationMs",
+		]),
 		type: resource.type as ResourceExport["type"],
 		// biome-ignore lint/suspicious/noExplicitAny: Prisma query result
 		files: resource.files.map((f: any) => ({
@@ -164,6 +184,7 @@ function mapResourceExport(resource: any): ResourceExport {
 				"startPage",
 				"endPage",
 				"keywords",
+				"metadata",
 			]),
 		),
 	};
@@ -180,6 +201,30 @@ async function addResourcesToArchive(
 		const resourceDir = getResourceDir(sessionId, resource.id);
 
 		appendJson(archive, mapResourceExport(resource), `${prefix}/resource.json`);
+
+		// Export PaperQuestion records for this resource
+		if (resource.paperQuestions?.length > 0) {
+			appendJson(
+				archive,
+				resource.paperQuestions.map((q: Record<string, unknown>) =>
+					pick(q, [
+						"id",
+						"resourceId",
+						"chunkId",
+						"questionNumber",
+						"parentNumber",
+						"marks",
+						"questionType",
+						"commandWords",
+						"content",
+						"markSchemeText",
+						"solutionText",
+						"metadata",
+					]),
+				),
+				`${prefix}/questions.json`,
+			);
+		}
 
 		for (const file of resource.files) {
 			await appendFileIfExists(archive, file.rawPath, `${prefix}/raw/${file.filename}`);

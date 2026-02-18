@@ -7,6 +7,7 @@ import {
 	createLogger,
 	exportManifestSchema,
 	getDb,
+	paperQuestionExportSchema,
 	relationshipExportSchema,
 	resourceExportSchema,
 } from "@cramkit/shared";
@@ -53,6 +54,7 @@ interface IdMaps {
 	file: Map<string, string>;
 	chunk: Map<string, string>;
 	concept: Map<string, string>;
+	question: Map<string, string>;
 	conversation: Map<string, string>;
 	message: Map<string, string>;
 }
@@ -75,6 +77,7 @@ function createContext(zip: JSZip, db: ReturnType<typeof getDb>, sessionId: stri
 			file: new Map(),
 			chunk: new Map(),
 			concept: new Map(),
+			question: new Map(),
 			conversation: new Map(),
 			message: new Map(),
 		},
@@ -96,6 +99,7 @@ const ENTITY_MAP_KEYS: Record<string, keyof IdMaps> = {
 	resource: "resource",
 	chunk: "chunk",
 	concept: "concept",
+	question: "question",
 };
 
 function remapEntityId(entityType: string, oldId: string, maps: IdMaps): string | null {
@@ -240,6 +244,7 @@ async function importResourceChunks(
 				startPage: entry.startPage ?? null,
 				endPage: entry.endPage ?? null,
 				keywords: entry.keywords ?? null,
+				metadata: (entry as { metadata?: string | null }).metadata ?? null,
 			},
 		});
 		ctx.maps.chunk.set(entry.id, chunk.id);
@@ -270,6 +275,9 @@ async function importResources(ctx: ImportContext, resourceIds: string[]): Promi
 				splitMode: resourceData.splitMode,
 				isIndexed: resourceData.isIndexed,
 				isGraphIndexed: resourceData.isGraphIndexed,
+				metadata: resourceData.metadata ?? null,
+				isMetaIndexed: resourceData.isMetaIndexed ?? false,
+				metaIndexDurationMs: resourceData.metaIndexDurationMs ?? null,
 			},
 		});
 		ctx.maps.resource.set(oldResourceId, resource.id);
@@ -280,6 +288,39 @@ async function importResources(ctx: ImportContext, resourceIds: string[]): Promi
 		await importResourceFiles(ctx, oldResourceId, resourceData.files, resource.id, newResourceDir);
 		await copyTreeDirectory(ctx.zip, oldResourceId, newResourceDir);
 		await importResourceChunks(ctx, resourceData.chunks, resource.id);
+
+		// Import PaperQuestion records
+		const rawQuestions = await readZipJson(
+			ctx.zip,
+			`resources/${oldResourceId}/questions.json`,
+			true,
+		);
+		if (rawQuestions) {
+			const questions = paperQuestionExportSchema.array().parse(rawQuestions);
+			for (const q of questions) {
+				const newChunkId = q.chunkId ? (ctx.maps.chunk.get(q.chunkId) ?? null) : null;
+				const pq = await ctx.db.paperQuestion.create({
+					data: {
+						resourceId: resource.id,
+						sessionId: ctx.sessionId,
+						chunkId: newChunkId,
+						questionNumber: q.questionNumber,
+						parentNumber: q.parentNumber ?? null,
+						marks: q.marks ?? null,
+						questionType: q.questionType ?? null,
+						commandWords: q.commandWords ?? null,
+						content: q.content,
+						markSchemeText: q.markSchemeText ?? null,
+						solutionText: q.solutionText ?? null,
+						metadata: q.metadata ?? null,
+					},
+				});
+				ctx.maps.question.set(q.id, pq.id);
+			}
+			log.debug(
+				`importSession — imported ${questions.length} questions for "${resourceData.name}"`,
+			);
+		}
 
 		log.debug(
 			`importSession — imported resource "${resourceData.name}" (${resourceData.files.length} files, ${resourceData.chunks.length} chunks)`,
@@ -300,6 +341,9 @@ async function importConcepts(ctx: ImportContext): Promise<void> {
 				name: entry.name,
 				description: entry.description ?? null,
 				aliases: entry.aliases ?? null,
+				content: entry.content ?? null,
+				contentType: entry.contentType ?? null,
+				metadata: entry.metadata ?? null,
 				createdBy: entry.createdBy,
 			},
 		});
