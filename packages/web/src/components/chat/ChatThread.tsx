@@ -34,7 +34,21 @@ export function ChatThread({
 				try {
 					const result = base.run(options);
 					if (Symbol.asyncIterator in result) {
-						yield* result;
+						let first = true;
+						for await (const chunk of result) {
+							if (first) {
+								first = false;
+								// The backend persists the user message before streaming
+								// starts. Refresh conversations now so messageCount is
+								// up-to-date — prevents useConversationCleanup from
+								// deleting this conversation if the user switches away
+								// during a long-running stream.
+								queryClient.invalidateQueries({
+									queryKey: ["conversations", sessionId],
+								});
+							}
+							yield chunk;
+						}
 					} else {
 						yield await result;
 					}
@@ -43,7 +57,7 @@ export function ChatThread({
 				}
 			},
 		};
-	}, [sessionId, conversationId]);
+	}, [sessionId, conversationId, queryClient]);
 
 	const history = useChatHistory(conversationId, sessionId, queryClient);
 
