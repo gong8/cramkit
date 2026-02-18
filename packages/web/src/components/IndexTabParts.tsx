@@ -7,6 +7,7 @@ import {
 	Layers,
 	Link2,
 	Loader2,
+	Sparkles,
 	X,
 	Zap,
 } from "lucide-react";
@@ -117,6 +118,15 @@ function PhaseIndicator({ phase }: { phase: PhaseInfo }) {
 			active: phase.current === 3,
 			total: 1,
 		},
+		{
+			num: 4,
+			label: "Cleanup",
+			desc: "Deduplicate and merge concepts",
+			icon: <Sparkles className="h-3.5 w-3.5" />,
+			done: phase.phase4.status === "completed" || phase.phase4.status === "skipped",
+			active: phase.current === 4,
+			total: 1,
+		},
 	];
 
 	return (
@@ -222,6 +232,15 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 				</>
 			)}
 
+			{phase.current === 4 && (
+				<>
+					<div className="font-medium text-primary">Phase 4: Cleaning up knowledge graph</div>
+					<div className="text-muted-foreground">
+						Deduplicating relationships, removing orphans, merging similar concepts.
+					</div>
+				</>
+			)}
+
 			{phase.current === null && status.batch?.cancelled && (
 				<div className="font-medium text-muted-foreground">Indexing cancelled</div>
 			)}
@@ -231,6 +250,9 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 				{phase.phase3.status === "completed" &&
 					phase.phase3.linksAdded !== undefined &&
 					` | Cross-links added: ${phase.phase3.linksAdded}`}
+				{phase.phase4.status === "completed" &&
+					phase.phase4.stats &&
+					` | Cleanup: ${phase.phase4.stats.duplicatesRemoved} dupes, ${phase.phase4.stats.conceptsMerged} merged`}
 			</div>
 		</div>
 	);
@@ -379,6 +401,27 @@ export function IndexProgressSection({ indexStatus, batchFailed }: IndexProgress
 					<span>
 						Cross-linking failed (non-fatal)
 						{phase.phase3.error && `: ${phase.phase3.error}`}
+					</span>
+				</div>
+			)}
+
+			{/* Phase 4 status */}
+			{phase?.phase4.status === "completed" && (
+				<div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+					<Sparkles className="h-3.5 w-3.5" />
+					<span>
+						Cleanup complete
+						{phase.phase4.stats &&
+							` — ${phase.phase4.stats.duplicatesRemoved} duplicate${phase.phase4.stats.duplicatesRemoved !== 1 ? "s" : ""} removed, ${phase.phase4.stats.conceptsMerged} concept${phase.phase4.stats.conceptsMerged !== 1 ? "s" : ""} merged`}
+					</span>
+				</div>
+			)}
+			{phase?.phase4.status === "failed" && (
+				<div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+					<AlertTriangle className="h-3.5 w-3.5" />
+					<span>
+						Cleanup failed (non-fatal)
+						{phase.phase4.error && `: ${phase.phase4.error}`}
 					</span>
 				</div>
 			)}

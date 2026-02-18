@@ -1,8 +1,14 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import PQueue from "p-queue";
 import { type EnrichmentResult, runChatEnrichment } from "../services/chat-enricher.js";
+import {
+	type CleanupAgentStats,
+	applyCleanupResult,
+	runCleanupAgent,
+} from "../services/cleanup-agent.js";
 import { runCrossLinkingAgent } from "../services/cross-linker.js";
 import { CancellationError } from "../services/errors.js";
+import { runProgrammaticCleanup } from "../services/graph-cleanup.js";
 import { toTitleCase } from "../services/graph-indexer-utils.js";
 import {
 	GraphIndexError,
@@ -22,6 +28,21 @@ const batchAbortControllers = new Map<string, AbortController>();
 const crossLinkStatus = new Map<
 	string,
 	{ status: "pending" | "running" | "completed" | "failed"; error?: string; linksAdded?: number }
+>();
+
+// In-memory cleanup status tracking
+const cleanupStatus = new Map<
+	string,
+	{
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		error?: string;
+		stats?: {
+			duplicatesRemoved: number;
+			orphansRemoved: number;
+			integrityFixes: number;
+			conceptsMerged: number;
+		};
+	}
 >();
 
 export function enqueueProcessing(resourceId: string): void {
@@ -255,6 +276,7 @@ async function runCrossLinking(
 				relationship: string;
 				confidence: number;
 				createdBy: string;
+				createdFromResourceId: string | null;
 			}> = [];
 
 			for (const link of result.links) {
@@ -275,6 +297,7 @@ async function runCrossLinking(
 					relationship: link.relationship,
 					confidence: link.confidence ?? 0.7,
 					createdBy: "system",
+					createdFromResourceId: null,
 				});
 			}
 
@@ -331,6 +354,82 @@ async function runCrossLinking(
 		log.error(`runCrossLinking — session ${sessionId} failed: ${msg}`);
 		crossLinkStatus.set(batchId, { status: "failed", error: msg });
 		// Cross-linking failure is non-fatal — don't fail the batch
+	}
+}
+
+async function runGraphCleanup(
+	sessionId: string,
+	batchId: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	if ((await isBatchCancelled(batchId)) || signal?.aborted) return;
+
+	cleanupStatus.set(batchId, { status: "running" });
+	const cleanupStart = Date.now();
+
+	try {
+		log.info(`runGraphCleanup — session ${sessionId}, starting cleanup`);
+
+		// Step 1: programmatic cleanup
+		const progStats = await runProgrammaticCleanup(sessionId);
+
+		if (signal?.aborted || (await isBatchCancelled(batchId))) {
+			cleanupStatus.set(batchId, { status: "skipped" });
+			return;
+		}
+
+		// Step 2: LLM cleanup agent
+		let agentStats: CleanupAgentStats = {
+			conceptsMerged: 0,
+			conceptsDeleted: 0,
+			relationshipsDeleted: 0,
+			duplicatesAfterMerge: 0,
+		};
+
+		try {
+			const agentResult = await runCleanupAgent(sessionId, signal);
+			agentStats = await applyCleanupResult(sessionId, agentResult);
+		} catch (error) {
+			if (error instanceof CancellationError) throw error;
+			const msg = error instanceof Error ? error.message : String(error);
+			log.warn(`runGraphCleanup — LLM cleanup agent failed (non-fatal): ${msg}`);
+		}
+
+		const combinedStats = {
+			duplicatesRemoved: progStats.duplicateRelationshipsRemoved + agentStats.duplicatesAfterMerge,
+			orphansRemoved: progStats.orphanedConceptsRemoved + agentStats.conceptsDeleted,
+			integrityFixes: progStats.integrityIssuesFixed + agentStats.relationshipsDeleted,
+			conceptsMerged: agentStats.conceptsMerged,
+		};
+
+		cleanupStatus.set(batchId, { status: "completed", stats: combinedStats });
+
+		try {
+			const db = getDb();
+			await db.graphLog.create({
+				data: {
+					sessionId,
+					source: "cleanup",
+					action: "cleanup",
+					conceptsUpdated: combinedStats.conceptsMerged,
+					relationshipsCreated: 0,
+					durationMs: Date.now() - cleanupStart,
+					details: JSON.stringify(combinedStats),
+				},
+			});
+		} catch (e) {
+			log.warn("runGraphCleanup — failed to write GraphLog", e);
+		}
+	} catch (error) {
+		if (error instanceof CancellationError) {
+			cleanupStatus.set(batchId, { status: "skipped" });
+			log.info(`runGraphCleanup — session ${sessionId} cancelled`);
+			return;
+		}
+		const msg = error instanceof Error ? error.message : String(error);
+		log.error(`runGraphCleanup — session ${sessionId} failed: ${msg}`);
+		cleanupStatus.set(batchId, { status: "failed", error: msg });
+		// Cleanup failure is non-fatal — don't fail the batch
 	}
 }
 
@@ -395,6 +494,12 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 			await runCrossLinking(sessionId, batchId, signal);
 		}
 
+		// Phase 4: graph cleanup
+		if (!signal.aborted && !(await isBatchCancelled(batchId))) {
+			log.info(`runPhasedBatch — batch ${batchId}: Phase 4 — graph cleanup`);
+			await runGraphCleanup(sessionId, batchId, signal);
+		}
+
 		// Finalize batch status
 		const finalBatch = await db.indexBatch.findUnique({ where: { id: batchId } });
 		if (finalBatch && finalBatch.status !== "cancelled") {
@@ -448,8 +553,9 @@ export async function enqueueSessionGraphIndexing(
 		include: { jobs: true },
 	});
 
-	// Initialize cross-link status
+	// Initialize cross-link and cleanup status
 	crossLinkStatus.set(batch.id, { status: "pending" });
+	cleanupStatus.set(batch.id, { status: "pending" });
 
 	// Enqueue a single phased batch run (keeps concurrency=1 at batch level)
 	indexingQueue.add(() => runPhasedBatch(batch.id));
@@ -487,12 +593,13 @@ export async function cancelSessionIndexing(sessionId: string): Promise<boolean>
 	}
 
 	crossLinkStatus.delete(batch.id);
+	cleanupStatus.delete(batch.id);
 	log.info(`cancelSessionIndexing — session ${sessionId}, batch ${batch.id} cancelled`);
 	return true;
 }
 
 export interface PhaseInfo {
-	current: 1 | 2 | 3 | null;
+	current: 1 | 2 | 3 | 4 | null;
 	phase1: { total: number; completed: number; failed: number; mode: "sequential" };
 	phase2: {
 		total: number;
@@ -506,6 +613,16 @@ export interface PhaseInfo {
 		status: "pending" | "running" | "completed" | "failed" | "skipped";
 		error?: string;
 		linksAdded?: number;
+	};
+	phase4: {
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		error?: string;
+		stats?: {
+			duplicatesRemoved: number;
+			orphansRemoved: number;
+			integrityFixes: number;
+			conceptsMerged: number;
+		};
 	};
 }
 
@@ -592,10 +709,22 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 	} else if (clStatus) {
 		phase3Status = { ...clStatus };
 	} else if (batch.status === "completed") {
-		// Batch completed but no tracked cross-link status — already done
 		phase3Status = { status: "completed" };
 	} else {
 		phase3Status = { status: "pending" };
+	}
+
+	// Determine cleanup status
+	const cuStatus = cleanupStatus.get(batch.id);
+	let phase4Status: PhaseInfo["phase4"];
+	if (batch.status === "cancelled") {
+		phase4Status = { status: "skipped" };
+	} else if (cuStatus) {
+		phase4Status = { ...cuStatus };
+	} else if (batch.status === "completed") {
+		phase4Status = { status: "completed" };
+	} else {
+		phase4Status = { status: "pending" };
 	}
 
 	// Determine current phase
@@ -607,6 +736,8 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 			currentPhase = 2;
 		} else if (phase3Status.status === "running") {
 			currentPhase = 3;
+		} else if (phase4Status.status === "running") {
+			currentPhase = 4;
 		}
 	}
 
@@ -635,6 +766,7 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 				concurrency: 3,
 			},
 			phase3: phase3Status,
+			phase4: phase4Status,
 		},
 		resources,
 	};
@@ -659,6 +791,7 @@ export async function resumeInterruptedBatches(): Promise<void> {
 		});
 
 		crossLinkStatus.set(batch.id, { status: "pending" });
+		cleanupStatus.set(batch.id, { status: "pending" });
 		indexingQueue.add(() => runPhasedBatch(batch.id));
 
 		const pendingCount = batch.jobs.filter(
@@ -697,6 +830,7 @@ export async function retryFailedJobs(sessionId: string): Promise<number> {
 	});
 
 	crossLinkStatus.set(batch.id, { status: "pending" });
+	cleanupStatus.set(batch.id, { status: "pending" });
 	indexingQueue.add(() => runPhasedBatch(batch.id));
 
 	log.info(`retryFailedJobs — session ${sessionId}, retrying ${failedJobIds.length} jobs`);

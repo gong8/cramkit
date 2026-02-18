@@ -85,7 +85,7 @@ export interface BatchResource {
 }
 
 export interface PhaseInfo {
-	current: 1 | 2 | 3 | null;
+	current: 1 | 2 | 3 | 4 | null;
 	phase1: { total: number; completed: number; failed: number; mode: "sequential" };
 	phase2: {
 		total: number;
@@ -99,6 +99,16 @@ export interface PhaseInfo {
 		status: "pending" | "running" | "completed" | "failed" | "skipped";
 		error?: string;
 		linksAdded?: number;
+	};
+	phase4: {
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		error?: string;
+		stats?: {
+			duplicatesRemoved: number;
+			orphansRemoved: number;
+			integrityFixes: number;
+			conceptsMerged: number;
+		};
 	};
 }
 

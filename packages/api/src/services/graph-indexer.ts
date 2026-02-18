@@ -73,6 +73,7 @@ function makeRel(
 	targetLabel: string,
 	relationship: string,
 	confidence: number,
+	createdFromResourceId: string,
 ): RelData {
 	return {
 		sessionId,
@@ -85,6 +86,7 @@ function makeRel(
 		relationship,
 		confidence,
 		createdBy: "system",
+		createdFromResourceId,
 	};
 }
 
@@ -135,6 +137,7 @@ function buildRelationshipData(
 				target.name,
 				link.relationship,
 				link.confidence ?? 0.8,
+				resourceId,
 			),
 		);
 	}
@@ -154,6 +157,7 @@ function buildRelationshipData(
 				target.name,
 				link.relationship,
 				link.confidence ?? 0.7,
+				resourceId,
 			),
 		);
 	}
@@ -173,6 +177,7 @@ function buildRelationshipData(
 				target.name,
 				link.relationship,
 				link.confidence ?? 0.8,
+				resourceId,
 			),
 		);
 	}
@@ -201,7 +206,11 @@ async function clearOldRelationships(
 		where: {
 			sessionId,
 			createdBy: "system",
-			OR: [{ sourceId: { in: sourceIds } }, { sourceType: "resource", sourceId: resourceId }],
+			OR: [
+				{ sourceId: { in: sourceIds } },
+				{ sourceType: "resource", sourceId: resourceId },
+				{ createdFromResourceId: resourceId },
+			],
 		},
 	});
 }
