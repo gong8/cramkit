@@ -8,15 +8,7 @@ import {
 } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-	BrainCircuit,
-	ChevronDown,
-	ChevronRight,
-	FileText,
-	Pencil,
-	RefreshCw,
-	Trash2,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Pencil, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -56,45 +48,12 @@ function ResourceContent({ resourceId }: { resourceId: string }) {
 	);
 }
 
-function IndexStatus({
-	resource,
-	isBusy,
-	onIndex,
-}: {
-	resource: Resource;
-	isBusy: boolean;
-	onIndex: () => void;
-}) {
-	if (isBusy || (!resource.isIndexed && !resource.isGraphIndexed)) return null;
-
+function GraphIndexBadge({ resource }: { resource: Resource }) {
+	if (!resource.isIndexed) return null;
 	if (resource.isGraphIndexed) {
-		return (
-			<>
-				<span className="text-xs text-violet-600">Indexed</span>
-				<button
-					type="button"
-					onClick={onIndex}
-					className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-violet-500/10 hover:text-violet-600"
-					title="Reindex for knowledge graph"
-				>
-					<RefreshCw className="h-3 w-3" />
-					Reindex
-				</button>
-			</>
-		);
+		return <span className="text-xs text-violet-600">Indexed</span>;
 	}
-
-	return (
-		<button
-			type="button"
-			onClick={onIndex}
-			className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
-			title="Index for knowledge graph"
-		>
-			<BrainCircuit className="h-3.5 w-3.5" />
-			Index
-		</button>
-	);
+	return null;
 }
 
 function BatchStatus({ status }: { status?: BatchResource["status"] }) {
@@ -200,7 +159,6 @@ function ResourceRow({
 	onToggleExpand,
 	onDelete,
 	onRemoveFile,
-	onIndex,
 	onRename,
 }: {
 	resource: Resource;
@@ -209,14 +167,12 @@ function ResourceRow({
 	onToggleExpand: () => void;
 	onDelete: () => void;
 	onRemoveFile: (fileId: string) => void;
-	onIndex: () => void;
 	onRename: () => void;
 }) {
 	const [editing, setEditing] = useState(false);
 	const [editName, setEditName] = useState("");
 	const editInputRef = useRef<HTMLInputElement>(null);
 
-	const isBusy = batchStatus === "pending" || batchStatus === "indexing";
 	const canExpand = resource.isIndexed;
 
 	const startRename = () => {
@@ -295,7 +251,7 @@ function ResourceRow({
 						{resource.isIndexed ? "Ready" : "Processing"}
 					</span>
 					<BatchStatus status={batchStatus} />
-					<IndexStatus resource={resource} isBusy={isBusy} onIndex={onIndex} />
+					<GraphIndexBadge resource={resource} />
 					<button
 						type="button"
 						onClick={startRename}
@@ -341,15 +297,9 @@ interface ResourceListProps {
 	resources: Resource[];
 	sessionId: string;
 	batchResources: BatchResource[] | null;
-	onIndexResource: (resourceId: string) => void;
 }
 
-export function ResourceList({
-	resources,
-	sessionId,
-	batchResources,
-	onIndexResource,
-}: ResourceListProps) {
+export function ResourceList({ resources, sessionId, batchResources }: ResourceListProps) {
 	const queryClient = useQueryClient();
 	const [expandedResourceId, setExpandedResourceId] = useState<string | null>(null);
 
@@ -397,7 +347,6 @@ export function ResourceList({
 					onToggleExpand={() => toggleExpand(resource.id)}
 					onDelete={() => handleDeleteResource(resource.id)}
 					onRemoveFile={(fileId) => handleRemoveFile(resource.id, fileId)}
-					onIndex={() => onIndexResource(resource.id)}
 					onRename={invalidateSession}
 				/>
 			))}

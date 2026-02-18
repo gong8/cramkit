@@ -2,7 +2,8 @@
 	"name": "cramkit",
 	"private": true,
 	"scripts": {
-		"dev": "turbo dev",
+		"dev": "rm -f data/.force-graph-reads && turbo dev",
+		"dev:force-graph": "touch data/.force-graph-reads && turbo dev",
 		"build": "turbo build",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",

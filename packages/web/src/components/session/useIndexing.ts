@@ -1,10 +1,10 @@
 import {
+	type GraphThoroughness,
 	type IndexStatus,
 	cancelIndexing,
 	clearSessionGraph,
 	fetchIndexStatus,
 	indexAllResources,
-	indexResource,
 	reindexAllResources,
 	retryFailedIndexing,
 } from "@/lib/api";
@@ -88,22 +88,19 @@ export function useIndexing(sessionId: string) {
 	);
 
 	const handleIndexAll = useCallback(
-		() => withPolling(() => indexAllResources(sessionId)),
+		(thoroughness?: GraphThoroughness) =>
+			withPolling(() => indexAllResources(sessionId, thoroughness)),
 		[sessionId, withPolling],
 	);
 
 	const handleReindexAll = useCallback(
-		() => withPolling(() => reindexAllResources(sessionId)),
+		(thoroughness?: GraphThoroughness) =>
+			withPolling(() => reindexAllResources(sessionId, thoroughness)),
 		[sessionId, withPolling],
 	);
 
 	const handleRetryFailed = useCallback(
 		() => withPolling(() => retryFailedIndexing(sessionId)),
-		[sessionId, withPolling],
-	);
-
-	const handleIndexResource = useCallback(
-		(resourceId: string) => withPolling(() => indexResource(sessionId, resourceId)),
 		[sessionId, withPolling],
 	);
 
@@ -126,7 +123,6 @@ export function useIndexing(sessionId: string) {
 		handleIndexAll,
 		handleReindexAll,
 		handleRetryFailed,
-		handleIndexResource,
 		handleCancel,
 		handleClearGraph,
 	};

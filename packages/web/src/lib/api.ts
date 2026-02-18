@@ -8,6 +8,7 @@ export type {
 	Concept,
 	ConversationSummary,
 	GraphResource,
+	GraphThoroughness,
 	ImportResult,
 	IndexStatus,
 	Relationship,
@@ -25,6 +26,7 @@ import type {
 	ChatMessage,
 	Concept,
 	ConversationSummary,
+	GraphThoroughness,
 	ImportResult,
 	IndexStatus,
 	Resource,
@@ -205,12 +207,18 @@ export function indexResource(sessionId: string, resourceId: string): Promise<vo
 	return post(`/graph/sessions/${sessionId}/index-resource`, { resourceId });
 }
 
-export function indexAllResources(sessionId: string): Promise<void> {
-	return post(`/graph/sessions/${sessionId}/index-all`);
+export function indexAllResources(
+	sessionId: string,
+	thoroughness?: GraphThoroughness,
+): Promise<void> {
+	return post(`/graph/sessions/${sessionId}/index-all`, thoroughness ? { thoroughness } : {});
 }
 
-export function reindexAllResources(sessionId: string): Promise<void> {
-	return post(`/graph/sessions/${sessionId}/index-all`, { reindex: true });
+export function reindexAllResources(
+	sessionId: string,
+	thoroughness?: GraphThoroughness,
+): Promise<void> {
+	return post(`/graph/sessions/${sessionId}/index-all`, { reindex: true, thoroughness });
 }
 
 export function cancelIndexing(sessionId: string): Promise<void> {

@@ -1,6 +1,6 @@
 import { ConfirmModal } from "@/components/ConfirmModal.js";
 import { BatchFailuresSection, IndexProgressSection } from "@/components/IndexTabParts.js";
-import type { IndexStatus, Resource } from "@/lib/api";
+import type { GraphThoroughness, IndexStatus, Resource } from "@/lib/api";
 import { BrainCircuit, Network, RefreshCw, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -10,8 +10,9 @@ interface IndexTabProps {
 	resources: Resource[];
 	isIndexingAll: boolean;
 	indexStatus: IndexStatus | null;
-	onIndexAll: () => void;
-	onReindexAll: () => void;
+	defaultThoroughness: GraphThoroughness;
+	onIndexAll: (thoroughness?: GraphThoroughness) => void;
+	onReindexAll: (thoroughness?: GraphThoroughness) => void;
 	onCancel: () => void;
 	onClearGraph: () => Promise<void>;
 	onRetryFailed: () => void;
@@ -22,12 +23,14 @@ export function IndexTab({
 	resources,
 	isIndexingAll,
 	indexStatus,
+	defaultThoroughness,
 	onIndexAll,
 	onReindexAll,
 	onCancel,
 	onClearGraph,
 	onRetryFailed,
 }: IndexTabProps) {
+	const [thoroughness, setThoroughness] = useState<GraphThoroughness>(defaultThoroughness);
 	const indexedCount = resources.filter((r) => r.isIndexed).length;
 	const graphIndexedCount = resources.filter((r) => r.isGraphIndexed).length;
 	const hasUnindexed = resources.some((r) => r.isIndexed && !r.isGraphIndexed);
@@ -38,6 +41,8 @@ export function IndexTab({
 	const batchFailed = batch?.batchFailed ?? 0;
 	const hasBatchFailures = batchFailed > 0;
 
+	const showActions = !isIndexingAll && hasIndexed;
+
 	const actionButtons: ActionButtonProps[] = [
 		isIndexingAll && {
 			onClick: onCancel,
@@ -47,7 +52,7 @@ export function IndexTab({
 		},
 		!isIndexingAll &&
 			hasUnindexed && {
-				onClick: onIndexAll,
+				onClick: () => onIndexAll(thoroughness),
 				className: "bg-primary text-primary-foreground hover:bg-primary/90",
 				icon: <BrainCircuit className="h-4 w-4" />,
 				label: "Index All",
@@ -56,7 +61,7 @@ export function IndexTab({
 			!hasUnindexed &&
 			allGraphIndexed &&
 			hasIndexed && {
-				onClick: onReindexAll,
+				onClick: () => onReindexAll(thoroughness),
 				className: "bg-violet-500/10 text-violet-600 hover:bg-violet-500/20",
 				icon: <RefreshCw className="h-4 w-4" />,
 				label: "Reindex All",
@@ -77,6 +82,8 @@ export function IndexTab({
 				indexedCount={indexedCount}
 				allGraphIndexed={allGraphIndexed}
 			/>
+
+			{showActions && <ThoroughnessSelector value={thoroughness} onChange={setThoroughness} />}
 
 			{actionButtons.length > 0 && (
 				<div className="flex flex-wrap gap-2">
@@ -220,5 +227,50 @@ function ActionButton({ onClick, className, icon, label }: ActionButtonProps) {
 			{icon}
 			{label}
 		</button>
+	);
+}
+
+const THOROUGHNESS_OPTIONS: Array<{
+	value: GraphThoroughness;
+	label: string;
+	description: string;
+}> = [
+	{ value: "quick", label: "Quick", description: "Faster, key concepts only" },
+	{ value: "standard", label: "Standard", description: "Balanced extraction" },
+	{ value: "thorough", label: "Thorough", description: "Multi-pass, full detail" },
+];
+
+function ThoroughnessSelector({
+	value,
+	onChange,
+}: {
+	value: GraphThoroughness;
+	onChange: (v: GraphThoroughness) => void;
+}) {
+	return (
+		<div className="space-y-2">
+			<span className="text-sm font-medium text-muted-foreground">Thoroughness</span>
+			<div className="flex gap-1 rounded-lg border border-border p-1">
+				{THOROUGHNESS_OPTIONS.map((opt) => (
+					<button
+						key={opt.value}
+						type="button"
+						onClick={() => onChange(opt.value)}
+						className={`flex-1 rounded-md px-3 py-1.5 text-center text-sm transition-colors ${
+							value === opt.value
+								? "bg-primary text-primary-foreground"
+								: "text-muted-foreground hover:bg-accent hover:text-foreground"
+						}`}
+					>
+						<div className="font-medium">{opt.label}</div>
+						<div
+							className={`text-[11px] ${value === opt.value ? "text-primary-foreground/70" : "text-muted-foreground"}`}
+						>
+							{opt.description}
+						</div>
+					</button>
+				))}
+			</div>
+		</div>
 	);
 }

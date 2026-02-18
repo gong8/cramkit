@@ -7,15 +7,9 @@ interface MaterialsTabProps {
 	resources: Resource[];
 	sessionId: string;
 	batchResources: BatchResource[] | null;
-	onIndexResource: (resourceId: string) => void;
 }
 
-export function MaterialsTab({
-	resources,
-	sessionId,
-	batchResources,
-	onIndexResource,
-}: MaterialsTabProps) {
+export function MaterialsTab({ resources, sessionId, batchResources }: MaterialsTabProps) {
 	return (
 		<div className="space-y-4">
 			<ResourceUpload sessionId={sessionId} existingResources={resources} />
@@ -29,12 +23,7 @@ export function MaterialsTab({
 					<p className="mt-1 text-sm text-muted-foreground">Upload PDFs to get started</p>
 				</div>
 			) : (
-				<ResourceList
-					resources={resources}
-					sessionId={sessionId}
-					batchResources={batchResources}
-					onIndexResource={onIndexResource}
-				/>
+				<ResourceList resources={resources} sessionId={sessionId} batchResources={batchResources} />
 			)}
 		</div>
 	);

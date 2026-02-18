@@ -5,6 +5,36 @@ import { chatCompletion } from "./llm-client.js";
 
 const log = createLogger("api");
 
+export type Thoroughness = "quick" | "standard" | "thorough";
+
+interface ThoroughnessConfig {
+	contentLimit: number;
+	previewLimit: number | null; // null = full content
+	promptStyle: "selective" | "standard" | "comprehensive";
+	multiPass: boolean;
+}
+
+const THOROUGHNESS_CONFIGS: Record<Thoroughness, ThoroughnessConfig> = {
+	quick: {
+		contentLimit: 20_000,
+		previewLimit: 300,
+		promptStyle: "selective",
+		multiPass: false,
+	},
+	standard: {
+		contentLimit: 30_000,
+		previewLimit: 500,
+		promptStyle: "standard",
+		multiPass: false,
+	},
+	thorough: {
+		contentLimit: 150_000,
+		previewLimit: null,
+		promptStyle: "comprehensive",
+		multiPass: true,
+	},
+};
+
 export class GraphIndexError extends Error {
 	constructor(
 		message: string,
@@ -60,7 +90,7 @@ interface ChunkInfo {
 	diskPath: string | null;
 }
 
-function buildStructuredContent(chunks: ChunkInfo[]): string {
+function buildStructuredContent(chunks: ChunkInfo[], previewLimit: number | null): string {
 	const childMap = new Map<string | null, ChunkInfo[]>();
 	for (const chunk of chunks) {
 		const parentId = chunk.parentId;
@@ -75,12 +105,13 @@ function buildStructuredContent(chunks: ChunkInfo[]): string {
 		const nodeLabel = chunk.nodeType !== "section" ? `[${chunk.nodeType}] ` : "";
 		lines.push(`${prefix}${nodeLabel}${chunk.title || "(untitled)"} (depth=${chunk.depth})`);
 		if (chunk.content) {
-			const preview = chunk.content.slice(0, 500);
+			const showFull = previewLimit === null || chunk.content.length <= previewLimit;
+			const preview = showFull ? chunk.content : chunk.content.slice(0, previewLimit);
 			for (const line of preview.split("\n")) {
 				lines.push(`${prefix}  ${line}`);
 			}
-			if (chunk.content.length > 500) {
-				lines.push(`${prefix}  [...${chunk.content.length - 500} more chars]`);
+			if (!showFull) {
+				lines.push(`${prefix}  [...${chunk.content.length - previewLimit} more chars]`);
 			}
 		}
 		lines.push("");
@@ -99,28 +130,35 @@ function buildStructuredContent(chunks: ChunkInfo[]): string {
 	return lines.join("\n");
 }
 
-const CONTENT_LIMIT = 30000;
-
-function buildContentString(chunks: ChunkInfo[]): string {
+function buildContentString(chunks: ChunkInfo[], config: ThoroughnessConfig): string {
 	const hasTree = chunks.some((c) => c.parentId !== null);
 	let content = hasTree
-		? buildStructuredContent(chunks)
+		? buildStructuredContent(chunks, config.previewLimit)
 		: chunks
 				.map((c) => c.content)
 				.join("\n\n")
 				.replace(/\0/g, "");
 
-	if (content.length > CONTENT_LIMIT) {
-		content = `${content.slice(0, CONTENT_LIMIT)}\n\n[Content truncated — extract concepts only from the content shown above]`;
+	if (content.length > config.contentLimit) {
+		content = `${content.slice(0, config.contentLimit)}\n\n[Content truncated — extract concepts only from the content shown above]`;
 	}
 	return content;
 }
+
+const PROMPT_RULES: Record<ThoroughnessConfig["promptStyle"], string> = {
+	selective:
+		"- Focus on the most important concepts only — skip minor or peripheral topics\n- Be selective — extract meaningful concepts, not every noun",
+	standard: "- Be selective — extract meaningful concepts, not every noun",
+	comprehensive:
+		"- Be thorough — extract ALL concepts, definitions, theorems, methods, examples, and named results\n- Create rich relationships between concepts — don't skip peripheral or supporting concepts\n- Actively link to existing concepts from other resources when applicable",
+};
 
 function buildPrompt(
 	resource: { name: string; type: string; label: string | null },
 	files: Array<{ filename: string; role: string }>,
 	chunks: ChunkInfo[],
 	existingConcepts: Array<{ name: string; description: string | null }>,
+	config: ThoroughnessConfig,
 ): Array<{ role: "system" | "user"; content: string }> {
 	const hasTree = chunks.some((c) => c.parentId !== null);
 	const existingConceptsList =
@@ -132,8 +170,13 @@ function buildPrompt(
 		? `\nThe content is organized as a hierarchical tree of sections. Each section has a type (e.g., definition, theorem, proof, example, question, chapter, section). Use this structure to better understand the material's organization. When creating file_concept_links, include the chunkTitle to specify which section the concept appears in.`
 		: "";
 
+	const crossLinkNote =
+		config.promptStyle === "comprehensive" && existingConcepts.length > 0
+			? "\n- Actively create concept_concept_links between concepts found here and existing concepts from other resources"
+			: "";
+
 	const fileList = files.map((f) => `  - ${f.filename} (${f.role})`).join("\n");
-	const contentStr = buildContentString(chunks);
+	const contentStr = buildContentString(chunks, config);
 
 	return [
 		{
@@ -149,8 +192,8 @@ Extract the following:
 Rules:
 - Use Title Case for concept names
 - Reuse existing concept names exactly when the same concept appears
-- Be selective — extract meaningful concepts, not every noun
-- Confidence should reflect how strongly the relationship holds${existingConceptsList}
+${PROMPT_RULES[config.promptStyle]}
+- Confidence should reflect how strongly the relationship holds${crossLinkNote}${existingConceptsList}
 
 Respond with ONLY valid JSON in this exact format:
 {
@@ -401,7 +444,233 @@ function buildChunkTitleMap(chunks: ChunkInfo[]): Map<string, string> {
 	return map;
 }
 
-export async function indexResourceGraph(resourceId: string): Promise<void> {
+/** Split chunks into sections for multi-pass extraction. */
+function splitIntoSections(chunks: ChunkInfo[]): ChunkInfo[][] {
+	const hasTree = chunks.some((c) => c.parentId !== null);
+
+	if (hasTree) {
+		// Group by root-level parents (depth 0)
+		const roots = chunks.filter((c) => c.depth === 0);
+		if (roots.length <= 1) return [chunks];
+
+		const childMap = new Map<string, ChunkInfo[]>();
+		for (const root of roots) childMap.set(root.id, []);
+
+		for (const chunk of chunks) {
+			if (chunk.depth === 0) continue;
+			// Walk up to find root parent
+			let current = chunk;
+			while (current.parentId !== null) {
+				const parent = chunks.find((c) => c.id === current.parentId);
+				if (!parent) break;
+				if (parent.depth === 0) {
+					childMap.get(parent.id)?.push(chunk);
+					break;
+				}
+				current = parent;
+			}
+		}
+
+		return roots.map((root) => [root, ...(childMap.get(root.id) || [])]);
+	}
+
+	// Flat: batch in groups of 6
+	const sections: ChunkInfo[][] = [];
+	for (let i = 0; i < chunks.length; i += 6) {
+		sections.push(chunks.slice(i, i + 6));
+	}
+	return sections;
+}
+
+/** Merge multiple extraction results: keep longer descriptions, union aliases, deduplicate relationships by keeping higher confidence. */
+function mergeExtractionResults(results: ExtractionResult[]): ExtractionResult {
+	const conceptMap = new Map<string, ExtractedConcept>();
+	for (const result of results) {
+		for (const concept of result.concepts) {
+			const key = toTitleCase(concept.name);
+			const existing = conceptMap.get(key);
+			if (!existing) {
+				conceptMap.set(key, { ...concept, name: key });
+			} else {
+				// Keep longer description
+				if (
+					concept.description &&
+					(!existing.description || concept.description.length > existing.description.length)
+				) {
+					existing.description = concept.description;
+				}
+				// Union aliases
+				if (concept.aliases) {
+					const existingAliases = new Set(
+						(existing.aliases || "")
+							.split(",")
+							.map((a) => a.trim())
+							.filter(Boolean),
+					);
+					for (const alias of concept.aliases
+						.split(",")
+						.map((a) => a.trim())
+						.filter(Boolean)) {
+						existingAliases.add(alias);
+					}
+					existing.aliases = [...existingAliases].join(", ");
+				}
+			}
+		}
+	}
+
+	// Deduplicate relationships by key, keeping higher confidence
+	const fileLinks = new Map<string, ConceptLink>();
+	const conceptLinks = new Map<string, ConceptConceptLink>();
+	const questionLinks = new Map<string, QuestionConceptLink>();
+
+	for (const result of results) {
+		for (const link of result.file_concept_links) {
+			const key = `${link.conceptName}:${link.relationship}:${link.chunkTitle || ""}`;
+			const existing = fileLinks.get(key);
+			if (!existing || (link.confidence ?? 0) > (existing.confidence ?? 0)) {
+				fileLinks.set(key, link);
+			}
+		}
+		for (const link of result.concept_concept_links) {
+			const key = `${link.sourceConcept}:${link.targetConcept}:${link.relationship}`;
+			const existing = conceptLinks.get(key);
+			if (!existing || (link.confidence ?? 0) > (existing.confidence ?? 0)) {
+				conceptLinks.set(key, link);
+			}
+		}
+		for (const link of result.question_concept_links) {
+			const key = `${link.questionLabel}:${link.conceptName}:${link.relationship}`;
+			const existing = questionLinks.get(key);
+			if (!existing || (link.confidence ?? 0) > (existing.confidence ?? 0)) {
+				questionLinks.set(key, link);
+			}
+		}
+	}
+
+	return {
+		concepts: [...conceptMap.values()],
+		file_concept_links: [...fileLinks.values()],
+		concept_concept_links: [...conceptLinks.values()],
+		question_concept_links: [...questionLinks.values()],
+	};
+}
+
+/** Write extraction result to DB (shared by single-pass and multi-pass). */
+async function writeResultToDb(
+	db: ReturnType<typeof getDb>,
+	result: ExtractionResult,
+	resource: { id: string; sessionId: string; name: string },
+	chunks: ChunkInfo[],
+	startTime: number,
+): Promise<void> {
+	try {
+		await db.$transaction(
+			async (tx) => {
+				await clearOldRelationships(tx, resource.sessionId, resource.id, chunks);
+				await upsertConcepts(tx, resource.sessionId, result.concepts);
+
+				const conceptMap = await loadConceptMap(tx, resource.sessionId);
+				const chunkByTitle = buildChunkTitleMap(chunks);
+
+				const relationships = deduplicateRelationships(
+					buildRelationshipData(
+						result,
+						conceptMap,
+						chunkByTitle,
+						chunks,
+						resource.sessionId,
+						resource.id,
+						resource.name,
+					),
+				);
+
+				if (relationships.length > 0) {
+					await tx.relationship.createMany({ data: relationships });
+				}
+
+				await tx.resource.update({
+					where: { id: resource.id },
+					data: { isGraphIndexed: true, graphIndexDurationMs: Date.now() - startTime },
+				});
+			},
+			{ timeout: 30000 },
+		);
+	} catch (error) {
+		if (error instanceof GraphIndexError) throw error;
+		throw new GraphIndexError(
+			error instanceof Error ? error.message : String(error),
+			"db_error",
+			resource.id,
+		);
+	}
+}
+
+/** Multi-pass extraction: process each section independently with cumulative context. */
+async function indexResourceMultiPass(
+	resource: { id: string; name: string; type: string; label: string | null; sessionId: string },
+	files: Array<{ filename: string; role: string }>,
+	chunks: ChunkInfo[],
+	existingConcepts: Array<{ name: string; description: string | null }>,
+	config: ThoroughnessConfig,
+): Promise<ExtractionResult> {
+	const sections = splitIntoSections(chunks);
+
+	if (sections.length <= 1) {
+		log.info("indexResourceMultiPass — only 1 section, falling back to single-pass");
+		const messages = buildPrompt(
+			{ name: resource.name, type: resource.type, label: resource.label },
+			files,
+			chunks,
+			existingConcepts,
+			config,
+		);
+		return extractWithRetries(messages, resource.name, resource.id);
+	}
+
+	log.info(`indexResourceMultiPass — "${resource.name}": ${sections.length} sections`);
+
+	const allResults: ExtractionResult[] = [];
+	const cumulativeConcepts = [...existingConcepts];
+
+	for (let i = 0; i < sections.length; i++) {
+		const section = sections[i];
+		const sectionLabel = section[0]?.title || `Section ${i + 1}`;
+		log.info(
+			`indexResourceMultiPass — "${resource.name}" pass ${i + 1}/${sections.length}: "${sectionLabel}" (${section.length} chunks)`,
+		);
+
+		const messages = buildPrompt(
+			{ name: resource.name, type: resource.type, label: resource.label },
+			files,
+			section,
+			cumulativeConcepts,
+			config,
+		);
+
+		const result = await extractWithRetries(
+			messages,
+			`${resource.name} [${sectionLabel}]`,
+			resource.id,
+		);
+		allResults.push(result);
+
+		// Feed newly discovered concepts into the cumulative list for the next pass
+		for (const concept of result.concepts) {
+			const name = toTitleCase(concept.name);
+			if (!cumulativeConcepts.some((c) => c.name === name)) {
+				cumulativeConcepts.push({ name, description: concept.description || null });
+			}
+		}
+	}
+
+	return mergeExtractionResults(allResults);
+}
+
+export async function indexResourceGraph(
+	resourceId: string,
+	thoroughness?: Thoroughness,
+): Promise<void> {
 	const db = getDb();
 
 	const resource = await db.resource.findUnique({
@@ -433,7 +702,10 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 		throw new GraphIndexError("Not content-indexed yet", "unknown", resourceId);
 	}
 
-	log.info(`indexResourceGraph — starting "${resource.name}" (${resourceId})`);
+	const config = THOROUGHNESS_CONFIGS[thoroughness ?? "standard"];
+	log.info(
+		`indexResourceGraph — starting "${resource.name}" (${resourceId}) [thoroughness=${thoroughness ?? "standard"}]`,
+	);
 
 	const startTime = Date.now();
 
@@ -442,55 +714,40 @@ export async function indexResourceGraph(resourceId: string): Promise<void> {
 		select: { name: true, description: true },
 	});
 
-	const messages = buildPrompt(
-		{ name: resource.name, type: resource.type, label: resource.label },
-		resource.files,
-		resource.chunks,
-		existingConcepts,
-	);
+	let result: ExtractionResult;
 
-	const result = await extractWithRetries(messages, resource.name, resourceId);
-
-	try {
-		await db.$transaction(
-			async (tx) => {
-				await clearOldRelationships(tx, resource.sessionId, resourceId, resource.chunks);
-				await upsertConcepts(tx, resource.sessionId, result.concepts);
-
-				const conceptMap = await loadConceptMap(tx, resource.sessionId);
-				const chunkByTitle = buildChunkTitleMap(resource.chunks);
-
-				const relationships = deduplicateRelationships(
-					buildRelationshipData(
-						result,
-						conceptMap,
-						chunkByTitle,
-						resource.chunks,
-						resource.sessionId,
-						resourceId,
-						resource.name,
-					),
-				);
-
-				if (relationships.length > 0) {
-					await tx.relationship.createMany({ data: relationships });
-				}
-
-				await tx.resource.update({
-					where: { id: resourceId },
-					data: { isGraphIndexed: true, graphIndexDurationMs: Date.now() - startTime },
-				});
+	if (config.multiPass && resource.chunks.length > 1) {
+		result = await indexResourceMultiPass(
+			{
+				id: resourceId,
+				name: resource.name,
+				type: resource.type,
+				label: resource.label,
+				sessionId: resource.sessionId,
 			},
-			{ timeout: 30000 },
+			resource.files,
+			resource.chunks,
+			existingConcepts,
+			config,
 		);
-	} catch (error) {
-		if (error instanceof GraphIndexError) throw error;
-		throw new GraphIndexError(
-			error instanceof Error ? error.message : String(error),
-			"db_error",
-			resourceId,
+	} else {
+		const messages = buildPrompt(
+			{ name: resource.name, type: resource.type, label: resource.label },
+			resource.files,
+			resource.chunks,
+			existingConcepts,
+			config,
 		);
+		result = await extractWithRetries(messages, resource.name, resourceId);
 	}
+
+	await writeResultToDb(
+		db,
+		result,
+		{ id: resourceId, sessionId: resource.sessionId, name: resource.name },
+		resource.chunks,
+		startTime,
+	);
 
 	const totalRels =
 		result.file_concept_links.length +

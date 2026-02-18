@@ -1,4 +1,9 @@
-import { createLogger, getDb, indexResourceRequestSchema } from "@cramkit/shared";
+import {
+	createLogger,
+	getDb,
+	indexAllRequestSchema,
+	indexResourceRequestSchema,
+} from "@cramkit/shared";
 import { Hono } from "hono";
 import {
 	cancelSessionIndexing,
@@ -82,6 +87,7 @@ graphRoutes.get("/related", async (c) => {
 });
 
 graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
+	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 	const body = await c.req.json();
 	const parsed = indexResourceRequestSchema.safeParse(body);
@@ -93,19 +99,38 @@ graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
-	await enqueueSessionGraphIndexing(sessionId, [parsed.data.resourceId]);
-	log.info(`POST /graph/sessions/${sessionId}/index-resource — queued ${parsed.data.resourceId}`);
-	return c.json({ ok: true, resourceId: parsed.data.resourceId });
+	const session = await db.session.findUnique({
+		where: { id: sessionId },
+		select: { graphThoroughness: true },
+	});
+	const thoroughness = parsed.data.thoroughness ?? session?.graphThoroughness ?? "standard";
+
+	await enqueueSessionGraphIndexing(
+		sessionId,
+		[parsed.data.resourceId],
+		thoroughness as "quick" | "standard" | "thorough",
+	);
+	log.info(
+		`POST /graph/sessions/${sessionId}/index-resource — queued ${parsed.data.resourceId} [thoroughness=${thoroughness}]`,
+	);
+	return c.json({ ok: true, resourceId: parsed.data.resourceId, thoroughness });
 });
 
 graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 
-	const reindex = await c.req
-		.json()
-		.then((b) => b?.reindex === true)
-		.catch(() => false);
+	const body = await c.req.json().catch(() => ({}));
+	const parsed = indexAllRequestSchema.safeParse(body);
+	const { reindex, thoroughness: bodyThoroughness } = parsed.success
+		? parsed.data
+		: { reindex: body?.reindex === true, thoroughness: undefined };
+
+	const session = await db.session.findUnique({
+		where: { id: sessionId },
+		select: { graphThoroughness: true },
+	});
+	const thoroughness = bodyThoroughness ?? session?.graphThoroughness ?? "standard";
 
 	const resources = await db.resource.findMany({
 		where: {
@@ -124,11 +149,15 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 		});
 	}
 
-	await enqueueSessionGraphIndexing(sessionId, resourceIds);
-	log.info(
-		`POST /graph/sessions/${sessionId}/index-all — queued ${resourceIds.length} resources (reindex=${reindex})`,
+	await enqueueSessionGraphIndexing(
+		sessionId,
+		resourceIds,
+		thoroughness as "quick" | "standard" | "thorough",
 	);
-	return c.json({ ok: true, queued: resourceIds.length });
+	log.info(
+		`POST /graph/sessions/${sessionId}/index-all — queued ${resourceIds.length} resources (reindex=${reindex}, thoroughness=${thoroughness})`,
+	);
+	return c.json({ ok: true, queued: resourceIds.length, thoroughness });
 });
 
 graphRoutes.post("/sessions/:sessionId/cancel-indexing", async (c) => {

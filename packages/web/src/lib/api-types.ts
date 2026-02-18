@@ -25,6 +25,8 @@ export interface Resource {
 	files: ResourceFile[];
 }
 
+export type GraphThoroughness = "quick" | "standard" | "thorough";
+
 export interface Session {
 	id: string;
 	name: string;
@@ -32,6 +34,7 @@ export interface Session {
 	examDate: string | null;
 	scope: string | null;
 	notes: string | null;
+	graphThoroughness: GraphThoroughness;
 	resources: Resource[];
 }
 

@@ -14,6 +14,8 @@ export const FileRoleEnum = z.enum(["PRIMARY", "MARK_SCHEME", "SOLUTIONS", "SUPP
 
 export const SplitModeEnum = z.enum(["auto", "split", "single"]);
 
+export const GraphThoroughnessEnum = z.enum(["quick", "standard", "thorough"]);
+
 const sessionOptionalFields = {
 	module: nopt(z.string()),
 	examDate: nopt(z.union([z.string().date(), z.string().datetime()])),
@@ -27,11 +29,13 @@ export const createSessionSchema = z.object({
 	examDate: z.string().date().optional(),
 	scope: z.string().optional(),
 	notes: z.string().optional(),
+	graphThoroughness: GraphThoroughnessEnum.optional(),
 });
 
 export const updateSessionSchema = z.object({
 	name: z.string().min(1).optional(),
 	...sessionOptionalFields,
+	graphThoroughness: GraphThoroughnessEnum.optional(),
 });
 
 export const createResourceSchema = z.object({
@@ -78,6 +82,12 @@ export const createConceptSchema = z.object({
 
 export const indexResourceRequestSchema = z.object({
 	resourceId: z.string(),
+	thoroughness: GraphThoroughnessEnum.optional(),
+});
+
+export const indexAllRequestSchema = z.object({
+	reindex: z.boolean().optional(),
+	thoroughness: GraphThoroughnessEnum.optional(),
 });
 
 export const chatStreamRequestSchema = z

@@ -1,6 +1,10 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import PQueue from "p-queue";
-import { GraphIndexError, indexResourceGraph } from "../services/graph-indexer.js";
+import {
+	GraphIndexError,
+	type Thoroughness,
+	indexResourceGraph,
+} from "../services/graph-indexer.js";
 import { processResource } from "../services/resource-processor.js";
 
 const log = createLogger("api");
@@ -14,10 +18,10 @@ export function enqueueProcessing(resourceId: string): void {
 
 export const getQueueSize = () => queue.size + queue.pending;
 
-export function enqueueGraphIndexing(resourceId: string): void {
-	indexingQueue.add(() => indexResourceGraph(resourceId));
+export function enqueueGraphIndexing(resourceId: string, thoroughness?: Thoroughness): void {
+	indexingQueue.add(() => indexResourceGraph(resourceId, thoroughness));
 	log.info(
-		`enqueueGraphIndexing — resource ${resourceId}, indexing queue size: ${indexingQueue.size + indexingQueue.pending}`,
+		`enqueueGraphIndexing — resource ${resourceId}, thoroughness=${thoroughness ?? "standard"}, indexing queue size: ${indexingQueue.size + indexingQueue.pending}`,
 	);
 }
 
@@ -42,7 +46,7 @@ async function runIndexJob(jobId: string): Promise<void> {
 
 	try {
 		const startTime = Date.now();
-		await indexResourceGraph(job.resourceId);
+		await indexResourceGraph(job.resourceId, (job.thoroughness as Thoroughness) || undefined);
 		await db.indexJob.update({
 			where: { id: jobId },
 			data: { status: "completed", completedAt: new Date(), durationMs: Date.now() - startTime },
@@ -77,6 +81,7 @@ async function runIndexJob(jobId: string): Promise<void> {
 export async function enqueueSessionGraphIndexing(
 	sessionId: string,
 	resourceIds: string[],
+	thoroughness?: Thoroughness,
 ): Promise<string> {
 	const db = getDb();
 
@@ -90,6 +95,7 @@ export async function enqueueSessionGraphIndexing(
 					resourceId,
 					sortOrder: i,
 					status: "pending",
+					...(thoroughness ? { thoroughness } : {}),
 				})),
 			},
 		},

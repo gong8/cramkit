@@ -20,6 +20,8 @@ model Session {
   resources      Resource[]
   relationships  Relationship[]
   concepts       Concept[]
+  graphThoroughness String @default("standard")
+
   conversations  Conversation[]
   indexBatches   IndexBatch[]
 }
@@ -208,8 +210,9 @@ model IndexJob {
   resourceId String
   resource   Resource   @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
-  status     String   @default("pending")
-  sortOrder  Int
+  status       String   @default("pending")
+  thoroughness String   @default("standard")
+  sortOrder    Int
 
   attempts     Int     @default(0)
   errorMessage String?

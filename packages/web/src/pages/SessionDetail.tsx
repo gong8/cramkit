@@ -44,7 +44,6 @@ export function SessionDetail() {
 		handleIndexAll,
 		handleReindexAll,
 		handleRetryFailed,
-		handleIndexResource,
 		handleCancel,
 		handleClearGraph,
 	} = useIndexing(sessionId);
@@ -93,7 +92,6 @@ export function SessionDetail() {
 					resources={resources}
 					sessionId={sessionId}
 					batchResources={batch?.resources ?? null}
-					onIndexResource={handleIndexResource}
 				/>
 			)}
 			{activeTab === "index" && (
@@ -102,6 +100,7 @@ export function SessionDetail() {
 					resources={resources}
 					isIndexingAll={isIndexingAll}
 					indexStatus={indexStatus}
+					defaultThoroughness={session.graphThoroughness ?? "standard"}
 					onIndexAll={handleIndexAll}
 					onReindexAll={handleReindexAll}
 					onCancel={handleCancel}
