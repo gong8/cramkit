@@ -17,11 +17,13 @@ const server = new McpServer({
 	version: "0.0.1",
 });
 
-const DIRECT_READ_TOOLS = new Set([
+const BLOCKED_TOOLS = new Set([
 	"get_resource_content",
 	"get_chunk",
 	"get_resource_index",
 	"get_past_paper",
+	"search_notes",
+	"get_resource_info",
 ]);
 
 const MCP_PORT = Number(process.env.CRAMKIT_MCP_PORT) || 3001;
@@ -36,7 +38,7 @@ export const forceGraphReads =
 	existsSync(FLAG_FILE);
 
 log.info(
-	`force-graph-reads: ${forceGraphReads ? "ACTIVE — direct reads blocked" : "inactive"}` +
+	`force-graph-reads: ${forceGraphReads ? "ACTIVE — graph-only mode, blocking: " + [...BLOCKED_TOOLS].join(", ") : "inactive"}` +
 		` (argv=${process.argv.includes("--force-graph-reads")},` +
 		` env=${process.env.FORCE_GRAPH_READS === "1"},` +
 		` file=${existsSync(FLAG_FILE)})`,
@@ -53,11 +55,11 @@ function registerTools(
 	>,
 ) {
 	for (const [name, tool] of Object.entries(tools)) {
-		const isDirectRead = DIRECT_READ_TOOLS.has(name);
+		const isBlocked = BLOCKED_TOOLS.has(name);
 
 		const description =
-			forceGraphReads && isDirectRead
-				? `[DISABLED — --force-graph-reads is active] ${tool.description}. Use the knowledge graph tools (list_concepts, get_concept, get_related) and search_notes instead.`
+			forceGraphReads && isBlocked
+				? `[DISABLED — --force-graph-reads is active] ${tool.description}. Navigate the knowledge graph instead: list_concepts → get_concept → get_related. Use get_resource_info for metadata.`
 				: tool.description;
 
 		server.tool(
@@ -65,13 +67,13 @@ function registerTools(
 			description,
 			tool.parameters.shape,
 			async (params: Record<string, unknown>) => {
-				if (forceGraphReads && isDirectRead) {
+				if (forceGraphReads && isBlocked) {
 					log.warn(`--force-graph-reads: blocked call to "${name}"`);
 					return {
 						content: [
 							{
 								type: "text" as const,
-								text: `BLOCKED: Direct reads are disabled (--force-graph-reads). Use knowledge graph tools instead:\n- list_concepts / get_concept / get_related to navigate the graph\n- search_notes to find content (returns text + graph links)\n- get_resource_info for metadata\n\nDo not call ${name} again.`,
+								text: `BLOCKED: "${name}" is disabled (--force-graph-reads). You MUST navigate via the knowledge graph:\n- list_concepts to see all concepts in a session\n- get_concept to see a concept's relationships (which chunks cover it, prerequisites, which papers test it)\n- get_related to traverse connections from any entity\n- get_resource_info for resource metadata and chunk lists\n- create_link to enrich the graph\n\nDo not call ${name} again.`,
 							},
 						],
 						isError: true,

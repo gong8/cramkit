@@ -7,9 +7,9 @@ import { createLogger } from "@cramkit/shared";
 
 const log = createLogger("api");
 
-const LLM_MODEL = process.env.LLM_MODEL || "claude-opus-4-6";
+export const LLM_MODEL = process.env.LLM_MODEL || "claude-opus-4-6";
 
-function getCliModel(model: string): string {
+export function getCliModel(model: string): string {
 	if (model.includes("opus")) return "opus";
 	if (model.includes("haiku")) return "haiku";
 	return "sonnet";
@@ -116,7 +116,7 @@ interface ToolDefinition {
 	inputSchema: Record<string, unknown>;
 }
 
-const BLOCKED_BUILTIN_TOOLS = [
+export const BLOCKED_BUILTIN_TOOLS = [
 	"Bash",
 	"Read",
 	"Write",

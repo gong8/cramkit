@@ -1,5 +1,7 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import PQueue from "p-queue";
+import { runCrossLinkingAgent } from "../services/cross-linker.js";
+import { toTitleCase } from "../services/graph-indexer-utils.js";
 import {
 	GraphIndexError,
 	type Thoroughness,
@@ -24,6 +26,8 @@ export function enqueueGraphIndexing(resourceId: string, thoroughness?: Thorough
 		`enqueueGraphIndexing — resource ${resourceId}, thoroughness=${thoroughness ?? "standard"}, indexing queue size: ${indexingQueue.size + indexingQueue.pending}`,
 	);
 }
+
+const PHASE_1_TYPES = new Set(["LECTURE_NOTES", "SPECIFICATION"]);
 
 async function runIndexJob(jobId: string): Promise<void> {
 	const db = getDb();
@@ -68,13 +72,157 @@ async function runIndexJob(jobId: string): Promise<void> {
 		});
 		log.error(`runIndexJob — job ${jobId} failed: ${errorMessage}`);
 	}
+}
 
-	const batch = await db.indexBatch.findUnique({ where: { id: job.batchId } });
-	if (batch && batch.completed + batch.failed >= batch.total) {
-		await db.indexBatch.update({
-			where: { id: job.batchId },
-			data: { status: "completed", completedAt: new Date() },
-		});
+async function isBatchCancelled(batchId: string): Promise<boolean> {
+	const db = getDb();
+	const batch = await db.indexBatch.findUnique({ where: { id: batchId } });
+	return batch?.status === "cancelled";
+}
+
+async function runCrossLinking(sessionId: string, batchId: string): Promise<void> {
+	const db = getDb();
+
+	if (await isBatchCancelled(batchId)) return;
+
+	try {
+		log.info(`runCrossLinking — session ${sessionId}, starting cross-linking pass`);
+		const result = await runCrossLinkingAgent(sessionId);
+
+		if (result.links.length > 0) {
+			// Write cross-links to DB
+			const concepts = await db.concept.findMany({
+				where: { sessionId },
+				select: { id: true, name: true },
+			});
+			const conceptMap = new Map(concepts.map((c) => [c.name, c.id]));
+
+			const relationships: Array<{
+				sessionId: string;
+				sourceType: string;
+				sourceId: string;
+				sourceLabel: string;
+				targetType: string;
+				targetId: string;
+				targetLabel: string;
+				relationship: string;
+				confidence: number;
+				createdBy: string;
+			}> = [];
+
+			for (const link of result.links) {
+				const sourceName = toTitleCase(link.sourceConcept);
+				const targetName = toTitleCase(link.targetConcept);
+				const sourceId = conceptMap.get(sourceName);
+				const targetId = conceptMap.get(targetName);
+				if (!sourceId || !targetId) continue;
+
+				relationships.push({
+					sessionId,
+					sourceType: "concept",
+					sourceId,
+					sourceLabel: sourceName,
+					targetType: "concept",
+					targetId,
+					targetLabel: targetName,
+					relationship: link.relationship,
+					confidence: link.confidence ?? 0.7,
+					createdBy: "system",
+				});
+			}
+
+			if (relationships.length > 0) {
+				// Deduplicate against existing relationships
+				const existing = await db.relationship.findMany({
+					where: {
+						sessionId,
+						sourceType: "concept",
+						targetType: "concept",
+						createdBy: "system",
+					},
+					select: { sourceId: true, targetId: true, relationship: true },
+				});
+				const existingKeys = new Set(
+					existing.map((r) => `${r.sourceId}:${r.targetId}:${r.relationship}`),
+				);
+
+				const newRels = relationships.filter(
+					(r) => !existingKeys.has(`${r.sourceId}:${r.targetId}:${r.relationship}`),
+				);
+
+				if (newRels.length > 0) {
+					await db.relationship.createMany({ data: newRels });
+					log.info(
+						`runCrossLinking — session ${sessionId}: added ${newRels.length} new cross-links`,
+					);
+				}
+			}
+		}
+	} catch (error) {
+		log.error(
+			`runCrossLinking — session ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		// Cross-linking failure is non-fatal — don't fail the batch
+	}
+}
+
+async function runPhasedBatch(batchId: string): Promise<void> {
+	const db = getDb();
+
+	const batch = await db.indexBatch.findUnique({
+		where: { id: batchId },
+		include: {
+			jobs: {
+				orderBy: { sortOrder: "asc" },
+				include: { resource: { select: { type: true } } },
+			},
+		},
+	});
+	if (!batch) return;
+
+	const sessionId = batch.sessionId;
+	const phase1Jobs = batch.jobs.filter((j) => PHASE_1_TYPES.has(j.resource.type));
+	const phase2Jobs = batch.jobs.filter((j) => !PHASE_1_TYPES.has(j.resource.type));
+
+	// Phase 1: sequential (lectures/specs establish concepts)
+	log.info(
+		`runPhasedBatch — batch ${batchId}: Phase 1 — ${phase1Jobs.length} lecture/spec resources (sequential)`,
+	);
+	for (const job of phase1Jobs) {
+		if (await isBatchCancelled(batchId)) break;
+		await runIndexJob(job.id);
+	}
+
+	// Phase 2: parallel (papers/sheets/other link to concepts)
+	if (!(await isBatchCancelled(batchId)) && phase2Jobs.length > 0) {
+		log.info(
+			`runPhasedBatch — batch ${batchId}: Phase 2 — ${phase2Jobs.length} paper/sheet resources (parallel, concurrency=3)`,
+		);
+		const phase2Queue = new PQueue({ concurrency: 3 });
+		for (const job of phase2Jobs) {
+			phase2Queue.add(async () => {
+				if (await isBatchCancelled(batchId)) return;
+				await runIndexJob(job.id);
+			});
+		}
+		await phase2Queue.onIdle();
+	}
+
+	// Phase 3: cross-linking pass
+	if (!(await isBatchCancelled(batchId))) {
+		log.info(`runPhasedBatch — batch ${batchId}: Phase 3 — cross-linking`);
+		await runCrossLinking(sessionId, batchId);
+	}
+
+	// Finalize batch status
+	const finalBatch = await db.indexBatch.findUnique({ where: { id: batchId } });
+	if (finalBatch && finalBatch.status !== "cancelled") {
+		if (finalBatch.completed + finalBatch.failed >= finalBatch.total) {
+			await db.indexBatch.update({
+				where: { id: batchId },
+				data: { status: "completed", completedAt: new Date() },
+			});
+		}
 	}
 }
 
@@ -85,13 +233,27 @@ export async function enqueueSessionGraphIndexing(
 ): Promise<string> {
 	const db = getDb();
 
+	// Fetch resource types to determine phase ordering
+	const resources = await db.resource.findMany({
+		where: { id: { in: resourceIds } },
+		select: { id: true, type: true },
+	});
+	const typeMap = new Map(resources.map((r) => [r.id, r.type]));
+
+	// Sort: phase 1 types first (lower sortOrder), then phase 2
+	const sorted = [...resourceIds].sort((a, b) => {
+		const aPhase1 = PHASE_1_TYPES.has(typeMap.get(a) ?? "") ? 0 : 1;
+		const bPhase1 = PHASE_1_TYPES.has(typeMap.get(b) ?? "") ? 0 : 1;
+		return aPhase1 - bPhase1;
+	});
+
 	const batch = await db.indexBatch.create({
 		data: {
 			sessionId,
 			status: "running",
-			total: resourceIds.length,
+			total: sorted.length,
 			jobs: {
-				create: resourceIds.map((resourceId, i) => ({
+				create: sorted.map((resourceId, i) => ({
 					resourceId,
 					sortOrder: i,
 					status: "pending",
@@ -102,12 +264,11 @@ export async function enqueueSessionGraphIndexing(
 		include: { jobs: true },
 	});
 
-	for (const job of batch.jobs) {
-		indexingQueue.add(() => runIndexJob(job.id));
-	}
+	// Enqueue a single phased batch run (keeps concurrency=1 at batch level)
+	indexingQueue.add(() => runPhasedBatch(batch.id));
 
 	log.info(
-		`enqueueSessionGraphIndexing — session ${sessionId}, batch ${batch.id}, ${resourceIds.length} resources queued`,
+		`enqueueSessionGraphIndexing — session ${sessionId}, batch ${batch.id}, ${resourceIds.length} resources queued (phase1=${sorted.filter((id) => PHASE_1_TYPES.has(typeMap.get(id) ?? "")).length}, phase2=${sorted.filter((id) => !PHASE_1_TYPES.has(typeMap.get(id) ?? "")).length})`,
 	);
 	return batch.id;
 }
@@ -222,17 +383,14 @@ export async function resumeInterruptedBatches(): Promise<void> {
 			data: { status: "pending" },
 		});
 
-		const pendingJobs = await db.indexJob.findMany({
-			where: { batchId: batch.id, status: "pending" },
-			orderBy: { sortOrder: "asc" },
-		});
+		// Re-enqueue as a phased batch
+		indexingQueue.add(() => runPhasedBatch(batch.id));
 
-		for (const job of pendingJobs) {
-			indexingQueue.add(() => runIndexJob(job.id));
-		}
-
+		const pendingCount = batch.jobs.filter(
+			(j) => j.status === "pending" || j.status === "running",
+		).length;
 		log.info(
-			`resumeInterruptedBatches — batch ${batch.id}: re-enqueued ${pendingJobs.length} pending jobs`,
+			`resumeInterruptedBatches — batch ${batch.id}: re-enqueued with ${pendingCount} pending jobs`,
 		);
 	}
 }
@@ -263,9 +421,8 @@ export async function retryFailedJobs(sessionId: string): Promise<number> {
 				: { failed: { decrement: failedJobIds.length } },
 	});
 
-	for (const job of batch.jobs) {
-		indexingQueue.add(() => runIndexJob(job.id));
-	}
+	// Re-enqueue as phased batch to handle retried jobs properly
+	indexingQueue.add(() => runPhasedBatch(batch.id));
 
 	log.info(`retryFailedJobs — session ${sessionId}, retrying ${failedJobIds.length} jobs`);
 	return failedJobIds.length;
