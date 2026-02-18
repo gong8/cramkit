@@ -1,4 +1,5 @@
 import { createLogger, getDb } from "@cramkit/shared";
+import type { IndexerLogger } from "../lib/indexer-logger.js";
 import { CancellationError, isApiServerError, sleep } from "./errors.js";
 import { fuzzyMatchTitle, toTitleCase } from "./graph-indexer-utils.js";
 import type { MetadataAgentInput, MetadataExtractionResult } from "./metadata-agent.js";
@@ -24,14 +25,16 @@ async function extractWithRetries(
 	input: MetadataAgentInput,
 	resourceId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<MetadataExtractionResult> {
+	const activeLog = indexerLog ?? log;
 	for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
 		if (signal?.aborted) throw new CancellationError("Metadata extraction cancelled");
 		try {
-			return await runMetadataAgent(input, signal);
+			return await runMetadataAgent(input, signal, indexerLog);
 		} catch (error) {
 			if (error instanceof CancellationError) throw error;
-			log.error(
+			activeLog.error(
 				`indexResourceMetadata — extraction failed for "${input.resource.name}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS})`,
 				error,
 			);
@@ -45,8 +48,8 @@ async function extractWithRetries(
 			// Exponential backoff: 10s, 30s for normal errors; 30s, 90s for API 500s
 			const baseDelay = isApiServerError(error) ? 30_000 : 10_000;
 			const delay = baseDelay * attempt;
-			log.info(
-				`indexResourceMetadata — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS}) after ${delay / 1000}s...`,
+			activeLog.info(
+				`indexResourceMetadata — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS}) after ${delay / 1000}s, backoff=${delay}ms, previous error: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			await sleep(delay, signal);
 		}
@@ -71,6 +74,7 @@ async function readFileContent(file: {
 export async function indexResourceMetadata(
 	resourceId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<void> {
 	const db = getDb();
 
@@ -107,7 +111,8 @@ export async function indexResourceMetadata(
 		throw new MetadataIndexError("Not graph-indexed yet", "unknown", resourceId);
 	}
 
-	log.info(`indexResourceMetadata — starting "${resource.name}" (${resourceId})`);
+	const activeLog = indexerLog ?? log;
+	activeLog.info(`indexResourceMetadata — starting "${resource.name}" (${resourceId})`);
 
 	const startTime = Date.now();
 
@@ -133,7 +138,7 @@ export async function indexResourceMetadata(
 		existingConcepts,
 	};
 
-	const result = await extractWithRetries(agentInput, resourceId, signal);
+	const result = await extractWithRetries(agentInput, resourceId, signal, indexerLog);
 
 	if (signal?.aborted) throw new CancellationError("Cancelled before DB write");
 
@@ -158,7 +163,7 @@ export async function indexResourceMetadata(
 		log.warn("indexResourceMetadata — failed to write GraphLog", e);
 	}
 
-	log.info(
+	activeLog.info(
 		`indexResourceMetadata — completed "${resource.name}": ${qCount} questions, ${cuCount} concept updates`,
 	);
 }

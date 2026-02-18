@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
+import type { IndexerLogger } from "../lib/indexer-logger.js";
 import { CancellationError, isApiServerError, sleep } from "./errors.js";
 import type { ExtractionAgentInput, ExtractionResult } from "./extraction-agent.js";
 import { runExtractionAgent } from "./extraction-agent.js";
@@ -36,14 +37,16 @@ async function extractWithRetries(
 	input: ExtractionAgentInput,
 	resourceId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<ExtractionResult> {
+	const activeLog = indexerLog ?? log;
 	for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
 		if (signal?.aborted) throw new CancellationError("Extraction cancelled");
 		try {
-			return await runExtractionAgent(input, signal);
+			return await runExtractionAgent(input, signal, indexerLog);
 		} catch (error) {
 			if (error instanceof CancellationError) throw error;
-			log.error(
+			activeLog.error(
 				`indexResourceGraph — extraction failed for "${input.resource.name}" (attempt ${attempt}/${MAX_LLM_ATTEMPTS})`,
 				error,
 			);
@@ -57,8 +60,8 @@ async function extractWithRetries(
 			// Exponential backoff: 10s, 30s for normal errors; 30s, 90s for API 500s
 			const baseDelay = isApiServerError(error) ? 30_000 : 10_000;
 			const delay = baseDelay * attempt;
-			log.info(
-				`indexResourceGraph — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS}) after ${delay / 1000}s...`,
+			activeLog.info(
+				`indexResourceGraph — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS}) after ${delay / 1000}s, backoff=${delay}ms, previous error: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			await sleep(delay, signal);
 		}
@@ -317,6 +320,7 @@ export async function indexResourceGraph(
 	resourceId: string,
 	thoroughness?: Thoroughness,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<void> {
 	const db = getDb();
 
@@ -350,7 +354,8 @@ export async function indexResourceGraph(
 	}
 
 	const mode = thoroughness ?? "standard";
-	log.info(
+	const activeLog = indexerLog ?? log;
+	activeLog.info(
 		`indexResourceGraph — starting "${resource.name}" (${resourceId}) [thoroughness=${mode}]`,
 	);
 
@@ -400,7 +405,7 @@ export async function indexResourceGraph(
 		thoroughness: mode,
 	};
 
-	const result = await extractWithRetries(agentInput, resourceId, signal);
+	const result = await extractWithRetries(agentInput, resourceId, signal, indexerLog);
 
 	if (signal?.aborted) throw new CancellationError("Cancelled before DB write");
 
@@ -433,7 +438,7 @@ export async function indexResourceGraph(
 		log.warn("indexResourceGraph — failed to write GraphLog", e);
 	}
 
-	log.info(
+	activeLog.info(
 		`indexResourceGraph — completed "${resource.name}": ${result.concepts.length} concepts, ${totalRels} relationships`,
 	);
 }

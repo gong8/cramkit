@@ -1,4 +1,5 @@
 import { createLogger, getDb } from "@cramkit/shared";
+import type { Logger } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
 import { CancellationError } from "./errors.js";
 
@@ -149,8 +150,10 @@ async function validateReferentialIntegrity(
 export async function runProgrammaticCleanup(
 	sessionId: string,
 	signal?: AbortSignal,
+	indexerLog?: Logger,
 ): Promise<CleanupStats> {
 	const db = getDb();
+	const activeLog = indexerLog ?? log;
 
 	const stats = await db.$transaction(
 		async (tx) => {
@@ -175,11 +178,11 @@ export async function runProgrammaticCleanup(
 		stats.integrityIssuesFixed;
 
 	if (total > 0) {
-		log.info(
+		activeLog.info(
 			`runProgrammaticCleanup — session ${sessionId}: removed ${stats.duplicateRelationshipsRemoved} duplicate rels, ${stats.orphanedConceptsRemoved} orphaned concepts, ${stats.integrityIssuesFixed} integrity issues`,
 		);
 	} else {
-		log.info(`runProgrammaticCleanup — session ${sessionId}: graph is clean, nothing to fix`);
+		activeLog.info(`runProgrammaticCleanup — session ${sessionId}: graph is clean, nothing to fix`);
 	}
 
 	return stats;

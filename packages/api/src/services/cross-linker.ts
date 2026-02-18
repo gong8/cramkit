@@ -1,9 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger, getDb } from "@cramkit/shared";
+import type { IndexerLogger } from "../lib/indexer-logger.js";
 import { CancellationError } from "./errors.js";
 import { BLOCKED_BUILTIN_TOOLS, LLM_MODEL, getCliModel } from "./llm-client.js";
 
@@ -180,6 +188,7 @@ rl.on("line", (line) => {
 export async function runCrossLinkingAgent(
 	sessionId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<CrossLinkResult> {
 	if (signal?.aborted) throw new CancellationError("Cross-linking cancelled before start");
 	const db = getDb();
@@ -342,6 +351,9 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 
 		const resultPath = join(tempDir, "result.json");
 
+		const activeLog = indexerLog ?? log;
+		activeLog.info(`runCrossLinkingAgent — CLI args: claude ${args.join(" ")}`);
+
 		return await new Promise<CrossLinkResult>((resolve, reject) => {
 			const { PATH, HOME, SHELL, TERM } = process.env;
 			const proc = spawn("claude", args, {
@@ -356,22 +368,32 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 			let stderr = "";
 			let aborted = false;
 
+			const agentPaths = indexerLog?.getAgentLogPaths("cross-linker");
+			const stdoutFile = agentPaths ? createWriteStream(agentPaths.stdoutPath) : null;
+			const stderrFile = agentPaths ? createWriteStream(agentPaths.stderrPath) : null;
+
 			const onAbort = () => {
 				aborted = true;
 				proc.kill("SIGTERM");
-				log.info(`runCrossLinkingAgent — killing process for session ${sessionId} (cancelled)`);
+				activeLog.info(
+					`runCrossLinkingAgent — killing process for session ${sessionId} (cancelled)`,
+				);
 			};
 			signal?.addEventListener("abort", onAbort, { once: true });
 
 			proc.stdout?.on("data", (chunk: Buffer) => {
 				stdout += chunk.toString();
+				stdoutFile?.write(chunk);
 			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
+				stderrFile?.write(chunk);
 			});
 
 			proc.on("close", (code) => {
 				signal?.removeEventListener("abort", onAbort);
+				stdoutFile?.end();
+				stderrFile?.end();
 
 				if (aborted || signal?.aborted) {
 					reject(new CancellationError("Cross-linking cancelled"));
@@ -380,13 +402,21 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 
 				if (code !== 0) {
 					const output = (stderr || stdout).slice(0, 500);
-					log.error(`runCrossLinkingAgent — CLI exited with code ${code}: ${output}`);
+					activeLog.error(`runCrossLinkingAgent — CLI exited with code ${code}: ${output}`);
+					if (indexerLog) {
+						indexerLog.error(
+							`runCrossLinkingAgent — FULL stderr (${stderr.length} chars):\n${stderr}`,
+						);
+						indexerLog.error(
+							`runCrossLinkingAgent — FULL stdout (${stdout.length} chars):\n${stdout}`,
+						);
+					}
 					reject(new Error(`Cross-linking agent error (exit code ${code}): ${output}`));
 					return;
 				}
 
 				if (!existsSync(resultPath)) {
-					log.info("runCrossLinkingAgent — agent did not submit links (no result.json)");
+					activeLog.info("runCrossLinkingAgent — agent did not submit links (no result.json)");
 					resolve({ links: [] });
 					return;
 				}
@@ -394,7 +424,7 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 				try {
 					const raw = readFileSync(resultPath, "utf-8");
 					const parsed = JSON.parse(raw) as CrossLinkResult;
-					log.info(
+					activeLog.info(
 						`runCrossLinkingAgent — session ${sessionId}: ${parsed.links.length} new cross-links`,
 					);
 					resolve(parsed);
@@ -405,7 +435,9 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 
 			proc.on("error", (err) => {
 				signal?.removeEventListener("abort", onAbort);
-				log.error(`runCrossLinkingAgent — spawn error: ${err.message}`);
+				stdoutFile?.end();
+				stderrFile?.end();
+				activeLog.error(`runCrossLinkingAgent — spawn error: ${err.message}`);
 				reject(new Error(`Cross-linking agent spawn error: ${err.message}`));
 			});
 		});

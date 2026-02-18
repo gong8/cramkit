@@ -1,9 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@cramkit/shared";
+import type { IndexerLogger } from "../lib/indexer-logger.js";
 import { CancellationError } from "./errors.js";
 import { BLOCKED_BUILTIN_TOOLS, LLM_MODEL, getCliModel } from "./llm-client.js";
 
@@ -495,6 +503,7 @@ ${hasSolutions ? "\nA SOLUTIONS file is available — you MUST cross-reference i
 export async function runMetadataAgent(
 	input: MetadataAgentInput,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<MetadataExtractionResult> {
 	if (signal?.aborted) throw new CancellationError("Metadata extraction cancelled before start");
 
@@ -562,6 +571,9 @@ export async function runMetadataAgent(
 
 		const resultPath = join(tempDir, "result.json");
 
+		const activeLog = indexerLog ?? log;
+		activeLog.info(`runMetadataAgent — CLI args: claude ${args.join(" ")}`);
+
 		return await new Promise<MetadataExtractionResult>((resolve, reject) => {
 			const { PATH, HOME, SHELL, TERM } = process.env;
 			const proc = spawn("claude", args, {
@@ -576,22 +588,32 @@ export async function runMetadataAgent(
 			let stderr = "";
 			let aborted = false;
 
+			const agentPaths = indexerLog?.getAgentLogPaths("metadata", input.resource.name);
+			const stdoutFile = agentPaths ? createWriteStream(agentPaths.stdoutPath) : null;
+			const stderrFile = agentPaths ? createWriteStream(agentPaths.stderrPath) : null;
+
 			const onAbort = () => {
 				aborted = true;
 				proc.kill("SIGTERM");
-				log.info(`runMetadataAgent — killing process for "${input.resource.name}" (cancelled)`);
+				activeLog.info(
+					`runMetadataAgent — killing process for "${input.resource.name}" (cancelled)`,
+				);
 			};
 			signal?.addEventListener("abort", onAbort, { once: true });
 
 			proc.stdout?.on("data", (chunk: Buffer) => {
 				stdout += chunk.toString();
+				stdoutFile?.write(chunk);
 			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
+				stderrFile?.write(chunk);
 			});
 
 			proc.on("close", (code) => {
 				signal?.removeEventListener("abort", onAbort);
+				stdoutFile?.end();
+				stderrFile?.end();
 
 				if (aborted || signal?.aborted) {
 					reject(new CancellationError("Metadata extraction cancelled"));
@@ -600,7 +622,11 @@ export async function runMetadataAgent(
 
 				if (code !== 0) {
 					const output = (stderr || stdout).slice(0, 500);
-					log.error(`runMetadataAgent — CLI exited with code ${code}: ${output}`);
+					activeLog.error(`runMetadataAgent — CLI exited with code ${code}: ${output}`);
+					if (indexerLog) {
+						indexerLog.error(`runMetadataAgent — FULL stderr (${stderr.length} chars):\n${stderr}`);
+						indexerLog.error(`runMetadataAgent — FULL stdout (${stdout.length} chars):\n${stdout}`);
+					}
 					reject(new Error(`Metadata agent error (exit code ${code}): ${output}`));
 					return;
 				}
@@ -613,7 +639,7 @@ export async function runMetadataAgent(
 				try {
 					const raw = readFileSync(resultPath, "utf-8");
 					const parsed = JSON.parse(raw) as MetadataExtractionResult;
-					log.info(
+					activeLog.info(
 						`runMetadataAgent — "${input.resource.name}": ${parsed.questions?.length ?? 0} questions, ${parsed.conceptUpdates?.length ?? 0} concept updates`,
 					);
 					resolve(parsed);
@@ -624,7 +650,9 @@ export async function runMetadataAgent(
 
 			proc.on("error", (err) => {
 				signal?.removeEventListener("abort", onAbort);
-				log.error(`runMetadataAgent — spawn error: ${err.message}`);
+				stdoutFile?.end();
+				stderrFile?.end();
+				activeLog.error(`runMetadataAgent — spawn error: ${err.message}`);
 				reject(new Error(`Metadata agent spawn error: ${err.message}`));
 			});
 		});

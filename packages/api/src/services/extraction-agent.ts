@@ -1,9 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@cramkit/shared";
+import type { IndexerLogger } from "../lib/indexer-logger.js";
 import { CancellationError } from "./errors.js";
 import { BLOCKED_BUILTIN_TOOLS, LLM_MODEL, getCliModel } from "./llm-client.js";
 
@@ -431,6 +439,7 @@ export interface ExtractionResult {
 export async function runExtractionAgent(
 	input: ExtractionAgentInput,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<ExtractionResult> {
 	if (signal?.aborted) throw new CancellationError("Extraction cancelled before start");
 
@@ -505,6 +514,9 @@ export async function runExtractionAgent(
 
 		const resultPath = join(tempDir, "result.json");
 
+		const activeLog = indexerLog ?? log;
+		activeLog.info(`runExtractionAgent — CLI args: claude ${args.join(" ")}`);
+
 		return await new Promise<ExtractionResult>((resolve, reject) => {
 			const { PATH, HOME, SHELL, TERM } = process.env;
 			const proc = spawn("claude", args, {
@@ -519,22 +531,33 @@ export async function runExtractionAgent(
 			let stderr = "";
 			let aborted = false;
 
+			// Stream subprocess output to log files if indexerLog is available
+			const agentPaths = indexerLog?.getAgentLogPaths("extraction", input.resource.name);
+			const stdoutFile = agentPaths ? createWriteStream(agentPaths.stdoutPath) : null;
+			const stderrFile = agentPaths ? createWriteStream(agentPaths.stderrPath) : null;
+
 			const onAbort = () => {
 				aborted = true;
 				proc.kill("SIGTERM");
-				log.info(`runExtractionAgent — killing process for "${input.resource.name}" (cancelled)`);
+				activeLog.info(
+					`runExtractionAgent — killing process for "${input.resource.name}" (cancelled)`,
+				);
 			};
 			signal?.addEventListener("abort", onAbort, { once: true });
 
 			proc.stdout?.on("data", (chunk: Buffer) => {
 				stdout += chunk.toString();
+				stdoutFile?.write(chunk);
 			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
+				stderrFile?.write(chunk);
 			});
 
 			proc.on("close", (code) => {
 				signal?.removeEventListener("abort", onAbort);
+				stdoutFile?.end();
+				stderrFile?.end();
 
 				if (aborted || signal?.aborted) {
 					reject(new CancellationError("Extraction cancelled"));
@@ -543,7 +566,16 @@ export async function runExtractionAgent(
 
 				if (code !== 0) {
 					const output = (stderr || stdout).slice(0, 500);
-					log.error(`runExtractionAgent — CLI exited with code ${code}: ${output}`);
+					activeLog.error(`runExtractionAgent — CLI exited with code ${code}: ${output}`);
+					// Log full output to indexer log for debugging
+					if (indexerLog) {
+						indexerLog.error(
+							`runExtractionAgent — FULL stderr (${stderr.length} chars):\n${stderr}`,
+						);
+						indexerLog.error(
+							`runExtractionAgent — FULL stdout (${stdout.length} chars):\n${stdout}`,
+						);
+					}
 					reject(new Error(`Extraction agent error (exit code ${code}): ${output}`));
 					return;
 				}
@@ -556,8 +588,12 @@ export async function runExtractionAgent(
 				try {
 					const raw = readFileSync(resultPath, "utf-8");
 					const parsed = JSON.parse(raw) as ExtractionResult;
-					log.info(
-						`runExtractionAgent — "${input.resource.name}": ${parsed.concepts.length} concepts, ${parsed.file_concept_links.length + parsed.concept_concept_links.length + parsed.question_concept_links.length} relationships`,
+					const totalRels =
+						parsed.file_concept_links.length +
+						parsed.concept_concept_links.length +
+						parsed.question_concept_links.length;
+					activeLog.info(
+						`runExtractionAgent — "${input.resource.name}": ${parsed.concepts.length} concepts, ${totalRels} relationships`,
 					);
 					resolve(parsed);
 				} catch (err) {
@@ -567,7 +603,9 @@ export async function runExtractionAgent(
 
 			proc.on("error", (err) => {
 				signal?.removeEventListener("abort", onAbort);
-				log.error(`runExtractionAgent — spawn error: ${err.message}`);
+				stdoutFile?.end();
+				stderrFile?.end();
+				activeLog.error(`runExtractionAgent — spawn error: ${err.message}`);
 				reject(new Error(`Extraction agent spawn error: ${err.message}`));
 			});
 		});

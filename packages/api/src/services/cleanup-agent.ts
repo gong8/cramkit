@@ -1,9 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger, getDb } from "@cramkit/shared";
+import type { IndexerLogger } from "../lib/indexer-logger.js";
 import { CancellationError } from "./errors.js";
 import { deduplicateSessionRelationships } from "./graph-cleanup.js";
 import { toTitleCase } from "./graph-indexer-utils.js";
@@ -260,6 +268,7 @@ rl.on("line", (line) => {
 export async function runCleanupAgent(
 	sessionId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<CleanupAgentResult> {
 	if (signal?.aborted) throw new CancellationError("Cleanup cancelled before start");
 	const db = getDb();
@@ -377,6 +386,9 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 
 		const resultPath = join(tempDir, "result.json");
 
+		const activeLog = indexerLog ?? log;
+		activeLog.info(`runCleanupAgent — CLI args: claude ${args.join(" ")}`);
+
 		return await new Promise<CleanupAgentResult>((resolve, reject) => {
 			const { PATH, HOME, SHELL, TERM } = process.env;
 			const proc = spawn("claude", args, {
@@ -391,22 +403,30 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 			let stderr = "";
 			let aborted = false;
 
+			const agentPaths = indexerLog?.getAgentLogPaths("cleanup");
+			const stdoutFile = agentPaths ? createWriteStream(agentPaths.stdoutPath) : null;
+			const stderrFile = agentPaths ? createWriteStream(agentPaths.stderrPath) : null;
+
 			const onAbort = () => {
 				aborted = true;
 				proc.kill("SIGTERM");
-				log.info(`runCleanupAgent — killing process for session ${sessionId} (cancelled)`);
+				activeLog.info(`runCleanupAgent — killing process for session ${sessionId} (cancelled)`);
 			};
 			signal?.addEventListener("abort", onAbort, { once: true });
 
 			proc.stdout?.on("data", (chunk: Buffer) => {
 				stdout += chunk.toString();
+				stdoutFile?.write(chunk);
 			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
+				stderrFile?.write(chunk);
 			});
 
 			proc.on("close", (code) => {
 				signal?.removeEventListener("abort", onAbort);
+				stdoutFile?.end();
+				stderrFile?.end();
 
 				if (aborted || signal?.aborted) {
 					reject(new CancellationError("Cleanup cancelled"));
@@ -415,13 +435,17 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 
 				if (code !== 0) {
 					const output = (stderr || stdout).slice(0, 500);
-					log.error(`runCleanupAgent — CLI exited with code ${code}: ${output}`);
+					activeLog.error(`runCleanupAgent — CLI exited with code ${code}: ${output}`);
+					if (indexerLog) {
+						indexerLog.error(`runCleanupAgent — FULL stderr (${stderr.length} chars):\n${stderr}`);
+						indexerLog.error(`runCleanupAgent — FULL stdout (${stdout.length} chars):\n${stdout}`);
+					}
 					reject(new Error(`Cleanup agent error (exit code ${code}): ${output}`));
 					return;
 				}
 
 				if (!existsSync(resultPath)) {
-					log.info("runCleanupAgent — agent did not submit decisions (no result.json)");
+					activeLog.info("runCleanupAgent — agent did not submit decisions (no result.json)");
 					resolve({
 						merges: [],
 						deleteConcepts: [],
@@ -434,7 +458,7 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 				try {
 					const raw = readFileSync(resultPath, "utf-8");
 					const parsed = JSON.parse(raw) as CleanupAgentResult;
-					log.info(
+					activeLog.info(
 						`runCleanupAgent — session ${sessionId}: ${parsed.merges.length} merges, ${parsed.deleteConcepts.length} deletes`,
 					);
 					resolve(parsed);
@@ -445,7 +469,9 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 
 			proc.on("error", (err) => {
 				signal?.removeEventListener("abort", onAbort);
-				log.error(`runCleanupAgent — spawn error: ${err.message}`);
+				stdoutFile?.end();
+				stderrFile?.end();
+				activeLog.error(`runCleanupAgent — spawn error: ${err.message}`);
 				reject(new Error(`Cleanup agent spawn error: ${err.message}`));
 			});
 		});

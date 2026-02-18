@@ -17,6 +17,7 @@ import {
 } from "../services/graph-indexer.js";
 import { indexResourceMetadata } from "../services/metadata-indexer.js";
 import { processResource } from "../services/resource-processor.js";
+import { IndexerLogger } from "./indexer-logger.js";
 
 const log = createLogger("api");
 const queue = new PQueue({ concurrency: 1 });
@@ -216,12 +217,17 @@ const consecutiveApiFailures = new Map<string, number>();
 const CIRCUIT_BREAKER_THRESHOLD = 2;
 const CIRCUIT_BREAKER_PAUSE_MS = 60_000;
 
-async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
+async function runIndexJob(
+	jobId: string,
+	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
+): Promise<void> {
 	const db = getDb();
+	const activeLog = indexerLog ?? log;
 
 	const job = await db.indexJob.findUnique({
 		where: { id: jobId },
-		include: { batch: { select: { status: true } } },
+		include: { batch: { select: { status: true } }, resource: { select: { name: true } } },
 	});
 	if (!job) return;
 
@@ -233,8 +239,8 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 	// Circuit breaker: if N consecutive jobs failed with API errors, pause before continuing
 	const failCount = consecutiveApiFailures.get(job.batchId) ?? 0;
 	if (failCount >= CIRCUIT_BREAKER_THRESHOLD) {
-		log.warn(
-			`runIndexJob — ${failCount} consecutive API failures, pausing ${CIRCUIT_BREAKER_PAUSE_MS / 1000}s before next attempt...`,
+		activeLog.warn(
+			`runIndexJob — circuit breaker: ${failCount} consecutive API failures, pausing ${CIRCUIT_BREAKER_PAUSE_MS / 1000}s before next attempt...`,
 		);
 		try {
 			await sleep(CIRCUIT_BREAKER_PAUSE_MS, signal);
@@ -250,24 +256,31 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 		data: { status: "running", startedAt: new Date(), attempts: { increment: 1 } },
 	});
 
+	const resourceName = job.resource?.name ?? job.resourceId;
+	activeLog.info(
+		`runIndexJob — starting "${resourceName}" (job ${jobId}, attempt ${job.attempts + 1})`,
+	);
+
 	try {
 		const startTime = Date.now();
 		await indexResourceGraph(
 			job.resourceId,
 			(job.thoroughness as Thoroughness) || undefined,
 			signal,
+			indexerLog,
 		);
 
 		// Re-check cancellation after work completes — don't write to a cancelled batch
 		if (signal?.aborted || (await isBatchCancelled(job.batchId))) {
 			await db.indexJob.update({ where: { id: jobId }, data: { status: "cancelled" } });
-			log.info(`runIndexJob — job ${jobId} cancelled (post-completion)`);
+			activeLog.info(`runIndexJob — job ${jobId} cancelled (post-completion)`);
 			return;
 		}
 
+		const durationMs = Date.now() - startTime;
 		await db.indexJob.update({
 			where: { id: jobId },
-			data: { status: "completed", completedAt: new Date(), durationMs: Date.now() - startTime },
+			data: { status: "completed", completedAt: new Date(), durationMs },
 		});
 		await db.indexBatch.update({
 			where: { id: job.batchId },
@@ -275,13 +288,16 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 		});
 		// Reset circuit breaker on success
 		consecutiveApiFailures.delete(job.batchId);
+		activeLog.info(
+			`runIndexJob — completed "${resourceName}" in ${(durationMs / 1000).toFixed(1)}s`,
+		);
 	} catch (error) {
 		if (error instanceof CancellationError) {
 			await db.indexJob.update({
 				where: { id: jobId },
 				data: { status: "cancelled" },
 			});
-			log.info(`runIndexJob — job ${jobId} cancelled`);
+			activeLog.info(`runIndexJob — job ${jobId} cancelled`);
 			return;
 		}
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -294,7 +310,10 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 			where: { id: job.batchId },
 			data: { failed: { increment: 1 } },
 		});
-		log.error(`runIndexJob — job ${jobId} failed: ${errorMessage}`);
+		activeLog.error(
+			`runIndexJob — "${resourceName}" failed (type=${errorType}): ${errorMessage}`,
+			error,
+		);
 
 		// Track consecutive API failures for circuit breaker
 		if (isApiServerError(error)) {
@@ -315,8 +334,10 @@ async function runCrossLinking(
 	sessionId: string,
 	batchId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<void> {
 	const db = getDb();
+	const activeLog = indexerLog ?? log;
 
 	if ((await isBatchCancelled(batchId)) || signal?.aborted) return;
 
@@ -324,15 +345,15 @@ async function runCrossLinking(
 	const crossLinkStart = Date.now();
 
 	try {
-		log.info(`runCrossLinking — session ${sessionId}, starting cross-linking pass`);
-		const result = await runCrossLinkingAgent(sessionId, signal);
+		activeLog.info(`runCrossLinking — session ${sessionId}, starting cross-linking pass`);
+		const result = await runCrossLinkingAgent(sessionId, signal, indexerLog);
 
 		// Re-check cancellation after agent returns — don't write results to a cancelled batch
 		if (signal?.aborted || (await isBatchCancelled(batchId))) {
 			const skipped = { status: "skipped" as const };
 			crossLinkStatus.set(batchId, skipped);
 			await persistPhaseStatus(batchId, "phase3Status", skipped);
-			log.info(`runCrossLinking — session ${sessionId} cancelled (post-agent)`);
+			activeLog.info(`runCrossLinking — session ${sessionId} cancelled (post-agent)`);
 			return;
 		}
 
@@ -370,7 +391,7 @@ async function runCrossLinking(
 				const targetId =
 					conceptMap.get(targetName) ?? conceptMapLower.get(targetName.toLowerCase());
 				if (!sourceId || !targetId) {
-					log.warn("cross-link dropped: concept not found", {
+					activeLog.warn("cross-link dropped: concept not found", {
 						sourceConcept: link.sourceConcept,
 						targetConcept: link.targetConcept,
 						sourceResolved: !!sourceId,
@@ -414,7 +435,7 @@ async function runCrossLinking(
 				if (newRels.length > 0) {
 					await db.relationship.createMany({ data: newRels });
 					linksAdded = newRels.length;
-					log.info(
+					activeLog.info(
 						`runCrossLinking — session ${sessionId}: added ${newRels.length} new cross-links`,
 					);
 				}
@@ -436,18 +457,22 @@ async function runCrossLinking(
 				},
 			});
 		} catch (e) {
-			log.warn("runCrossLinking — failed to write GraphLog", e);
+			activeLog.warn("runCrossLinking — failed to write GraphLog", e);
 		}
+
+		activeLog.info(
+			`runCrossLinking — completed in ${((Date.now() - crossLinkStart) / 1000).toFixed(1)}s, ${linksAdded} links added`,
+		);
 	} catch (error) {
 		if (error instanceof CancellationError) {
 			const skipped = { status: "skipped" as const };
 			crossLinkStatus.set(batchId, skipped);
 			await persistPhaseStatus(batchId, "phase3Status", skipped);
-			log.info(`runCrossLinking — session ${sessionId} cancelled`);
+			activeLog.info(`runCrossLinking — session ${sessionId} cancelled`);
 			return;
 		}
 		const msg = error instanceof Error ? error.message : String(error);
-		log.error(`runCrossLinking — session ${sessionId} failed: ${msg}`);
+		activeLog.error(`runCrossLinking — session ${sessionId} failed: ${msg}`, error);
 		const failed = { status: "failed" as const, error: msg };
 		crossLinkStatus.set(batchId, failed);
 		await persistPhaseStatus(batchId, "phase3Status", failed);
@@ -459,17 +484,20 @@ async function runGraphCleanup(
 	sessionId: string,
 	batchId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<void> {
+	const activeLog = indexerLog ?? log;
+
 	if ((await isBatchCancelled(batchId)) || signal?.aborted) return;
 
 	cleanupStatus.set(batchId, { status: "running" });
 	const cleanupStart = Date.now();
 
 	try {
-		log.info(`runGraphCleanup — session ${sessionId}, starting cleanup`);
+		activeLog.info(`runGraphCleanup — session ${sessionId}, starting cleanup`);
 
 		// Step 1: programmatic cleanup
-		const progStats = await runProgrammaticCleanup(sessionId, signal);
+		const progStats = await runProgrammaticCleanup(sessionId, signal, indexerLog);
 
 		if (signal?.aborted || (await isBatchCancelled(batchId))) {
 			const skipped = { status: "skipped" as const };
@@ -487,14 +515,14 @@ async function runGraphCleanup(
 		};
 
 		try {
-			const agentResult = await runCleanupAgent(sessionId, signal);
+			const agentResult = await runCleanupAgent(sessionId, signal, indexerLog);
 
 			// Re-check cancellation after agent returns — don't apply results to a cancelled batch
 			if (signal?.aborted || (await isBatchCancelled(batchId))) {
 				const skipped = { status: "skipped" as const };
 				cleanupStatus.set(batchId, skipped);
 				await persistPhaseStatus(batchId, "phase4Status", skipped);
-				log.info(`runGraphCleanup — session ${sessionId} cancelled (post-agent)`);
+				activeLog.info(`runGraphCleanup — session ${sessionId} cancelled (post-agent)`);
 				return;
 			}
 
@@ -502,7 +530,7 @@ async function runGraphCleanup(
 		} catch (error) {
 			if (error instanceof CancellationError) throw error;
 			const msg = error instanceof Error ? error.message : String(error);
-			log.warn(`runGraphCleanup — LLM cleanup agent failed (non-fatal): ${msg}`);
+			activeLog.warn(`runGraphCleanup — LLM cleanup agent failed (non-fatal): ${msg}`, error);
 		}
 
 		const combinedStats = {
@@ -530,18 +558,22 @@ async function runGraphCleanup(
 				},
 			});
 		} catch (e) {
-			log.warn("runGraphCleanup — failed to write GraphLog", e);
+			activeLog.warn("runGraphCleanup — failed to write GraphLog", e);
 		}
+
+		activeLog.info(
+			`runGraphCleanup — completed in ${((Date.now() - cleanupStart) / 1000).toFixed(1)}s — duplicates=${combinedStats.duplicatesRemoved}, orphans=${combinedStats.orphansRemoved}, integrity=${combinedStats.integrityFixes}, merged=${combinedStats.conceptsMerged}`,
+		);
 	} catch (error) {
 		if (error instanceof CancellationError) {
 			const skipped = { status: "skipped" as const };
 			cleanupStatus.set(batchId, skipped);
 			await persistPhaseStatus(batchId, "phase4Status", skipped);
-			log.info(`runGraphCleanup — session ${sessionId} cancelled`);
+			activeLog.info(`runGraphCleanup — session ${sessionId} cancelled`);
 			return;
 		}
 		const msg = error instanceof Error ? error.message : String(error);
-		log.error(`runGraphCleanup — session ${sessionId} failed: ${msg}`);
+		activeLog.error(`runGraphCleanup — session ${sessionId} failed: ${msg}`, error);
 		const failed = { status: "failed" as const, error: msg };
 		cleanupStatus.set(batchId, failed);
 		await persistPhaseStatus(batchId, "phase4Status", failed);
@@ -553,8 +585,10 @@ async function runMetadataExtraction(
 	sessionId: string,
 	batchId: string,
 	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
 ): Promise<void> {
 	const db = getDb();
+	const activeLog = indexerLog ?? log;
 
 	if ((await isBatchCancelled(batchId)) || signal?.aborted) return;
 
@@ -608,7 +642,7 @@ async function runMetadataExtraction(
 			async () => {
 				if (signal?.aborted || (await isBatchCancelled(batchId))) return;
 				try {
-					await indexResourceMetadata(resource.id, signal);
+					await indexResourceMetadata(resource.id, signal, indexerLog);
 					// Re-check cancellation — don't count results for a cancelled batch
 					if (signal?.aborted || (await isBatchCancelled(batchId))) return;
 					completed++;
@@ -622,7 +656,7 @@ async function runMetadataExtraction(
 					if (error instanceof CancellationError) return;
 					failed++;
 					const msg = error instanceof Error ? error.message : String(error);
-					log.error(`runMetadataExtraction — "${resource.name}" failed: ${msg}`);
+					activeLog.error(`runMetadataExtraction — "${resource.name}" failed: ${msg}`, error);
 					metadataStatus.set(batchId, {
 						status: "running",
 						total: resources.length,
@@ -658,7 +692,7 @@ async function runMetadataExtraction(
 	metadataStatus.set(batchId, phase5Result);
 	await persistPhaseStatus(batchId, "phase5Status", phase5Result);
 
-	log.info(
+	activeLog.info(
 		`runMetadataExtraction — session ${sessionId}: ${completed}/${resources.length} completed, ${failed} failed`,
 	);
 }
@@ -671,7 +705,7 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 		include: {
 			jobs: {
 				orderBy: { sortOrder: "asc" },
-				include: { resource: { select: { type: true } } },
+				include: { resource: { select: { type: true, name: true } } },
 			},
 		},
 	});
@@ -681,31 +715,43 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 	batchAbortControllers.set(batchId, controller);
 	const { signal } = controller;
 
+	const indexerLog = new IndexerLogger(batchId, batch.sessionId);
+	const batchStart = Date.now();
+
 	try {
 		const sessionId = batch.sessionId;
 		const phase1Jobs = batch.jobs.filter((j) => PHASE_1_TYPES.has(j.resource.type));
 		const phase2Jobs = batch.jobs.filter((j) => !PHASE_1_TYPES.has(j.resource.type));
 
-		// Phase 1: sequential (lectures/specs establish concepts)
-		log.info(
-			`runPhasedBatch — batch ${batchId}: Phase 1 — ${phase1Jobs.length} lecture/spec resources (sequential)`,
+		// Log batch config
+		indexerLog.info(`runPhasedBatch — batch ${batchId}, session ${sessionId}`);
+		indexerLog.info(
+			`runPhasedBatch — ${batch.jobs.length} total resources: phase1=${phase1Jobs.length} (sequential), phase2=${phase2Jobs.length} (parallel)`,
 		);
+		for (const job of batch.jobs) {
+			const phase = PHASE_1_TYPES.has(job.resource.type) ? 1 : 2;
+			indexerLog.info(
+				`  resource: "${job.resource.name}" type=${job.resource.type} phase=${phase} thoroughness=${job.thoroughness || "standard"}`,
+			);
+		}
+
+		// Phase 1: sequential (lectures/specs establish concepts)
+		indexerLog.startPhase(1);
 		for (const job of phase1Jobs) {
 			if (signal.aborted || (await isBatchCancelled(batchId))) break;
-			await runIndexJob(job.id, signal);
+			await runIndexJob(job.id, signal, indexerLog);
 		}
+		indexerLog.endPhase();
 
 		// Phase 2: parallel (papers/sheets/other link to concepts)
 		if (!signal.aborted && !(await isBatchCancelled(batchId)) && phase2Jobs.length > 0) {
-			log.info(
-				`runPhasedBatch — batch ${batchId}: Phase 2 — ${phase2Jobs.length} paper/sheet resources (parallel, concurrency=3)`,
-			);
+			indexerLog.startPhase(2);
 			const phase2Queue = new PQueue({ concurrency: 3 });
 			for (const job of phase2Jobs) {
 				phase2Queue.add(
 					async () => {
 						if (signal.aborted || (await isBatchCancelled(batchId))) return;
-						await runIndexJob(job.id, signal);
+						await runIndexJob(job.id, signal, indexerLog);
 					},
 					{ signal },
 				);
@@ -716,24 +762,28 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 				// PQueue throws AbortError when signal is aborted — suppress it
 				if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
 			}
+			indexerLog.endPhase();
 		}
 
 		// Phase 3: cross-linking pass
 		if (!signal.aborted && !(await isBatchCancelled(batchId))) {
-			log.info(`runPhasedBatch — batch ${batchId}: Phase 3 — cross-linking`);
-			await runCrossLinking(sessionId, batchId, signal);
+			indexerLog.startPhase(3);
+			await runCrossLinking(sessionId, batchId, signal, indexerLog);
+			indexerLog.endPhase();
 		}
 
 		// Phase 4: graph cleanup
 		if (!signal.aborted && !(await isBatchCancelled(batchId))) {
-			log.info(`runPhasedBatch — batch ${batchId}: Phase 4 — graph cleanup`);
-			await runGraphCleanup(sessionId, batchId, signal);
+			indexerLog.startPhase(4);
+			await runGraphCleanup(sessionId, batchId, signal, indexerLog);
+			indexerLog.endPhase();
 		}
 
 		// Phase 5: metadata extraction (per-resource, parallel, concurrency=3)
 		if (!signal.aborted && !(await isBatchCancelled(batchId))) {
-			log.info(`runPhasedBatch — batch ${batchId}: Phase 5 — metadata extraction`);
-			await runMetadataExtraction(sessionId, batchId, signal);
+			indexerLog.startPhase(5);
+			await runMetadataExtraction(sessionId, batchId, signal, indexerLog);
+			indexerLog.endPhase();
 		}
 
 		// Finalize batch status
@@ -746,7 +796,14 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 				});
 			}
 		}
+
+		const totalDuration = ((Date.now() - batchStart) / 1000).toFixed(1);
+		indexerLog.info(
+			`runPhasedBatch — batch ${batchId} finished in ${totalDuration}s — completed=${finalBatch?.completed ?? "?"}, failed=${finalBatch?.failed ?? "?"}`,
+		);
 	} finally {
+		indexerLog.info(`runPhasedBatch — logs written to ${indexerLog.dir}`);
+		indexerLog.close();
 		batchAbortControllers.delete(batchId);
 		consecutiveApiFailures.delete(batchId);
 	}
