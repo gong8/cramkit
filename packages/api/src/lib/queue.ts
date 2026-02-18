@@ -7,7 +7,7 @@ import {
 	runCleanupAgent,
 } from "../services/cleanup-agent.js";
 import { runCrossLinkingAgent } from "../services/cross-linker.js";
-import { CancellationError } from "../services/errors.js";
+import { CancellationError, isApiServerError, sleep } from "../services/errors.js";
 import { runProgrammaticCleanup } from "../services/graph-cleanup.js";
 import { toTitleCase } from "../services/graph-indexer-utils.js";
 import {
@@ -211,6 +211,11 @@ export function enqueueGraphIndexing(resourceId: string, thoroughness?: Thorough
 
 const PHASE_1_TYPES = new Set(["LECTURE_NOTES", "SPECIFICATION"]);
 
+// Circuit breaker: consecutive API failures per batch
+const consecutiveApiFailures = new Map<string, number>();
+const CIRCUIT_BREAKER_THRESHOLD = 2;
+const CIRCUIT_BREAKER_PAUSE_MS = 60_000;
+
 async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 	const db = getDb();
 
@@ -223,6 +228,21 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 	if (job.batch.status === "cancelled" || signal?.aborted) {
 		await db.indexJob.update({ where: { id: jobId }, data: { status: "cancelled" } });
 		return;
+	}
+
+	// Circuit breaker: if N consecutive jobs failed with API errors, pause before continuing
+	const failCount = consecutiveApiFailures.get(job.batchId) ?? 0;
+	if (failCount >= CIRCUIT_BREAKER_THRESHOLD) {
+		log.warn(
+			`runIndexJob — ${failCount} consecutive API failures, pausing ${CIRCUIT_BREAKER_PAUSE_MS / 1000}s before next attempt...`,
+		);
+		try {
+			await sleep(CIRCUIT_BREAKER_PAUSE_MS, signal);
+		} catch {
+			await db.indexJob.update({ where: { id: jobId }, data: { status: "cancelled" } });
+			return;
+		}
+		consecutiveApiFailures.set(job.batchId, 0);
 	}
 
 	await db.indexJob.update({
@@ -245,6 +265,8 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 			where: { id: job.batchId },
 			data: { completed: { increment: 1 } },
 		});
+		// Reset circuit breaker on success
+		consecutiveApiFailures.delete(job.batchId);
 	} catch (error) {
 		if (error instanceof CancellationError) {
 			await db.indexJob.update({
@@ -265,6 +287,13 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 			data: { failed: { increment: 1 } },
 		});
 		log.error(`runIndexJob — job ${jobId} failed: ${errorMessage}`);
+
+		// Track consecutive API failures for circuit breaker
+		if (isApiServerError(error)) {
+			consecutiveApiFailures.set(job.batchId, (consecutiveApiFailures.get(job.batchId) ?? 0) + 1);
+		} else {
+			consecutiveApiFailures.delete(job.batchId);
+		}
 	}
 }
 
@@ -690,6 +719,7 @@ async function runPhasedBatch(batchId: string): Promise<void> {
 		}
 	} finally {
 		batchAbortControllers.delete(batchId);
+		consecutiveApiFailures.delete(batchId);
 	}
 }
 

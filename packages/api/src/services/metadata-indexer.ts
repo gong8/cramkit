@@ -1,5 +1,5 @@
 import { createLogger, getDb } from "@cramkit/shared";
-import { CancellationError } from "./errors.js";
+import { CancellationError, isApiServerError, sleep } from "./errors.js";
 import { fuzzyMatchTitle, toTitleCase } from "./graph-indexer-utils.js";
 import type { MetadataAgentInput, MetadataExtractionResult } from "./metadata-agent.js";
 import { runMetadataAgent } from "./metadata-agent.js";
@@ -42,9 +42,13 @@ async function extractWithRetries(
 					resourceId,
 				);
 			}
+			// Exponential backoff: 10s, 30s for normal errors; 30s, 90s for API 500s
+			const baseDelay = isApiServerError(error) ? 30_000 : 10_000;
+			const delay = baseDelay * attempt;
 			log.info(
-				`indexResourceMetadata — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS})...`,
+				`indexResourceMetadata — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS}) after ${delay / 1000}s...`,
 			);
+			await sleep(delay, signal);
 		}
 	}
 	throw new MetadataIndexError("Unreachable", "unknown", resourceId);

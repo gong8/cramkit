@@ -1,6 +1,6 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
-import { CancellationError } from "./errors.js";
+import { CancellationError, isApiServerError, sleep } from "./errors.js";
 import type { ExtractionAgentInput, ExtractionResult } from "./extraction-agent.js";
 import { runExtractionAgent } from "./extraction-agent.js";
 import { findChunkByLabel, fuzzyMatchTitle, toTitleCase } from "./graph-indexer-utils.js";
@@ -54,9 +54,13 @@ async function extractWithRetries(
 					resourceId,
 				);
 			}
+			// Exponential backoff: 10s, 30s for normal errors; 30s, 90s for API 500s
+			const baseDelay = isApiServerError(error) ? 30_000 : 10_000;
+			const delay = baseDelay * attempt;
 			log.info(
-				`indexResourceGraph — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS})...`,
+				`indexResourceGraph — retrying "${input.resource.name}" (attempt ${attempt + 1}/${MAX_LLM_ATTEMPTS}) after ${delay / 1000}s...`,
 			);
+			await sleep(delay, signal);
 		}
 	}
 	throw new GraphIndexError("Unreachable", "unknown", resourceId);
