@@ -37,8 +37,7 @@ export function useIndexing(sessionId: string) {
 					? batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal
 					: true;
 				const phase3Done = batch?.phase
-					? batch.phase.phase3.status !== "pending" &&
-						batch.phase.phase3.status !== "running"
+					? batch.phase.phase3.status !== "pending" && batch.phase.phase3.status !== "running"
 					: true;
 				const isDone = batch
 					? (jobsDone && phase3Done) || batch.cancelled
@@ -64,16 +63,10 @@ export function useIndexing(sessionId: string) {
 				if (cancelled) return;
 				const batch = status.batch;
 				const allJobsDone =
-					batch &&
-					batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal;
+					batch && batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal;
 				const crossLinkActive =
-					batch?.phase?.phase3.status === "running" ||
-					batch?.phase?.phase3.status === "pending";
-				if (
-					batch &&
-					!batch.cancelled &&
-					(!allJobsDone || crossLinkActive)
-				) {
+					batch?.phase?.phase3.status === "running" || batch?.phase?.phase3.status === "pending";
+				if (batch && !batch.cancelled && (!allJobsDone || crossLinkActive)) {
 					setIndexStatus(status);
 					setIsIndexingAll(true);
 					startPolling();

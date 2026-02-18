@@ -85,9 +85,10 @@ function PhaseIndicator({ phase }: { phase: PhaseInfo }) {
 		{
 			num: 1,
 			label: "Foundation",
-			desc: phase.phase1.total > 0
-				? `${phase.phase1.total} lecture${phase.phase1.total !== 1 ? "s" : ""}/spec${phase.phase1.total !== 1 ? "s" : ""} (sequential)`
-				: "No lectures/specs",
+			desc:
+				phase.phase1.total > 0
+					? `${phase.phase1.total} lecture${phase.phase1.total !== 1 ? "s" : ""}/spec${phase.phase1.total !== 1 ? "s" : ""} (sequential)`
+					: "No lectures/specs",
 			icon: <Layers className="h-3.5 w-3.5" />,
 			done: phase.phase1.completed + phase.phase1.failed >= phase.phase1.total,
 			active: phase.current === 1,
@@ -96,11 +97,14 @@ function PhaseIndicator({ phase }: { phase: PhaseInfo }) {
 		{
 			num: 2,
 			label: "Linking",
-			desc: phase.phase2.total > 0
-				? `${phase.phase2.total} paper${phase.phase2.total !== 1 ? "s" : ""}/sheet${phase.phase2.total !== 1 ? "s" : ""} (${phase.phase2.concurrency}x parallel)`
-				: "No papers/sheets",
+			desc:
+				phase.phase2.total > 0
+					? `${phase.phase2.total} paper${phase.phase2.total !== 1 ? "s" : ""}/sheet${phase.phase2.total !== 1 ? "s" : ""} (${phase.phase2.concurrency}x parallel)`
+					: "No papers/sheets",
 			icon: <Zap className="h-3.5 w-3.5" />,
-			done: phase.phase2.total === 0 || phase.phase2.completed + phase.phase2.failed >= phase.phase2.total,
+			done:
+				phase.phase2.total === 0 ||
+				phase.phase2.completed + phase.phase2.failed >= phase.phase2.total,
 			active: phase.current === 2,
 			total: phase.phase2.total,
 		},
@@ -152,21 +156,17 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 		<div className="space-y-1.5 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
 			{phase.current === 1 && (
 				<>
-					<div className="font-medium text-primary">
-						Phase 1: Building concept foundation
-					</div>
+					<div className="font-medium text-primary">Phase 1: Building concept foundation</div>
 					<div className="text-muted-foreground">
-						Processing lectures and specifications sequentially to establish the concept
-						graph before linking other materials.
+						Processing lectures and specifications sequentially to establish the concept graph
+						before linking other materials.
 					</div>
 					<div className="flex items-center gap-3 text-muted-foreground">
 						<span>
 							{phase.phase1.completed}/{phase.phase1.total} complete
 						</span>
 						{phase.phase1.failed > 0 && (
-							<span className="text-destructive">
-								{phase.phase1.failed} failed
-							</span>
+							<span className="text-destructive">{phase.phase1.failed} failed</span>
 						)}
 						{(() => {
 							const eta = computePhaseEta(
@@ -183,27 +183,21 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 
 			{phase.current === 2 && (
 				<>
-					<div className="font-medium text-primary">
-						Phase 2: Linking papers and sheets
-					</div>
+					<div className="font-medium text-primary">Phase 2: Linking papers and sheets</div>
 					<div className="text-muted-foreground">
-						Processing {phase.phase2.total} resource{phase.phase2.total !== 1 ? "s" : ""}{" "}
-						in parallel ({phase.phase2.concurrency} concurrent) — linking to concepts
-						established in Phase 1.
+						Processing {phase.phase2.total} resource{phase.phase2.total !== 1 ? "s" : ""} in
+						parallel ({phase.phase2.concurrency} concurrent) — linking to concepts established in
+						Phase 1.
 					</div>
 					<div className="flex items-center gap-3 text-muted-foreground">
 						<span>
 							{phase.phase2.completed}/{phase.phase2.total} complete
 						</span>
 						{phase.phase2.running > 0 && (
-							<span className="text-primary">
-								{phase.phase2.running} running
-							</span>
+							<span className="text-primary">{phase.phase2.running} running</span>
 						)}
 						{phase.phase2.failed > 0 && (
-							<span className="text-destructive">
-								{phase.phase2.failed} failed
-							</span>
+							<span className="text-destructive">{phase.phase2.failed} failed</span>
 						)}
 						{(() => {
 							const eta = computePhaseEta(
@@ -220,12 +214,10 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 
 			{phase.current === 3 && (
 				<>
-					<div className="font-medium text-primary">
-						Phase 3: Cross-linking concepts
-					</div>
+					<div className="font-medium text-primary">Phase 3: Cross-linking concepts</div>
 					<div className="text-muted-foreground">
-						Analyzing the full knowledge graph to find missing connections between
-						concepts from different resources.
+						Analyzing the full knowledge graph to find missing connections between concepts from
+						different resources.
 					</div>
 				</>
 			)}
@@ -429,19 +421,13 @@ export function BatchFailuresSection({
 								</span>
 							)}
 							{r.attempts > 1 && (
-								<span className="text-muted-foreground">
-									{r.attempts} attempts
-								</span>
+								<span className="text-muted-foreground">{r.attempts} attempts</span>
 							)}
 							{r.durationMs != null && (
-								<span className="text-muted-foreground">
-									{formatDuration(r.durationMs)}
-								</span>
+								<span className="text-muted-foreground">{formatDuration(r.durationMs)}</span>
 							)}
 						</div>
-						{r.errorMessage && (
-							<p className="ml-6 text-xs text-destructive/80">{r.errorMessage}</p>
-						)}
+						{r.errorMessage && <p className="ml-6 text-xs text-destructive/80">{r.errorMessage}</p>}
 					</div>
 				))}
 			</div>
