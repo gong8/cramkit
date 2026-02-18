@@ -572,6 +572,7 @@ export async function runMetadataAgent(
 
 			proc.stdin?.end();
 
+			let stdout = "";
 			let stderr = "";
 			let aborted = false;
 
@@ -582,6 +583,9 @@ export async function runMetadataAgent(
 			};
 			signal?.addEventListener("abort", onAbort, { once: true });
 
+			proc.stdout?.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
 			});
@@ -595,8 +599,9 @@ export async function runMetadataAgent(
 				}
 
 				if (code !== 0) {
-					log.error(`runMetadataAgent — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
-					reject(new Error(`Metadata agent error (exit code ${code}): ${stderr.slice(0, 500)}`));
+					const output = (stderr || stdout).slice(0, 500);
+					log.error(`runMetadataAgent — CLI exited with code ${code}: ${output}`);
+					reject(new Error(`Metadata agent error (exit code ${code}): ${output}`));
 					return;
 				}
 

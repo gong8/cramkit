@@ -332,18 +332,21 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 
 			proc.stdin?.end();
 
+			let stdout = "";
 			let stderr = "";
 
+			proc.stdout?.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
 			});
 
 			proc.on("close", (code) => {
 				if (code !== 0) {
-					log.error(`runChatEnrichment — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
-					reject(
-						new Error(`Chat enrichment agent error (exit code ${code}): ${stderr.slice(0, 500)}`),
-					);
+					const output = (stderr || stdout).slice(0, 500);
+					log.error(`runChatEnrichment — CLI exited with code ${code}: ${output}`);
+					reject(new Error(`Chat enrichment agent error (exit code ${code}): ${output}`));
 					return;
 				}
 

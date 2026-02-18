@@ -88,8 +88,9 @@ export async function chatCompletion(
 
 		proc.on("close", (code) => {
 			if (code !== 0) {
-				log.error(`chatCompletion — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
-				reject(new Error(`Claude CLI error (exit code ${code}): ${stderr.slice(0, 500)}`));
+				const output = (stderr || stdout).slice(0, 500);
+				log.error(`chatCompletion — CLI exited with code ${code}: ${output}`);
+				reject(new Error(`Claude CLI error (exit code ${code}): ${output}`));
 				return;
 			}
 
@@ -275,8 +276,12 @@ rl.on("line", (line) => {
 
 		proc.stdin?.end();
 
+		let stdout = "";
 		let stderr = "";
 
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+		});
 		proc.stderr?.on("data", (chunk: Buffer) => {
 			stderr += chunk.toString();
 		});
@@ -284,10 +289,9 @@ rl.on("line", (line) => {
 		proc.on("close", (code) => {
 			try {
 				if (code !== 0) {
-					log.error(
-						`chatCompletionWithTool — CLI exited with code ${code}: ${stderr.slice(0, 500)}`,
-					);
-					reject(new Error(`Claude CLI error (exit code ${code}): ${stderr.slice(0, 500)}`));
+					const output = (stderr || stdout).slice(0, 500);
+					log.error(`chatCompletionWithTool — CLI exited with code ${code}: ${output}`);
+					reject(new Error(`Claude CLI error (exit code ${code}): ${output}`));
 					return;
 				}
 

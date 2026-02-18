@@ -515,6 +515,7 @@ export async function runExtractionAgent(
 
 			proc.stdin?.end();
 
+			let stdout = "";
 			let stderr = "";
 			let aborted = false;
 
@@ -525,6 +526,9 @@ export async function runExtractionAgent(
 			};
 			signal?.addEventListener("abort", onAbort, { once: true });
 
+			proc.stdout?.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
 			});
@@ -538,8 +542,9 @@ export async function runExtractionAgent(
 				}
 
 				if (code !== 0) {
-					log.error(`runExtractionAgent — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
-					reject(new Error(`Extraction agent error (exit code ${code}): ${stderr.slice(0, 500)}`));
+					const output = (stderr || stdout).slice(0, 500);
+					log.error(`runExtractionAgent — CLI exited with code ${code}: ${output}`);
+					reject(new Error(`Extraction agent error (exit code ${code}): ${output}`));
 					return;
 				}
 

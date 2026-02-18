@@ -387,6 +387,7 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 
 			proc.stdin?.end();
 
+			let stdout = "";
 			let stderr = "";
 			let aborted = false;
 
@@ -397,6 +398,9 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 			};
 			signal?.addEventListener("abort", onAbort, { once: true });
 
+			proc.stdout?.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+			});
 			proc.stderr?.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
 			});
@@ -410,8 +414,9 @@ If the graph looks clean with no obvious duplicates, submit an empty cleanup wit
 				}
 
 				if (code !== 0) {
-					log.error(`runCleanupAgent — CLI exited with code ${code}: ${stderr.slice(0, 500)}`);
-					reject(new Error(`Cleanup agent error (exit code ${code}): ${stderr.slice(0, 500)}`));
+					const output = (stderr || stdout).slice(0, 500);
+					log.error(`runCleanupAgent — CLI exited with code ${code}: ${output}`);
+					reject(new Error(`Cleanup agent error (exit code ${code}): ${output}`));
 					return;
 				}
 
