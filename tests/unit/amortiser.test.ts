@@ -1,4 +1,4 @@
-import { amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
+import { amortiseRead, amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
 import { seedSessionWithChunks, seedSessionWithConcept, useTestDb } from "../fixtures/helpers.js";
 
 const db = useTestDb();
@@ -118,6 +118,179 @@ describe("amortiseSearchResults", () => {
 			amortiseSearchResults("nonexistent-session", "test", [
 				{ chunkId: "bad-id", resourceId: "bad-id" },
 			]),
+		).resolves.toBeUndefined();
+	});
+});
+
+describe("amortiseRead", () => {
+	it("creates relationships when concept name appears in matchText", async () => {
+		const { session, chunks, concept } = await seedSessionWithConcept(db);
+
+		const entities = chunks.slice(0, 2).map((c) => ({
+			type: "chunk" as const,
+			id: c.id,
+			label: c.title,
+		}));
+
+		await amortiseRead(session.id, entities, "The Heat Equation is fundamental");
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBe(2);
+		for (const rel of rels) {
+			expect(rel.sourceType).toBe("chunk");
+			expect(rel.targetType).toBe("concept");
+			expect(rel.targetId).toBe(concept.id);
+		}
+	});
+
+	it("confidence is 0.5, createdBy is 'amortised'", async () => {
+		const { session, chunks } = await seedSessionWithConcept(db);
+
+		await amortiseRead(
+			session.id,
+			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
+			"Heat Equation overview",
+		);
+
+		const rel = await db.relationship.findFirst({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rel).not.toBeNull();
+		expect(rel?.createdBy).toBe("amortised");
+		expect(rel?.confidence).toBe(0.5);
+	});
+
+	it("matches concept aliases", async () => {
+		const { session, chunks, concept } = await seedSessionWithConcept(db);
+
+		await amortiseRead(
+			session.id,
+			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
+			"The diffusion equation describes heat flow",
+		);
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBe(1);
+		expect(rels[0].targetId).toBe(concept.id);
+	});
+
+	it("skips concepts with names shorter than 3 chars", async () => {
+		const { session, chunks } = await seedSessionWithChunks(db);
+
+		await db.concept.create({
+			data: { sessionId: session.id, name: "PD", description: "Too short" },
+		});
+
+		await amortiseRead(
+			session.id,
+			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
+			"PD is mentioned here",
+		);
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBe(0);
+	});
+
+	it("deduplicates — second call creates no new rels", async () => {
+		const { session, chunks } = await seedSessionWithConcept(db);
+
+		const entities = [{ type: "chunk" as const, id: chunks[0].id, label: chunks[0].title }];
+		const text = "Heat Equation stuff";
+
+		await amortiseRead(session.id, entities, text);
+		const countFirst = await db.relationship.count({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		await amortiseRead(session.id, entities, text);
+		const countSecond = await db.relationship.count({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(countSecond).toBe(countFirst);
+	});
+
+	it("caps at 10 relationships", async () => {
+		const { session, chunks } = await seedSessionWithChunks(db, { chunkCount: 20 });
+
+		for (const name of ["Heat Equation", "Heat Transfer", "Heat Diffusion"]) {
+			await db.concept.create({
+				data: { sessionId: session.id, name, description: "Heat related" },
+			});
+		}
+
+		const entities = chunks.map((c) => ({
+			type: "chunk" as const,
+			id: c.id,
+			label: c.title,
+		}));
+
+		await amortiseRead(session.id, entities, "Heat Equation Heat Transfer Heat Diffusion");
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBeLessThanOrEqual(10);
+	});
+
+	it("does nothing when no concepts match", async () => {
+		const { session, chunks } = await seedSessionWithConcept(db);
+
+		await amortiseRead(
+			session.id,
+			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
+			"quantum mechanics is unrelated",
+		);
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBe(0);
+	});
+
+	it("does nothing on empty entities", async () => {
+		const { session } = await seedSessionWithConcept(db);
+
+		await amortiseRead(session.id, [], "Heat Equation");
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBe(0);
+	});
+
+	it("does nothing on empty matchText", async () => {
+		const { session, chunks } = await seedSessionWithConcept(db);
+
+		await amortiseRead(
+			session.id,
+			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
+			"",
+		);
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBe(0);
+	});
+
+	it("never throws", async () => {
+		await expect(
+			amortiseRead("nonexistent-session", [{ type: "chunk", id: "bad", label: null }], "test"),
 		).resolves.toBeUndefined();
 	});
 });

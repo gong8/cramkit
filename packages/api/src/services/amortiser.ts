@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 const log = createLogger("api");
 
 const MAX_NEW_RELATIONSHIPS = 10;
+const MIN_CONCEPT_NAME_LENGTH = 3;
 
 interface SearchResult {
 	chunkId: string;
@@ -90,5 +91,89 @@ export async function amortiseSearchResults(
 		}
 	} catch (error) {
 		log.error("amortiseSearchResults — failed", error);
+	}
+}
+
+export async function amortiseRead(
+	sessionId: string,
+	entities: Array<{ type: "chunk" | "resource"; id: string; label: string | null }>,
+	matchText: string,
+): Promise<void> {
+	try {
+		if (entities.length === 0 || matchText.length === 0) return;
+
+		const db = getDb();
+		const text = matchText.toLowerCase();
+
+		const allConcepts = await db.concept.findMany({
+			where: { sessionId },
+			select: { id: true, name: true, aliases: true },
+		});
+
+		const matchingConcepts = allConcepts.filter((c) => {
+			if (c.name.length < MIN_CONCEPT_NAME_LENGTH) return false;
+			if (text.includes(c.name.toLowerCase())) return true;
+			if (c.aliases) {
+				return c.aliases
+					.split(",")
+					.some(
+						(a) =>
+							a.trim().length >= MIN_CONCEPT_NAME_LENGTH && text.includes(a.trim().toLowerCase()),
+					);
+			}
+			return false;
+		});
+
+		if (matchingConcepts.length === 0) return;
+
+		const chunkEntities = entities.filter((e) => e.type === "chunk");
+		if (chunkEntities.length === 0) return;
+
+		const chunkIds = chunkEntities.map((e) => e.id);
+		const conceptIds = matchingConcepts.map((c) => c.id);
+
+		const existing = await db.relationship.findMany({
+			where: {
+				sessionId,
+				sourceType: "chunk",
+				sourceId: { in: chunkIds },
+				targetType: "concept",
+				targetId: { in: conceptIds },
+			},
+			select: { sourceId: true, targetId: true },
+		});
+
+		const existingSet = new Set(existing.map((r) => `${r.sourceId}:${r.targetId}`));
+		const labelMap = new Map(chunkEntities.map((e) => [e.id, e.label]));
+
+		const toCreate: Prisma.RelationshipCreateManyInput[] = [];
+
+		for (const entity of chunkEntities) {
+			if (toCreate.length >= MAX_NEW_RELATIONSHIPS) break;
+			for (const concept of matchingConcepts) {
+				if (toCreate.length >= MAX_NEW_RELATIONSHIPS) break;
+				if (existingSet.has(`${entity.id}:${concept.id}`)) continue;
+
+				toCreate.push({
+					sessionId,
+					sourceType: "chunk",
+					sourceId: entity.id,
+					sourceLabel: labelMap.get(entity.id) ?? null,
+					targetType: "concept",
+					targetId: concept.id,
+					targetLabel: concept.name,
+					relationship: "related_to",
+					confidence: 0.5,
+					createdBy: "amortised",
+				});
+			}
+		}
+
+		if (toCreate.length > 0) {
+			await db.relationship.createMany({ data: toCreate });
+			log.info(`amortiseRead — created ${toCreate.length} new relationships`);
+		}
+	} catch (error) {
+		log.error("amortiseRead — failed", error);
 	}
 }

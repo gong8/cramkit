@@ -297,9 +297,7 @@ export function createCramKitChatAdapter(
 			// before this new one. The backend uses this to trim orphaned messages when
 			// the user edits a message mid-conversation (assistant-ui generates nanoid
 			// IDs for edited messages, so rewindToMessageId won't be set).
-			const expectedPriorCount = rewindToMessageId
-				? undefined
-				: messages.length - 1;
+			const expectedPriorCount = rewindToMessageId ? undefined : messages.length - 1;
 
 			const response = await fetch(`${BASE_URL}/chat/stream`, {
 				method: "POST",

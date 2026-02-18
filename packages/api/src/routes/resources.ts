@@ -4,6 +4,7 @@ import { createLogger, createResourceSchema, getDb, updateResourceSchema } from 
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { enqueueProcessing } from "../lib/queue.js";
+import { amortiseRead } from "../services/amortiser.js";
 import {
 	deleteResourceDir,
 	readResourceContent,
@@ -243,15 +244,50 @@ resourcesRoutes.get("/:id", async (c) => {
 	const result = await findResourceOr404(c, c.req.param("id"), { files: true, chunks: true });
 	if (result instanceof Response) return result;
 	log.info(`GET /resources/${result.id} — found "${result.name}"`);
+
+	if (result.chunks && result.chunks.length > 0) {
+		const matchText = [
+			result.name,
+			...result.chunks.map((ch) => [ch.title, ch.keywords].filter(Boolean).join(" ")),
+		].join(" ");
+		const entities = result.chunks.map((ch) => ({
+			type: "chunk" as const,
+			id: ch.id,
+			label: ch.title,
+		}));
+		amortiseRead(result.sessionId, entities, matchText);
+	}
+
 	return c.json(result);
 });
 
 resourcesRoutes.get("/:id/content", async (c) => {
+	const db = getDb();
 	const result = await findResourceOr404(c, c.req.param("id"));
 	if (result instanceof Response) return result;
 	if (!result.isIndexed) return c.json({ error: "Resource not yet processed" }, 404);
 
-	const content = await readResourceContent(result.sessionId, result.id);
+	const [content, chunks] = await Promise.all([
+		readResourceContent(result.sessionId, result.id),
+		db.chunk.findMany({
+			where: { resourceId: result.id },
+			select: { id: true, title: true, keywords: true },
+		}),
+	]);
+
+	if (chunks.length > 0) {
+		const matchText = [
+			result.name,
+			...chunks.map((ch) => [ch.title, ch.keywords].filter(Boolean).join(" ")),
+		].join(" ");
+		const entities = chunks.map((ch) => ({
+			type: "chunk" as const,
+			id: ch.id,
+			label: ch.title,
+		}));
+		amortiseRead(result.sessionId, entities, matchText);
+	}
+
 	log.info(`GET /resources/${result.id}/content — ${content.length} chars`);
 	return c.json({ id: result.id, name: result.name, type: result.type, content });
 });

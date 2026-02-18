@@ -303,8 +303,14 @@ export async function launchChatStream(
 		expectedPriorCount?: number;
 	},
 ) {
-	const { sessionId, conversationId, message, attachmentIds, rewindToMessageId, expectedPriorCount } =
-		opts;
+	const {
+		sessionId,
+		conversationId,
+		message,
+		attachmentIds,
+		rewindToMessageId,
+		expectedPriorCount,
+	} = opts;
 
 	const persistResult = await persistUserMessage(db, {
 		conversationId,
