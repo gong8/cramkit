@@ -46,21 +46,17 @@ async function listResourcesByTypeWithGraph(
 				try {
 					const questions = (await apiClient.listPaperQuestions(r.id)) as QuestionSummary[];
 					const metadata = r.metadata ? JSON.parse(r.metadata) : null;
+					const summarize = (q: QuestionSummary): Record<string, unknown> => ({
+						questionNumber: q.questionNumber,
+						marks: q.marks,
+						questionType: q.questionType,
+						relatedConcepts: q.relatedConcepts.map((c) => c.name),
+						parts: q.parts?.map(summarize),
+					});
 					return {
 						...base,
 						metadata,
-						questions: questions.map((q) => ({
-							questionNumber: q.questionNumber,
-							marks: q.marks,
-							questionType: q.questionType,
-							relatedConcepts: q.relatedConcepts.map((c) => c.name),
-							parts: q.parts?.map((p) => ({
-								questionNumber: p.questionNumber,
-								marks: p.marks,
-								questionType: p.questionType,
-								relatedConcepts: p.relatedConcepts.map((c) => c.name),
-							})),
-						})),
+						questions: questions.map(summarize),
 					};
 				} catch {
 					return base;

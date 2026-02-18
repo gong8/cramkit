@@ -63,8 +63,7 @@ questionsRoutes.get("/resources/:resourceId/questions", async (c) => {
 		relatedConcepts: relsByQuestion.get(q.id) ?? [],
 	}));
 
-	// Group into parent/child tree
-	const topLevel = enriched.filter((q) => !q.parentNumber);
+	// Group into parent/child tree (recursive for arbitrary nesting depth)
 	const byParent = new Map<string, typeof enriched>();
 	for (const q of enriched) {
 		if (q.parentNumber) {
@@ -73,10 +72,14 @@ questionsRoutes.get("/resources/:resourceId/questions", async (c) => {
 		}
 	}
 
-	const tree = topLevel.map((q) => ({
+	type QuestionNode = (typeof enriched)[number] & { parts: QuestionNode[] };
+	const buildSubtree = (q: (typeof enriched)[number]): QuestionNode => ({
 		...q,
-		parts: byParent.get(q.questionNumber) ?? [],
-	}));
+		parts: (byParent.get(q.questionNumber) ?? []).map(buildSubtree),
+	});
+
+	const topLevel = enriched.filter((q) => !q.parentNumber);
+	const tree = topLevel.map(buildSubtree);
 
 	log.info(`GET /questions/resources/${resourceId}/questions — ${questions.length} questions`);
 	return c.json(tree);

@@ -375,14 +375,21 @@ rl.on("line", (line) => {
 const RESOURCE_TYPE_PROMPTS: Record<string, string> = {
 	PAST_PAPER: `You are extracting structured metadata from a past exam paper.
 
-## Primary Task: Extract Every Question
-For EACH question in the paper:
+## Primary Task: Extract Every Question (Including All Sub-Parts)
+For EACH question in the paper, extract it at EVERY level of the hierarchy:
 1. Extract the question number exactly as it appears (e.g. "1", "2a", "3(b)(ii)")
-2. Set parentNumber for sub-questions (e.g. parentNumber="2" for "2a")
+2. Set parentNumber for sub-questions at EVERY nesting level:
+   - parentNumber="1" for "1a" or "1(a)"
+   - parentNumber="1a" for "1a(i)" or "1(a)(i)"
+   - parentNumber="1a(i)" for "1a(i)(α)" if deeper nesting exists
 3. Extract the mark allocation if shown
 4. Identify the question type: calculation, proof, essay, short_answer, define_and_explain, multiple_choice, etc.
 5. Extract command words: state, prove, calculate, show, explain, derive, sketch, etc.
 6. Copy the VERBATIM question text into content
+
+CRITICAL: You MUST extract sub-parts (i), (ii), (iii), (iv) etc. as SEPARATE question entries with their own content.
+Do NOT merge Roman numeral sub-parts into their parent. Each sub-part is a distinct question that gets its own record.
+For example, if Q1a has parts (i) through (iv), you must create entries for "1a", "1a(i)", "1a(ii)", "1a(iii)", "1a(iv)".
 
 ## Cross-Reference with Mark Scheme
 If a MARK_SCHEME file exists:
