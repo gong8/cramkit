@@ -4,6 +4,7 @@ import {
 	ArrowRight,
 	Check,
 	Circle,
+	FileSearch,
 	Layers,
 	Link2,
 	Loader2,
@@ -127,6 +128,15 @@ function PhaseIndicator({ phase }: { phase: PhaseInfo }) {
 			active: phase.current === 4,
 			total: 1,
 		},
+		{
+			num: 5,
+			label: "Enrich",
+			desc: "Extract questions, marks, and definitions",
+			icon: <FileSearch className="h-3.5 w-3.5" />,
+			done: phase.phase5?.status === "completed" || phase.phase5?.status === "skipped",
+			active: phase.current === 5,
+			total: phase.phase5?.total ?? 1,
+		},
 	];
 
 	return (
@@ -241,6 +251,28 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 				</>
 			)}
 
+			{phase.current === 5 && (
+				<>
+					<div className="font-medium text-primary">Phase 5: Enriching knowledge graph</div>
+					<div className="text-muted-foreground">
+						Extracting questions, marks, mark schemes, definitions, and theorems into the
+						graph.
+					</div>
+					{phase.phase5?.total != null && (
+						<div className="flex items-center gap-3 text-muted-foreground">
+							<span>
+								{phase.phase5.completed ?? 0}/{phase.phase5.total} complete
+							</span>
+							{(phase.phase5.failed ?? 0) > 0 && (
+								<span className="text-destructive">
+									{phase.phase5.failed} failed
+								</span>
+							)}
+						</div>
+					)}
+				</>
+			)}
+
 			{phase.current === null && status.batch?.cancelled && (
 				<div className="font-medium text-muted-foreground">Indexing cancelled</div>
 			)}
@@ -253,6 +285,9 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 				{phase.phase4.status === "completed" &&
 					phase.phase4.stats &&
 					` | Cleanup: ${phase.phase4.stats.duplicatesRemoved} dupes, ${phase.phase4.stats.conceptsMerged} merged`}
+				{phase.phase5?.status === "completed" &&
+					phase.phase5.completed != null &&
+					` | Enriched: ${phase.phase5.completed} resource${phase.phase5.completed !== 1 ? "s" : ""}`}
 			</div>
 		</div>
 	);
@@ -423,6 +458,26 @@ export function IndexProgressSection({ indexStatus, batchFailed }: IndexProgress
 						Cleanup failed (non-fatal)
 						{phase.phase4.error && `: ${phase.phase4.error}`}
 					</span>
+				</div>
+			)}
+
+			{/* Phase 5 status */}
+			{phase?.phase5?.status === "completed" && (
+				<div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+					<FileSearch className="h-3.5 w-3.5" />
+					<span>
+						Enrichment complete
+						{phase.phase5.completed != null &&
+							` — ${phase.phase5.completed} resource${phase.phase5.completed !== 1 ? "s" : ""} enriched`}
+						{(phase.phase5.failed ?? 0) > 0 &&
+							`, ${phase.phase5.failed} failed`}
+					</span>
+				</div>
+			)}
+			{phase?.phase5?.status === "failed" && (
+				<div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+					<AlertTriangle className="h-3.5 w-3.5" />
+					<span>Enrichment failed (non-fatal)</span>
 				</div>
 			)}
 		</div>
