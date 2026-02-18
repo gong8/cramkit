@@ -38,7 +38,7 @@ export const forceGraphReads =
 	existsSync(FLAG_FILE);
 
 log.info(
-	`force-graph-reads: ${forceGraphReads ? `ACTIVE — graph-only mode, blocking: ${[...BLOCKED_TOOLS].join(", ")}` : "inactive"}` +
+	`force-graph-reads: ${forceGraphReads ? `ACTIVE — graph-only mode, hiding tools: ${[...BLOCKED_TOOLS].join(", ")}` : "inactive"}` +
 		` (argv=${process.argv.includes("--force-graph-reads")},` +
 		` env=${process.env.FORCE_GRAPH_READS === "1"},` +
 		` file=${existsSync(FLAG_FILE)})`,
@@ -55,31 +55,16 @@ function registerTools(
 	>,
 ) {
 	for (const [name, tool] of Object.entries(tools)) {
-		const isBlocked = BLOCKED_TOOLS.has(name);
-
-		const description =
-			forceGraphReads && isBlocked
-				? `[DISABLED — --force-graph-reads is active] ${tool.description}. Navigate the knowledge graph instead: list_concepts → get_concept → get_related. Use get_resource_info for metadata.`
-				: tool.description;
+		if (forceGraphReads && BLOCKED_TOOLS.has(name)) {
+			log.info(`--force-graph-reads: skipping registration of "${name}"`);
+			continue;
+		}
 
 		server.tool(
 			name,
-			description,
+			tool.description,
 			tool.parameters.shape,
 			async (params: Record<string, unknown>) => {
-				if (forceGraphReads && isBlocked) {
-					log.warn(`--force-graph-reads: blocked call to "${name}"`);
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `BLOCKED: "${name}" is disabled (--force-graph-reads). You MUST navigate via the knowledge graph:\n- list_concepts to see all concepts in a session\n- get_concept to see a concept's relationships (which chunks cover it, prerequisites, which papers test it)\n- get_related to traverse connections from any entity\n- get_resource_info for resource metadata and chunk lists\n- create_link to enrich the graph\n\nDo not call ${name} again.`,
-							},
-						],
-						isError: true,
-					};
-				}
-
 				log.info(`tool called: ${name}`, params);
 				try {
 					const result = await tool.execute(params as never);

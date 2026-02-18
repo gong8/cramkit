@@ -3,21 +3,29 @@ import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2 } from "lucide
 import { useState } from "react";
 
 const TOOL_LABELS: Record<string, (args: Record<string, unknown>) => string> = {
+	// Content tools
 	mcp__cramkit__search_notes: (a) => `Searched notes for "${a.query ?? ""}"`,
 	mcp__cramkit__get_resource_content: () => "Read resource content",
 	mcp__cramkit__get_resource_info: () => "Read resource info",
 	mcp__cramkit__get_resource_index: () => "Read resource index",
 	mcp__cramkit__get_chunk: () => "Read content chunk",
+	// Graph tools
 	mcp__cramkit__list_concepts: () => "Listed concepts",
 	mcp__cramkit__get_concept: () => "Read concept details",
 	mcp__cramkit__get_related: () => "Found related items",
 	mcp__cramkit__create_link: () => "Created knowledge link",
+	mcp__cramkit__get_graph_log: () => "Read graph log",
+	// Session tools
 	mcp__cramkit__list_sessions: () => "Listed sessions",
 	mcp__cramkit__get_session: () => "Read session details",
 	mcp__cramkit__get_exam_scope: () => "Read exam scope",
+	// Paper tools
 	mcp__cramkit__list_past_papers: () => "Listed past papers",
 	mcp__cramkit__list_problem_sheets: () => "Listed problem sheets",
 	mcp__cramkit__get_past_paper: () => "Read past paper",
+	mcp__cramkit__list_paper_questions: () => "Listed paper questions",
+	mcp__cramkit__get_paper_question: () => "Read paper question",
+	// External tools
 	Read: (a) => {
 		const path = typeof a.file_path === "string" ? a.file_path : "";
 		const name = path.split("/").pop() || path;
@@ -33,8 +41,10 @@ const TOOL_LABELS: Record<string, (args: Record<string, unknown>) => string> = {
 export function getToolLabel(toolName: string, args: Record<string, unknown>): string {
 	const fn = TOOL_LABELS[toolName];
 	if (fn) return fn(args);
-	const short = toolName.replace(/^mcp__cramkit__/, "");
-	return short.replace(/_/g, " ");
+	const short = toolName.replace(/^mcp__\w+__/, "");
+	return short
+		.replace(/_/g, " ")
+		.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function ToolCallDisplay(props: ToolCallMessagePartProps) {
