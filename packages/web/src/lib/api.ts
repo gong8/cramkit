@@ -11,6 +11,7 @@ export type {
 	GraphThoroughness,
 	ImportResult,
 	IndexStatus,
+	PhaseInfo,
 	Relationship,
 	Resource,
 	ResourceContent,

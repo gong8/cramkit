@@ -76,11 +76,30 @@ export interface BatchResource {
 	id: string;
 	name: string;
 	type: string;
+	phase: 1 | 2;
 	status: "pending" | "indexing" | "completed" | "cancelled" | "failed";
 	durationMs: number | null;
 	errorMessage: string | null;
 	errorType: string | null;
 	attempts: number;
+}
+
+export interface PhaseInfo {
+	current: 1 | 2 | 3 | null;
+	phase1: { total: number; completed: number; failed: number; mode: "sequential" };
+	phase2: {
+		total: number;
+		completed: number;
+		failed: number;
+		running: number;
+		mode: "parallel";
+		concurrency: number;
+	};
+	phase3: {
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		error?: string;
+		linksAdded?: number;
+	};
 }
 
 export interface BatchStatus {
@@ -90,6 +109,7 @@ export interface BatchStatus {
 	currentResourceId: string | null;
 	startedAt: number;
 	cancelled: boolean;
+	phase: PhaseInfo;
 	resources: BatchResource[];
 }
 

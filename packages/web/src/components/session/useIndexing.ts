@@ -33,8 +33,15 @@ export function useIndexing(sessionId: string) {
 				setIndexStatus(status);
 
 				const batch = status.batch;
+				const jobsDone = batch
+					? batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal
+					: true;
+				const phase3Done = batch?.phase
+					? batch.phase.phase3.status !== "pending" &&
+						batch.phase.phase3.status !== "running"
+					: true;
 				const isDone = batch
-					? batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal || batch.cancelled
+					? (jobsDone && phase3Done) || batch.cancelled
 					: status.inProgress === 0 && status.indexed === status.total;
 
 				if (isDone) {
@@ -56,10 +63,16 @@ export function useIndexing(sessionId: string) {
 			.then((status) => {
 				if (cancelled) return;
 				const batch = status.batch;
+				const allJobsDone =
+					batch &&
+					batch.batchCompleted + (batch.batchFailed ?? 0) >= batch.batchTotal;
+				const crossLinkActive =
+					batch?.phase?.phase3.status === "running" ||
+					batch?.phase?.phase3.status === "pending";
 				if (
 					batch &&
 					!batch.cancelled &&
-					batch.batchCompleted + (batch.batchFailed ?? 0) < batch.batchTotal
+					(!allJobsDone || crossLinkActive)
 				) {
 					setIndexStatus(status);
 					setIsIndexingAll(true);

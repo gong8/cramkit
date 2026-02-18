@@ -13,6 +13,12 @@ const log = createLogger("api");
 const queue = new PQueue({ concurrency: 1 });
 const indexingQueue = new PQueue({ concurrency: 1 });
 
+// In-memory cross-linking status tracking (not persisted — only relevant during active batches)
+const crossLinkStatus = new Map<
+	string,
+	{ status: "pending" | "running" | "completed" | "failed"; error?: string; linksAdded?: number }
+>();
+
 export function enqueueProcessing(resourceId: string): void {
 	queue.add(() => processResource(resourceId));
 	log.info(`enqueueProcessing — resource ${resourceId}, queue size: ${queue.size + queue.pending}`);
@@ -85,12 +91,14 @@ async function runCrossLinking(sessionId: string, batchId: string): Promise<void
 
 	if (await isBatchCancelled(batchId)) return;
 
+	crossLinkStatus.set(batchId, { status: "running" });
+
 	try {
 		log.info(`runCrossLinking — session ${sessionId}, starting cross-linking pass`);
 		const result = await runCrossLinkingAgent(sessionId);
 
+		let linksAdded = 0;
 		if (result.links.length > 0) {
-			// Write cross-links to DB
 			const concepts = await db.concept.findMany({
 				where: { sessionId },
 				select: { id: true, name: true },
@@ -132,7 +140,6 @@ async function runCrossLinking(sessionId: string, batchId: string): Promise<void
 			}
 
 			if (relationships.length > 0) {
-				// Deduplicate against existing relationships
 				const existing = await db.relationship.findMany({
 					where: {
 						sessionId,
@@ -152,16 +159,19 @@ async function runCrossLinking(sessionId: string, batchId: string): Promise<void
 
 				if (newRels.length > 0) {
 					await db.relationship.createMany({ data: newRels });
+					linksAdded = newRels.length;
 					log.info(
 						`runCrossLinking — session ${sessionId}: added ${newRels.length} new cross-links`,
 					);
 				}
 			}
 		}
+
+		crossLinkStatus.set(batchId, { status: "completed", linksAdded });
 	} catch (error) {
-		log.error(
-			`runCrossLinking — session ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`,
-		);
+		const msg = error instanceof Error ? error.message : String(error);
+		log.error(`runCrossLinking — session ${sessionId} failed: ${msg}`);
+		crossLinkStatus.set(batchId, { status: "failed", error: msg });
 		// Cross-linking failure is non-fatal — don't fail the batch
 	}
 }
@@ -264,11 +274,15 @@ export async function enqueueSessionGraphIndexing(
 		include: { jobs: true },
 	});
 
+	// Initialize cross-link status
+	crossLinkStatus.set(batch.id, { status: "pending" });
+
 	// Enqueue a single phased batch run (keeps concurrency=1 at batch level)
 	indexingQueue.add(() => runPhasedBatch(batch.id));
 
+	const p1Count = sorted.filter((id) => PHASE_1_TYPES.has(typeMap.get(id) ?? "")).length;
 	log.info(
-		`enqueueSessionGraphIndexing — session ${sessionId}, batch ${batch.id}, ${resourceIds.length} resources queued (phase1=${sorted.filter((id) => PHASE_1_TYPES.has(typeMap.get(id) ?? "")).length}, phase2=${sorted.filter((id) => !PHASE_1_TYPES.has(typeMap.get(id) ?? "")).length})`,
+		`enqueueSessionGraphIndexing — session ${sessionId}, batch ${batch.id}, ${resourceIds.length} resources (phase1=${p1Count}, phase2=${sorted.length - p1Count})`,
 	);
 	return batch.id;
 }
@@ -291,8 +305,27 @@ export async function cancelSessionIndexing(sessionId: string): Promise<boolean>
 		data: { status: "cancelled" },
 	});
 
+	crossLinkStatus.delete(batch.id);
 	log.info(`cancelSessionIndexing — session ${sessionId}, batch ${batch.id} cancelled`);
 	return true;
+}
+
+export interface PhaseInfo {
+	current: 1 | 2 | 3 | null;
+	phase1: { total: number; completed: number; failed: number; mode: "sequential" };
+	phase2: {
+		total: number;
+		completed: number;
+		failed: number;
+		running: number;
+		mode: "parallel";
+		concurrency: number;
+	};
+	phase3: {
+		status: "pending" | "running" | "completed" | "failed" | "skipped";
+		error?: string;
+		linksAdded?: number;
+	};
 }
 
 export interface BatchStatusResult {
@@ -303,10 +336,12 @@ export interface BatchStatusResult {
 	currentResourceId: string | null;
 	startedAt: number;
 	cancelled: boolean;
+	phase: PhaseInfo;
 	resources: Array<{
 		id: string;
 		name: string;
 		type: string;
+		phase: 1 | 2;
 		status: "pending" | "indexing" | "completed" | "cancelled" | "failed";
 		durationMs: number | null;
 		errorMessage: string | null;
@@ -339,10 +374,12 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 
 	const resources = batch.jobs.map((j) => {
 		const r = resourceMap.get(j.resourceId);
+		const type = r?.type ?? "OTHER";
 		return {
 			id: j.resourceId,
 			name: r?.name ?? "Unknown",
-			type: r?.type ?? "OTHER",
+			type,
+			phase: (PHASE_1_TYPES.has(type) ? 1 : 2) as 1 | 2,
 			status: (j.status === "running"
 				? "indexing"
 				: j.status) as BatchStatusResult["resources"][0]["status"],
@@ -353,6 +390,45 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 		};
 	});
 
+	// Compute phase stats
+	const p1Resources = resources.filter((r) => r.phase === 1);
+	const p2Resources = resources.filter((r) => r.phase === 2);
+
+	const p1Completed = p1Resources.filter((r) => r.status === "completed").length;
+	const p1Failed = p1Resources.filter((r) => r.status === "failed").length;
+	const p1Done = p1Completed + p1Failed >= p1Resources.length;
+
+	const p2Completed = p2Resources.filter((r) => r.status === "completed").length;
+	const p2Failed = p2Resources.filter((r) => r.status === "failed").length;
+	const p2Running = p2Resources.filter((r) => r.status === "indexing").length;
+	const p2Done = p2Resources.length === 0 || p2Completed + p2Failed >= p2Resources.length;
+
+	// Determine cross-linking status
+	const clStatus = crossLinkStatus.get(batch.id);
+	let phase3Status: PhaseInfo["phase3"];
+	if (batch.status === "cancelled") {
+		phase3Status = { status: "skipped" };
+	} else if (clStatus) {
+		phase3Status = { ...clStatus };
+	} else if (batch.status === "completed") {
+		// Batch completed but no tracked cross-link status — already done
+		phase3Status = { status: "completed" };
+	} else {
+		phase3Status = { status: "pending" };
+	}
+
+	// Determine current phase
+	let currentPhase: PhaseInfo["current"] = null;
+	if (batch.status === "running") {
+		if (!p1Done) {
+			currentPhase = 1;
+		} else if (!p2Done) {
+			currentPhase = 2;
+		} else if (phase3Status.status === "running") {
+			currentPhase = 3;
+		}
+	}
+
 	return {
 		batchId: batch.id,
 		batchTotal: batch.total,
@@ -361,6 +437,24 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 		currentResourceId: batch.jobs.find((j) => j.status === "running")?.resourceId ?? null,
 		startedAt: batch.startedAt.getTime(),
 		cancelled: batch.status === "cancelled",
+		phase: {
+			current: currentPhase,
+			phase1: {
+				total: p1Resources.length,
+				completed: p1Completed,
+				failed: p1Failed,
+				mode: "sequential",
+			},
+			phase2: {
+				total: p2Resources.length,
+				completed: p2Completed,
+				failed: p2Failed,
+				running: p2Running,
+				mode: "parallel",
+				concurrency: 3,
+			},
+			phase3: phase3Status,
+		},
 		resources,
 	};
 }
@@ -383,7 +477,7 @@ export async function resumeInterruptedBatches(): Promise<void> {
 			data: { status: "pending" },
 		});
 
-		// Re-enqueue as a phased batch
+		crossLinkStatus.set(batch.id, { status: "pending" });
 		indexingQueue.add(() => runPhasedBatch(batch.id));
 
 		const pendingCount = batch.jobs.filter(
@@ -421,7 +515,7 @@ export async function retryFailedJobs(sessionId: string): Promise<number> {
 				: { failed: { decrement: failedJobIds.length } },
 	});
 
-	// Re-enqueue as phased batch to handle retried jobs properly
+	crossLinkStatus.set(batch.id, { status: "pending" });
 	indexingQueue.add(() => runPhasedBatch(batch.id));
 
 	log.info(`retryFailedJobs — session ${sessionId}, retrying ${failedJobIds.length} jobs`);
