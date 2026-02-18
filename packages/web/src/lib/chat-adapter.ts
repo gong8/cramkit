@@ -156,13 +156,31 @@ function buildContentParts(state: SseState): ContentPart[] {
 
 function extractAttachmentIds(message: unknown): string[] {
 	const msg = message as Record<string, unknown> | null | undefined;
-	if (!msg?.attachments || !Array.isArray(msg.attachments)) return [];
-	return msg.attachments
-		.filter((att: unknown) => {
+	if (!msg) return [];
+
+	const ids = new Set<string>();
+
+	// From explicit attachments array (freshly uploaded images)
+	if (Array.isArray(msg.attachments)) {
+		for (const att of msg.attachments) {
 			const a = att as Record<string, unknown> | null | undefined;
-			return typeof a?.id === "string" && a.id;
-		})
-		.map((att: unknown) => (att as Record<string, unknown>).id as string);
+			if (typeof a?.id === "string" && a.id) {
+				ids.add(a.id);
+			}
+		}
+	}
+
+	// From image content parts (images loaded from history / regeneration)
+	if (Array.isArray(msg.content)) {
+		for (const part of msg.content as Array<Record<string, unknown>>) {
+			if (part.type === "image" && typeof part.image === "string") {
+				const match = (part.image as string).match(/\/chat\/attachments\/([^/]+)$/);
+				if (match) ids.add(match[1]);
+			}
+		}
+	}
+
+	return [...ids];
 }
 
 const CUID_PATTERN = /^c[a-z0-9]{20,}$/;

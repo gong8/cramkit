@@ -75,7 +75,7 @@ export async function persistUserMessage(
 		}
 	} else {
 		// Trim orphaned messages when the frontend has fewer messages than the DB
-		// (happens when the user edits a message mid-conversation).
+		// (happens when the user edits a message mid-conversation or regenerates).
 		if (expectedPriorCount !== undefined) {
 			const existing = await db.message.findMany({
 				where: { conversationId },
@@ -85,6 +85,14 @@ export async function persistUserMessage(
 
 			if (existing.length > expectedPriorCount) {
 				const idsToDelete = existing.slice(expectedPriorCount).map((m) => m.id);
+
+				// Detach attachments before deletion so they survive the cascade
+				// and can be re-linked to the replacement message below.
+				await db.chatAttachment.updateMany({
+					where: { messageId: { in: idsToDelete } },
+					data: { messageId: null },
+				});
+
 				await db.message.deleteMany({
 					where: { id: { in: idsToDelete } },
 				});
