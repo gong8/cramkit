@@ -20,6 +20,7 @@ export interface Resource {
 	type: string;
 	label: string | null;
 	isIndexed: boolean;
+	indexErrorMessage: string | null;
 	isGraphIndexed: boolean;
 	graphIndexDurationMs: number | null;
 	files: ResourceFile[];
@@ -119,6 +120,7 @@ export interface PhaseInfo {
 }
 
 export interface BatchStatus {
+	batchId: string;
 	batchTotal: number;
 	batchCompleted: number;
 	batchFailed: number;

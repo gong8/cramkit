@@ -41,6 +41,10 @@ export function SessionDetail() {
 	const {
 		isIndexingAll,
 		indexStatus,
+		lastCompletedBatch,
+		dismissLastBatch,
+		actionError,
+		clearActionError,
 		handleIndexAll,
 		handleReindexAll,
 		handleRetryFailed,
@@ -91,7 +95,7 @@ export function SessionDetail() {
 				<MaterialsTab
 					resources={resources}
 					sessionId={sessionId}
-					batchResources={batch?.resources ?? null}
+					batchResources={batch?.resources ?? lastCompletedBatch?.resources ?? null}
 				/>
 			)}
 			{activeTab === "index" && (
@@ -100,6 +104,10 @@ export function SessionDetail() {
 					resources={resources}
 					isIndexingAll={isIndexingAll}
 					indexStatus={indexStatus}
+					lastCompletedBatch={lastCompletedBatch}
+					onDismissLastBatch={dismissLastBatch}
+					actionError={actionError}
+					onClearActionError={clearActionError}
 					defaultThoroughness={session.graphThoroughness ?? "standard"}
 					onIndexAll={handleIndexAll}
 					onReindexAll={handleReindexAll}

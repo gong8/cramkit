@@ -245,11 +245,17 @@ function ResourceRow({
 					onClick={(e) => e.stopPropagation()}
 					onKeyDown={(e) => e.stopPropagation()}
 				>
-					<span
-						className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
-					>
-						{resource.isIndexed ? "Ready" : "Processing"}
-					</span>
+					{resource.indexErrorMessage ? (
+						<span className="text-xs text-destructive" title={resource.indexErrorMessage}>
+							Failed
+						</span>
+					) : (
+						<span
+							className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
+						>
+							{resource.isIndexed ? "Ready" : "Processing"}
+						</span>
+					)}
 					<BatchStatus status={batchStatus} />
 					<GraphIndexBadge resource={resource} />
 					<button

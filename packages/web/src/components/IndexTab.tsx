@@ -1,7 +1,16 @@
 import { ConfirmModal } from "@/components/ConfirmModal.js";
 import { BatchFailuresSection, IndexProgressSection } from "@/components/IndexTabParts.js";
-import type { GraphThoroughness, IndexStatus, Resource } from "@/lib/api";
-import { BrainCircuit, Network, RefreshCw, Trash2, X } from "lucide-react";
+import type { BatchStatus, GraphThoroughness, IndexStatus, Resource } from "@/lib/api";
+import {
+	AlertTriangle,
+	BrainCircuit,
+	Check,
+	Network,
+	RefreshCw,
+	Trash2,
+	X,
+	XCircle,
+} from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -10,6 +19,10 @@ interface IndexTabProps {
 	resources: Resource[];
 	isIndexingAll: boolean;
 	indexStatus: IndexStatus | null;
+	lastCompletedBatch: BatchStatus | null;
+	onDismissLastBatch: () => void;
+	actionError: string | null;
+	onClearActionError: () => void;
 	defaultThoroughness: GraphThoroughness;
 	onIndexAll: (thoroughness?: GraphThoroughness) => void;
 	onReindexAll: (thoroughness?: GraphThoroughness) => void;
@@ -23,6 +36,10 @@ export function IndexTab({
 	resources,
 	isIndexingAll,
 	indexStatus,
+	lastCompletedBatch,
+	onDismissLastBatch,
+	actionError,
+	onClearActionError,
 	defaultThoroughness,
 	onIndexAll,
 	onReindexAll,
@@ -37,9 +54,7 @@ export function IndexTab({
 	const allGraphIndexed = indexedCount > 0 && !hasUnindexed;
 	const hasIndexed = indexedCount > 0;
 
-	const batch = indexStatus?.batch;
-	const batchFailed = batch?.batchFailed ?? 0;
-	const hasBatchFailures = batchFailed > 0;
+	const hasBatchFailures = (lastCompletedBatch?.batchFailed ?? 0) > 0;
 
 	const showActions = !isIndexingAll && hasIndexed;
 
@@ -71,12 +86,26 @@ export function IndexTab({
 				onClick: onRetryFailed,
 				className: "bg-destructive/10 text-destructive hover:bg-destructive/20",
 				icon: <RefreshCw className="h-4 w-4" />,
-				label: `Retry Failed (${batchFailed})`,
+				label: `Retry Failed (${lastCompletedBatch?.batchFailed})`,
 			},
 	].filter(Boolean) as ActionButtonProps[];
 
 	return (
 		<div className="space-y-6">
+			{actionError && (
+				<div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+					<XCircle className="h-4 w-4 shrink-0" />
+					<span className="flex-1">{actionError}</span>
+					<button
+						type="button"
+						onClick={onClearActionError}
+						className="rounded p-0.5 hover:bg-destructive/10"
+					>
+						<X className="h-3.5 w-3.5" />
+					</button>
+				</div>
+			)}
+
 			<StatusOverview
 				graphIndexedCount={graphIndexedCount}
 				indexedCount={indexedCount}
@@ -94,11 +123,21 @@ export function IndexTab({
 			)}
 
 			{isIndexingAll && (
-				<IndexProgressSection indexStatus={indexStatus} batchFailed={batchFailed} />
+				<IndexProgressSection
+					indexStatus={indexStatus}
+					batchFailed={indexStatus?.batch?.batchFailed ?? 0}
+				/>
 			)}
 
-			{!isIndexingAll && batch?.resources && hasBatchFailures && (
-				<BatchFailuresSection resources={batch.resources} failedCount={batchFailed} />
+			{!isIndexingAll && lastCompletedBatch && (
+				<CompletionBanner batch={lastCompletedBatch} onDismiss={onDismissLastBatch} />
+			)}
+
+			{!isIndexingAll && lastCompletedBatch && (lastCompletedBatch.batchFailed ?? 0) > 0 && (
+				<BatchFailuresSection
+					resources={lastCompletedBatch.resources}
+					failedCount={lastCompletedBatch.batchFailed}
+				/>
 			)}
 
 			<KnowledgeGraphSection
@@ -106,6 +145,67 @@ export function IndexTab({
 				hasIndexed={hasIndexed}
 				onClearGraph={onClearGraph}
 			/>
+		</div>
+	);
+}
+
+function formatDuration(ms: number): string {
+	if (ms < 1000) return `${ms}ms`;
+	const seconds = ms / 1000;
+	if (seconds < 60) return `${seconds.toFixed(1)}s`;
+	const mins = Math.floor(seconds / 60);
+	const secs = Math.ceil(seconds % 60);
+	return `${mins}m ${secs}s`;
+}
+
+function CompletionBanner({
+	batch,
+	onDismiss,
+}: {
+	batch: BatchStatus;
+	onDismiss: () => void;
+}) {
+	const elapsed = batch.startedAt ? Date.now() - batch.startedAt : 0;
+	const succeeded = batch.batchCompleted;
+	const failed = batch.batchFailed ?? 0;
+	const total = batch.batchTotal;
+
+	let style: string;
+	let icon: React.ReactNode;
+	let message: string;
+
+	if (batch.cancelled) {
+		style = "border-border bg-muted/50 text-muted-foreground";
+		icon = <X className="h-4 w-4 shrink-0" />;
+		message = `Indexing cancelled \u2014 ${succeeded} of ${total} completed`;
+	} else if (failed > 0 && succeeded === 0) {
+		style = "border-destructive/30 bg-destructive/5 text-destructive";
+		icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
+		message = `Indexing failed \u2014 all ${total} resource${total !== 1 ? "s" : ""} failed`;
+	} else if (failed > 0) {
+		style = "border-amber-200 bg-amber-50 text-amber-700";
+		icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
+		message = `Indexing complete \u2014 ${succeeded} indexed, ${failed} failed`;
+	} else {
+		style = "border-green-200 bg-green-50 text-green-700";
+		icon = <Check className="h-4 w-4 shrink-0" />;
+		message = `Indexing complete \u2014 ${succeeded} resource${succeeded !== 1 ? "s" : ""} indexed`;
+	}
+
+	return (
+		<div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${style}`}>
+			{icon}
+			<span className="flex-1">
+				{message}
+				{elapsed > 0 && ` (${formatDuration(elapsed)})`}
+			</span>
+			<button
+				type="button"
+				onClick={onDismiss}
+				className="rounded p-0.5 opacity-60 hover:opacity-100"
+			>
+				<X className="h-3.5 w-3.5" />
+			</button>
 		</div>
 	);
 }

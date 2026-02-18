@@ -315,7 +315,12 @@ async function executeChunkPlan(
 
 	await tx.resource.update({
 		where: { id: resourceId },
-		data: { isIndexed: true, isGraphIndexed: false, graphIndexDurationMs: null },
+		data: {
+			isIndexed: true,
+			indexErrorMessage: null,
+			isGraphIndexed: false,
+			graphIndexDurationMs: null,
+		},
 	});
 
 	return counter.value;
@@ -349,6 +354,15 @@ export async function processResource(resourceId: string): Promise<void> {
 
 		log.info(`processResource — completed "${resource.name}" (${chunkCount} chunks)`);
 	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
 		log.error(`processResource — failed "${resource.name}"`, error);
+		try {
+			await db.resource.update({
+				where: { id: resourceId },
+				data: { indexErrorMessage: msg },
+			});
+		} catch (dbErr) {
+			log.error(`processResource — failed to write indexErrorMessage for ${resourceId}`, dbErr);
+		}
 	}
 }

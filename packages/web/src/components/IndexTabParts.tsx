@@ -193,7 +193,7 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 								phase.phase1.completed,
 								phase.phase1.total,
 								status.batch?.startedAt ?? Date.now(),
-								status.avgDurationMs,
+								null,
 							);
 							return eta ? <span>{eta} remaining</span> : null;
 						})()}
@@ -224,7 +224,7 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 								phase.phase2.completed,
 								phase.phase2.total,
 								status.batch?.startedAt ?? Date.now(),
-								status.avgDurationMs,
+								null,
 							);
 							return eta ? <span>{eta} remaining</span> : null;
 						})()}

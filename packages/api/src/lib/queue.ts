@@ -62,6 +62,22 @@ const cleanupStatus = new Map<
 	}
 >();
 
+async function persistPhaseStatus(
+	batchId: string,
+	field: "phase3Status" | "phase4Status" | "phase5Status",
+	value: unknown,
+): Promise<void> {
+	try {
+		const db = getDb();
+		await db.indexBatch.update({
+			where: { id: batchId },
+			data: { [field]: JSON.stringify(value) },
+		});
+	} catch (e) {
+		log.warn(`persistPhaseStatus — failed to write ${field} for batch ${batchId}`, e);
+	}
+}
+
 export function enqueueProcessing(resourceId: string): void {
 	queue.add(() => processResource(resourceId));
 	log.info(`enqueueProcessing — resource ${resourceId}, queue size: ${queue.size + queue.pending}`);
@@ -359,7 +375,9 @@ async function runCrossLinking(
 			}
 		}
 
-		crossLinkStatus.set(batchId, { status: "completed", linksAdded });
+		const phase3Result = { status: "completed" as const, linksAdded };
+		crossLinkStatus.set(batchId, phase3Result);
+		await persistPhaseStatus(batchId, "phase3Status", phase3Result);
 
 		try {
 			await db.graphLog.create({
@@ -376,13 +394,17 @@ async function runCrossLinking(
 		}
 	} catch (error) {
 		if (error instanceof CancellationError) {
-			crossLinkStatus.set(batchId, { status: "skipped" });
+			const skipped = { status: "skipped" as const };
+			crossLinkStatus.set(batchId, skipped);
+			await persistPhaseStatus(batchId, "phase3Status", skipped);
 			log.info(`runCrossLinking — session ${sessionId} cancelled`);
 			return;
 		}
 		const msg = error instanceof Error ? error.message : String(error);
 		log.error(`runCrossLinking — session ${sessionId} failed: ${msg}`);
-		crossLinkStatus.set(batchId, { status: "failed", error: msg });
+		const failed = { status: "failed" as const, error: msg };
+		crossLinkStatus.set(batchId, failed);
+		await persistPhaseStatus(batchId, "phase3Status", failed);
 		// Cross-linking failure is non-fatal — don't fail the batch
 	}
 }
@@ -404,7 +426,9 @@ async function runGraphCleanup(
 		const progStats = await runProgrammaticCleanup(sessionId);
 
 		if (signal?.aborted || (await isBatchCancelled(batchId))) {
-			cleanupStatus.set(batchId, { status: "skipped" });
+			const skipped = { status: "skipped" as const };
+			cleanupStatus.set(batchId, skipped);
+			await persistPhaseStatus(batchId, "phase4Status", skipped);
 			return;
 		}
 
@@ -432,7 +456,9 @@ async function runGraphCleanup(
 			conceptsMerged: agentStats.conceptsMerged,
 		};
 
-		cleanupStatus.set(batchId, { status: "completed", stats: combinedStats });
+		const phase4Result = { status: "completed" as const, stats: combinedStats };
+		cleanupStatus.set(batchId, phase4Result);
+		await persistPhaseStatus(batchId, "phase4Status", phase4Result);
 
 		try {
 			const db = getDb();
@@ -452,13 +478,17 @@ async function runGraphCleanup(
 		}
 	} catch (error) {
 		if (error instanceof CancellationError) {
-			cleanupStatus.set(batchId, { status: "skipped" });
+			const skipped = { status: "skipped" as const };
+			cleanupStatus.set(batchId, skipped);
+			await persistPhaseStatus(batchId, "phase4Status", skipped);
 			log.info(`runGraphCleanup — session ${sessionId} cancelled`);
 			return;
 		}
 		const msg = error instanceof Error ? error.message : String(error);
 		log.error(`runGraphCleanup — session ${sessionId} failed: ${msg}`);
-		cleanupStatus.set(batchId, { status: "failed", error: msg });
+		const failed = { status: "failed" as const, error: msg };
+		cleanupStatus.set(batchId, failed);
+		await persistPhaseStatus(batchId, "phase4Status", failed);
 		// Cleanup failure is non-fatal — don't fail the batch
 	}
 }
@@ -483,7 +513,9 @@ async function runMetadataExtraction(
 		},
 	});
 	if (!batch || batch.jobs.length === 0) {
-		metadataStatus.set(batchId, { status: "skipped" });
+		const skipped = { status: "skipped" as const };
+		metadataStatus.set(batchId, skipped);
+		await persistPhaseStatus(batchId, "phase5Status", skipped);
 		return;
 	}
 
@@ -498,7 +530,9 @@ async function runMetadataExtraction(
 	});
 
 	if (resources.length === 0) {
-		metadataStatus.set(batchId, { status: "completed", total: 0, completed: 0, failed: 0 });
+		const done = { status: "completed" as const, total: 0, completed: 0, failed: 0 };
+		metadataStatus.set(batchId, done);
+		await persistPhaseStatus(batchId, "phase5Status", done);
 		return;
 	}
 
@@ -551,16 +585,20 @@ async function runMetadataExtraction(
 	}
 
 	if (signal?.aborted || (await isBatchCancelled(batchId))) {
-		metadataStatus.set(batchId, { status: "skipped" });
+		const skipped = { status: "skipped" as const };
+		metadataStatus.set(batchId, skipped);
+		await persistPhaseStatus(batchId, "phase5Status", skipped);
 		return;
 	}
 
-	metadataStatus.set(batchId, {
-		status: "completed",
+	const phase5Result = {
+		status: "completed" as const,
 		total: resources.length,
 		completed,
 		failed,
-	});
+	};
+	metadataStatus.set(batchId, phase5Result);
+	await persistPhaseStatus(batchId, "phase5Status", phase5Result);
 
 	log.info(
 		`runMetadataExtraction — session ${sessionId}: ${completed}/${resources.length} completed, ${failed} failed`,
@@ -733,6 +771,29 @@ export async function cancelSessionIndexing(sessionId: string): Promise<boolean>
 		batchAbortControllers.delete(batch.id);
 	}
 
+	// Persist skipped status for phases that haven't completed yet
+	const skipped = JSON.stringify({ status: "skipped" });
+	const clCurrent = crossLinkStatus.get(batch.id);
+	const cuCurrent = cleanupStatus.get(batch.id);
+	const mdCurrent = metadataStatus.get(batch.id);
+	const phaseUpdates: Record<string, string> = {};
+	if (!clCurrent || clCurrent.status === "pending" || clCurrent.status === "running") {
+		phaseUpdates.phase3Status = skipped;
+	}
+	if (!cuCurrent || cuCurrent.status === "pending" || cuCurrent.status === "running") {
+		phaseUpdates.phase4Status = skipped;
+	}
+	if (!mdCurrent || mdCurrent.status === "pending" || mdCurrent.status === "running") {
+		phaseUpdates.phase5Status = skipped;
+	}
+	if (Object.keys(phaseUpdates).length > 0) {
+		try {
+			await db.indexBatch.update({ where: { id: batch.id }, data: phaseUpdates });
+		} catch (e) {
+			log.warn("cancelSessionIndexing — failed to persist phase status", e);
+		}
+	}
+
 	crossLinkStatus.delete(batch.id);
 	cleanupStatus.delete(batch.id);
 	metadataStatus.delete(batch.id);
@@ -849,39 +910,45 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 	const p2Running = p2Resources.filter((r) => r.status === "indexing").length;
 	const p2Done = p2Resources.length === 0 || p2Completed + p2Failed >= p2Resources.length;
 
-	// Determine cross-linking status
+	// Determine cross-linking status (in-memory → DB → default)
 	const clStatus = crossLinkStatus.get(batch.id);
 	let phase3Status: PhaseInfo["phase3"];
 	if (batch.status === "cancelled") {
-		phase3Status = { status: "skipped" };
+		phase3Status = batch.phase3Status ? JSON.parse(batch.phase3Status) : { status: "skipped" };
 	} else if (clStatus) {
 		phase3Status = { ...clStatus };
+	} else if (batch.phase3Status) {
+		phase3Status = JSON.parse(batch.phase3Status);
 	} else if (batch.status === "completed") {
 		phase3Status = { status: "completed" };
 	} else {
 		phase3Status = { status: "pending" };
 	}
 
-	// Determine cleanup status
+	// Determine cleanup status (in-memory → DB → default)
 	const cuStatus = cleanupStatus.get(batch.id);
 	let phase4Status: PhaseInfo["phase4"];
 	if (batch.status === "cancelled") {
-		phase4Status = { status: "skipped" };
+		phase4Status = batch.phase4Status ? JSON.parse(batch.phase4Status) : { status: "skipped" };
 	} else if (cuStatus) {
 		phase4Status = { ...cuStatus };
+	} else if (batch.phase4Status) {
+		phase4Status = JSON.parse(batch.phase4Status);
 	} else if (batch.status === "completed") {
 		phase4Status = { status: "completed" };
 	} else {
 		phase4Status = { status: "pending" };
 	}
 
-	// Determine metadata extraction status
+	// Determine metadata extraction status (in-memory → DB → default)
 	const mdStatus = metadataStatus.get(batch.id);
 	let phase5Status: PhaseInfo["phase5"];
 	if (batch.status === "cancelled") {
-		phase5Status = { status: "skipped" };
+		phase5Status = batch.phase5Status ? JSON.parse(batch.phase5Status) : { status: "skipped" };
 	} else if (mdStatus) {
 		phase5Status = { ...mdStatus };
+	} else if (batch.phase5Status) {
+		phase5Status = JSON.parse(batch.phase5Status);
 	} else if (batch.status === "completed") {
 		phase5Status = { status: "completed" };
 	} else {
