@@ -53,10 +53,6 @@ export async function chatCompletion(
 		"--no-session-persistence",
 	];
 
-	if (options?.maxTokens) {
-		args.push("--max-tokens", String(options.maxTokens));
-	}
-
 	if (systemParts.length > 0) {
 		const systemPromptPath = join(tempDir, "system-prompt.txt");
 		writeFileSync(systemPromptPath, systemParts.join("\n\n"));
@@ -253,10 +249,6 @@ rl.on("line", (line) => {
 		"",
 		"--no-session-persistence",
 	];
-
-	if (options?.maxTokens) {
-		args.push("--max-tokens", String(options.maxTokens));
-	}
 
 	if (systemParts.length > 0) {
 		const systemPromptPath = join(tempDir, "system-prompt.txt");

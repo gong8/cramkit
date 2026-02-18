@@ -257,6 +257,14 @@ async function runIndexJob(jobId: string, signal?: AbortSignal): Promise<void> {
 			(job.thoroughness as Thoroughness) || undefined,
 			signal,
 		);
+
+		// Re-check cancellation after work completes — don't write to a cancelled batch
+		if (signal?.aborted || (await isBatchCancelled(job.batchId))) {
+			await db.indexJob.update({ where: { id: jobId }, data: { status: "cancelled" } });
+			log.info(`runIndexJob — job ${jobId} cancelled (post-completion)`);
+			return;
+		}
+
 		await db.indexJob.update({
 			where: { id: jobId },
 			data: { status: "completed", completedAt: new Date(), durationMs: Date.now() - startTime },
@@ -318,6 +326,15 @@ async function runCrossLinking(
 	try {
 		log.info(`runCrossLinking — session ${sessionId}, starting cross-linking pass`);
 		const result = await runCrossLinkingAgent(sessionId, signal);
+
+		// Re-check cancellation after agent returns — don't write results to a cancelled batch
+		if (signal?.aborted || (await isBatchCancelled(batchId))) {
+			const skipped = { status: "skipped" as const };
+			crossLinkStatus.set(batchId, skipped);
+			await persistPhaseStatus(batchId, "phase3Status", skipped);
+			log.info(`runCrossLinking — session ${sessionId} cancelled (post-agent)`);
+			return;
+		}
 
 		let linksAdded = 0;
 		if (result.links.length > 0) {
@@ -452,7 +469,7 @@ async function runGraphCleanup(
 		log.info(`runGraphCleanup — session ${sessionId}, starting cleanup`);
 
 		// Step 1: programmatic cleanup
-		const progStats = await runProgrammaticCleanup(sessionId);
+		const progStats = await runProgrammaticCleanup(sessionId, signal);
 
 		if (signal?.aborted || (await isBatchCancelled(batchId))) {
 			const skipped = { status: "skipped" as const };
@@ -471,6 +488,16 @@ async function runGraphCleanup(
 
 		try {
 			const agentResult = await runCleanupAgent(sessionId, signal);
+
+			// Re-check cancellation after agent returns — don't apply results to a cancelled batch
+			if (signal?.aborted || (await isBatchCancelled(batchId))) {
+				const skipped = { status: "skipped" as const };
+				cleanupStatus.set(batchId, skipped);
+				await persistPhaseStatus(batchId, "phase4Status", skipped);
+				log.info(`runGraphCleanup — session ${sessionId} cancelled (post-agent)`);
+				return;
+			}
+
 			agentStats = await applyCleanupResult(sessionId, agentResult);
 		} catch (error) {
 			if (error instanceof CancellationError) throw error;
@@ -582,6 +609,8 @@ async function runMetadataExtraction(
 				if (signal?.aborted || (await isBatchCancelled(batchId))) return;
 				try {
 					await indexResourceMetadata(resource.id, signal);
+					// Re-check cancellation — don't count results for a cancelled batch
+					if (signal?.aborted || (await isBatchCancelled(batchId))) return;
 					completed++;
 					metadataStatus.set(batchId, {
 						status: "running",
@@ -790,7 +819,7 @@ export async function cancelSessionIndexing(sessionId: string): Promise<boolean>
 		data: { status: "cancelled", completedAt: new Date() },
 	});
 	await db.indexJob.updateMany({
-		where: { batchId: batch.id, status: "pending" },
+		where: { batchId: batch.id, status: { in: ["pending", "running"] } },
 		data: { status: "cancelled" },
 	});
 

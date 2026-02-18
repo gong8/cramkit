@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@cramkit/shared";
 import type { Prisma } from "@prisma/client";
+import { CancellationError } from "./errors.js";
 
 const log = createLogger("api");
 
@@ -145,13 +146,22 @@ async function validateReferentialIntegrity(
 	return danglingIds.length;
 }
 
-export async function runProgrammaticCleanup(sessionId: string): Promise<CleanupStats> {
+export async function runProgrammaticCleanup(
+	sessionId: string,
+	signal?: AbortSignal,
+): Promise<CleanupStats> {
 	const db = getDb();
 
 	const stats = await db.$transaction(
 		async (tx) => {
 			const duplicateRelationshipsRemoved = await deduplicateSessionRelationships(tx, sessionId);
+
+			if (signal?.aborted) throw new CancellationError("programmatic cleanup cancelled");
+
 			const orphanedConceptsRemoved = await removeOrphanedConcepts(tx, sessionId);
+
+			if (signal?.aborted) throw new CancellationError("programmatic cleanup cancelled");
+
 			const integrityIssuesFixed = await validateReferentialIntegrity(tx, sessionId);
 
 			return { duplicateRelationshipsRemoved, orphanedConceptsRemoved, integrityIssuesFixed };
