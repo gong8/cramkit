@@ -28,7 +28,7 @@ describe("amortiseSearchResults", () => {
 		}
 	});
 
-	it("createdBy is 'amortised', confidence is 0.6", async () => {
+	it("createdBy is 'amortised', confidence is 0.7 for exact name match", async () => {
 		const { session, resource, chunks } = await seedSessionWithConcept(db);
 
 		await amortiseSearchResults(session.id, "Heat Equation", [
@@ -41,6 +41,22 @@ describe("amortiseSearchResults", () => {
 
 		expect(rel).not.toBeNull();
 		expect(rel?.createdBy).toBe("amortised");
+		expect(rel?.confidence).toBe(0.7);
+	});
+
+	it("confidence is 0.6 for partial/substring match in search", async () => {
+		const { session, resource, chunks } = await seedSessionWithConcept(db);
+
+		// "Heat" partially matches "Heat Equation" but is not an exact match
+		await amortiseSearchResults(session.id, "Heat", [
+			{ chunkId: chunks[0].id, resourceId: resource.id },
+		]);
+
+		const rel = await db.relationship.findFirst({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rel).not.toBeNull();
 		expect(rel?.confidence).toBe(0.6);
 	});
 
@@ -164,6 +180,46 @@ describe("amortiseRead", () => {
 		expect(rel?.confidence).toBe(0.5);
 	});
 
+	it("confidence is 0.7 when concept name is in both title and content", async () => {
+		const { session, chunks, concept } = await seedSessionWithConcept(db);
+
+		await amortiseRead(
+			session.id,
+			// label (title) contains the concept name
+			[{ type: "chunk", id: chunks[0].id, label: "Heat Equation Overview" }],
+			// matchText also contains the concept name
+			"The Heat Equation is fundamental to thermal analysis",
+		);
+
+		const rel = await db.relationship.findFirst({
+			where: { sessionId: session.id, createdBy: "amortised", targetId: concept.id },
+		});
+
+		expect(rel).not.toBeNull();
+		expect(rel?.confidence).toBe(0.7);
+	});
+
+	it("confidence is 0.65 when concept name is in title but matched via alias in content", async () => {
+		const { session, chunks, concept } = await seedSessionWithConcept(db);
+
+		await amortiseRead(
+			session.id,
+			// label (title) contains the concept name "Heat Equation"
+			[{ type: "chunk", id: chunks[0].id, label: "Heat Equation Overview" }],
+			// matchText contains alias "diffusion equation" but NOT "Heat Equation"
+			"The diffusion equation describes thermal diffusion",
+		);
+
+		const rel = await db.relationship.findFirst({
+			where: { sessionId: session.id, createdBy: "amortised", targetId: concept.id },
+		});
+
+		expect(rel).not.toBeNull();
+		// Matched via alias in content, concept name in title but NOT in content
+		// inTitle = true, inContent = false (name not in text), so confidence = 0.65
+		expect(rel?.confidence).toBe(0.65);
+	});
+
 	it("matches concept aliases", async () => {
 		const { session, chunks, concept } = await seedSessionWithConcept(db);
 
@@ -199,6 +255,60 @@ describe("amortiseRead", () => {
 		});
 
 		expect(rels.length).toBe(0);
+	});
+
+	it("skips aliases shorter than 3 chars", async () => {
+		const { session, chunks } = await seedSessionWithChunks(db);
+
+		await db.concept.create({
+			data: {
+				sessionId: session.id,
+				name: "Partial Differential Equation",
+				description: "A PDE",
+				aliases: "PDE, DE, partial diff eq",
+			},
+		});
+
+		// "DE" and "PDE" are too short (< 3 chars for DE, = 3 for PDE)
+		// Only "partial diff eq" should match
+		await amortiseRead(
+			session.id,
+			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
+			"The DE is simple",
+		);
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		// "DE" is only 2 chars so it's skipped; concept name doesn't match either
+		expect(rels.length).toBe(0);
+	});
+
+	it("matches aliases with whitespace and mixed case", async () => {
+		const { session, chunks } = await seedSessionWithChunks(db);
+
+		const concept = await db.concept.create({
+			data: {
+				sessionId: session.id,
+				name: "Navier-Stokes Equations",
+				description: "Fluid dynamics equations",
+				aliases: "  NSE ,  navier stokes , fluid equations  ",
+			},
+		});
+
+		await amortiseRead(
+			session.id,
+			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
+			"The navier stokes system governs fluid flow",
+		);
+
+		const rels = await db.relationship.findMany({
+			where: { sessionId: session.id, createdBy: "amortised" },
+		});
+
+		expect(rels.length).toBe(1);
+		expect(rels[0].targetId).toBe(concept.id);
 	});
 
 	it("deduplicates — second call creates no new rels", async () => {

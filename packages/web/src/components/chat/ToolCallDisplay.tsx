@@ -42,9 +42,7 @@ export function getToolLabel(toolName: string, args: Record<string, unknown>): s
 	const fn = TOOL_LABELS[toolName];
 	if (fn) return fn(args);
 	const short = toolName.replace(/^mcp__\w+__/, "");
-	return short
-		.replace(/_/g, " ")
-		.replace(/\b\w/g, (c) => c.toUpperCase());
+	return short.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function ToolCallDisplay(props: ToolCallMessagePartProps) {

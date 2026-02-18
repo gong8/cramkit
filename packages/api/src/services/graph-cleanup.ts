@@ -28,9 +28,17 @@ async function deduplicateSessionRelationships(
 		orderBy: [{ confidence: "desc" }, { createdAt: "asc" }],
 	});
 
+	const SYMMETRIC_TYPES = new Set(["related_to", "contradicts"]);
+
 	const groups = new Map<string, typeof relationships>();
 	for (const rel of relationships) {
-		const key = `${rel.sourceType}:${rel.sourceId}:${rel.targetType}:${rel.targetId}:${rel.relationship}`;
+		let key: string;
+		if (SYMMETRIC_TYPES.has(rel.relationship)) {
+			const [first, second] = [rel.sourceId, rel.targetId].sort();
+			key = `${rel.sourceType}:${first}:${rel.targetType}:${second}:${rel.relationship}`;
+		} else {
+			key = `${rel.sourceType}:${rel.sourceId}:${rel.targetType}:${rel.targetId}:${rel.relationship}`;
+		}
 		if (!groups.has(key)) groups.set(key, []);
 		groups.get(key)?.push(rel);
 	}

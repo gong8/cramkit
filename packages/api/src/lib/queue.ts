@@ -281,6 +281,10 @@ async function runCrossLinking(
 				select: { id: true, name: true },
 			});
 			const conceptMap = new Map(concepts.map((c) => [c.name, c.id]));
+			const conceptMapLower = new Map<string, string>();
+			for (const [name, id] of conceptMap.entries()) {
+				conceptMapLower.set(name.toLowerCase(), id);
+			}
 
 			const relationships: Array<{
 				sessionId: string;
@@ -299,9 +303,19 @@ async function runCrossLinking(
 			for (const link of result.links) {
 				const sourceName = toTitleCase(link.sourceConcept);
 				const targetName = toTitleCase(link.targetConcept);
-				const sourceId = conceptMap.get(sourceName);
-				const targetId = conceptMap.get(targetName);
-				if (!sourceId || !targetId) continue;
+				const sourceId =
+					conceptMap.get(sourceName) ?? conceptMapLower.get(sourceName.toLowerCase());
+				const targetId =
+					conceptMap.get(targetName) ?? conceptMapLower.get(targetName.toLowerCase());
+				if (!sourceId || !targetId) {
+					log.warn("cross-link dropped: concept not found", {
+						sourceConcept: link.sourceConcept,
+						targetConcept: link.targetConcept,
+						sourceResolved: !!sourceId,
+						targetResolved: !!targetId,
+					});
+					continue;
+				}
 
 				relationships.push({
 					sessionId,
@@ -324,7 +338,6 @@ async function runCrossLinking(
 						sessionId,
 						sourceType: "concept",
 						targetType: "concept",
-						createdBy: "system",
 					},
 					select: { sourceId: true, targetId: true, relationship: true },
 				});

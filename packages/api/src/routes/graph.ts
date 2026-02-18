@@ -68,20 +68,53 @@ graphRoutes.delete("/concepts/:id", async (c) => {
 });
 
 graphRoutes.get("/related", async (c) => {
+	const db = getDb();
 	const type = c.req.query("type");
 	const id = c.req.query("id");
 	if (!type || !id) return c.json({ error: "type and id query params required" }, 400);
 
 	const relationship = c.req.query("relationship");
-	const where: Record<string, unknown> = {
-		OR: [
-			{ sourceType: type, sourceId: id },
-			{ targetType: type, targetId: id },
-		],
-	};
+
+	let where: Record<string, unknown>;
+
+	if (type === "resource") {
+		// For resources, also include chunk-level relationships belonging to this resource
+		const resource = await db.resource.findUnique({
+			where: { id },
+			select: { sessionId: true },
+		});
+		if (!resource) return c.json({ error: "Resource not found" }, 404);
+
+		const chunks = await db.chunk.findMany({
+			where: { resourceId: id },
+			select: { id: true },
+		});
+		const chunkIds = chunks.map((ch) => ch.id);
+
+		const orConditions: Record<string, unknown>[] = [
+			{ sourceType: "resource", sourceId: id },
+			{ targetType: "resource", targetId: id },
+		];
+		if (chunkIds.length > 0) {
+			orConditions.push(
+				{ sourceType: "chunk", sourceId: { in: chunkIds } },
+				{ targetType: "chunk", targetId: { in: chunkIds } },
+			);
+		}
+
+		where = { sessionId: resource.sessionId, OR: orConditions };
+	} else {
+		where = {
+			OR: [
+				{ sourceType: type, sourceId: id },
+				{ targetType: type, targetId: id },
+			],
+		};
+	}
+
 	if (relationship) where.relationship = relationship;
 
-	const relationships = await getDb().relationship.findMany({ where });
+	const relationships = await db.relationship.findMany({ where });
 	log.info(`GET /graph/related — type=${type}, id=${id}, found ${relationships.length}`);
 	return c.json(relationships);
 });

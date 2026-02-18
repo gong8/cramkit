@@ -255,8 +255,7 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 				<>
 					<div className="font-medium text-primary">Phase 5: Enriching knowledge graph</div>
 					<div className="text-muted-foreground">
-						Extracting questions, marks, mark schemes, definitions, and theorems into the
-						graph.
+						Extracting questions, marks, mark schemes, definitions, and theorems into the graph.
 					</div>
 					{phase.phase5?.total != null && (
 						<div className="flex items-center gap-3 text-muted-foreground">
@@ -264,9 +263,7 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 								{phase.phase5.completed ?? 0}/{phase.phase5.total} complete
 							</span>
 							{(phase.phase5.failed ?? 0) > 0 && (
-								<span className="text-destructive">
-									{phase.phase5.failed} failed
-								</span>
+								<span className="text-destructive">{phase.phase5.failed} failed</span>
 							)}
 						</div>
 					)}
@@ -469,8 +466,7 @@ export function IndexProgressSection({ indexStatus, batchFailed }: IndexProgress
 						Enrichment complete
 						{phase.phase5.completed != null &&
 							` — ${phase.phase5.completed} resource${phase.phase5.completed !== 1 ? "s" : ""} enriched`}
-						{(phase.phase5.failed ?? 0) > 0 &&
-							`, ${phase.phase5.failed} failed`}
+						{(phase.phase5.failed ?? 0) > 0 && `, ${phase.phase5.failed} failed`}
 					</span>
 				</div>
 			)}

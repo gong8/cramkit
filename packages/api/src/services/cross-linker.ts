@@ -61,6 +61,11 @@ const tools = [
     },
   },
   {
+    name: "get_all_relationships",
+    description: "Get ALL concept-to-concept relationships in a compact format. Use this to see the full graph at once instead of querying concept by concept.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
     name: "submit_cross_links",
     description: "Submit new concept-concept relationships to add to the knowledge graph.",
     inputSchema: {
@@ -118,9 +123,9 @@ rl.on("line", (line) => {
             : "No concepts found.";
           break;
         case "get_concept_relationships": {
-          const cName = args.name || "";
+          const cName = (args.name || "").toLowerCase();
           const rels = relationships.filter(r =>
-            r.sourceLabel === cName || r.targetLabel === cName
+            (r.sourceLabel || "").toLowerCase() === cName || (r.targetLabel || "").toLowerCase() === cName
           );
           content = rels.length > 0
             ? rels.map(r => r.sourceLabel + " --[" + r.relationship + "]--> " + r.targetLabel + " (confidence: " + r.confidence + ")").join("\\n")
@@ -138,6 +143,15 @@ rl.on("line", (line) => {
           content = rc.length > 0
             ? rc.map(c => c.name + " (" + c.relationship + ", confidence: " + c.confidence + ")").join("\\n")
             : "No concepts linked to resource: " + rid;
+          break;
+        }
+        case "get_all_relationships": {
+          const conceptRels = relationships.filter(r =>
+            r.sourceType === "concept" && r.targetType === "concept"
+          );
+          content = conceptRels.length > 0
+            ? conceptRels.map(r => r.sourceLabel + " -[" + r.relationship + "]-> " + r.targetLabel + " (" + r.confidence + ")").join("\\n")
+            : "No concept-to-concept relationships found.";
           break;
         }
         case "submit_cross_links": {
@@ -188,6 +202,7 @@ export async function runCrossLinkingAgent(
 				targetId: true,
 				relationship: true,
 				confidence: true,
+				createdFromResourceId: true,
 			},
 		}),
 		db.resource.findMany({
@@ -216,10 +231,15 @@ export async function runCrossLinkingAgent(
 			});
 		}
 		if (rel.sourceType === "chunk" && rel.targetType === "concept") {
-			// Find which resource this chunk belongs to — use the resource list
-			// For simplicity, also add to resource concepts via the source label
-			for (const res of resources) {
-				if (!resourceConcepts[res.id]) resourceConcepts[res.id] = [];
+			// Map chunk→concept relationships back to their parent resource
+			const resourceId = rel.createdFromResourceId;
+			if (resourceId) {
+				if (!resourceConcepts[resourceId]) resourceConcepts[resourceId] = [];
+				resourceConcepts[resourceId].push({
+					name: rel.targetLabel ?? "",
+					relationship: rel.relationship,
+					confidence: rel.confidence,
+				});
 			}
 		}
 	}
@@ -256,21 +276,38 @@ export async function runCrossLinkingAgent(
 		const systemPrompt = `You are a knowledge graph cross-linking agent. Your job is to analyze the full knowledge graph of a study session and find missing connections between concepts from different resources.
 
 Focus on:
+- Prerequisite chains: identify concepts that MUST be understood before others (e.g., "Linear Algebra" is prerequisite for "Eigenvalue Decomposition")
 - Exam questions that test lecture concepts (find concepts in past papers that match lecture note concepts)
 - Problem sheet exercises that practice lecture topics
 - Common concepts that appear across multiple resources but aren't yet linked
-- Prerequisite relationships between concepts from different resources
-- Concepts that generalize or extend other concepts
+- Concepts that generalize, extend, or are special cases of other concepts
+
+## Relationship Type Guidance
+Choose the most specific type that applies:
+- "prerequisite": Concept A must be understood before concept B (e.g., "Linear Algebra" is prerequisite for "Eigenvalue Decomposition")
+- "extends": Concept A builds upon or extends concept B with additional features (e.g., "Fourier Transform" extends "Fourier Series")
+- "generalizes": Concept A is a more general form of concept B (e.g., "PDE" generalizes "Heat Equation")
+- "special_case_of": Concept A is a specific instance of concept B (e.g., "Laplace's Equation" is special_case_of "Poisson's Equation")
+- "contradicts": Concepts are mutually exclusive or contradictory
+- "related_to": ONLY use this as a last resort when none of the above types fit. Prefer specific types.
+
+## Confidence Scale
+- 0.95-1.0: Explicitly stated in the material (e.g., "X requires knowledge of Y")
+- 0.85-0.94: Strongly implied by content structure or mathematical dependency
+- 0.70-0.84: Clear connection but requires some inference
+- 0.50-0.69: Weak or tangential connection
+- Below 0.5: Do not create the relationship
 
 Do NOT create duplicate relationships that already exist.
 Do NOT create trivial or low-confidence links.
+Prefer specific relationship types (prerequisite, extends, generalizes, special_case_of) over generic "related_to".
 
 Workflow:
 1. List all resources to understand what material exists
 2. List all concepts to see the full concept space
-3. For key concepts, check their existing relationships to avoid duplicates
+3. Use get_all_relationships to see the full existing concept-to-concept graph
 4. For each resource, check what concepts it covers
-5. Identify missing cross-resource connections
+5. Identify missing cross-resource connections, focusing on prerequisites and specific relationship types
 6. Submit your new links via submit_cross_links
 
 Use Title Case for all concept names. Match existing concept names exactly.`;
@@ -289,7 +326,7 @@ Use Title Case for all concept names. Match existing concept names exactly.`;
 			"--strict-mcp-config",
 			"--dangerously-skip-permissions",
 			"--max-turns",
-			"15",
+			"50",
 			"--disallowedTools",
 			...BLOCKED_BUILTIN_TOOLS,
 			"--setting-sources",

@@ -390,7 +390,10 @@ If a SOLUTIONS file exists:
 3. Copy the VERBATIM worked solution into solutionText
 
 ## Concept Links
-For each question, identify which concepts it tests, requires, or applies.
+For each question, identify which concepts it tests, requires, or applies:
+- "tests": The question directly examines understanding of this concept (it is the focus of the question)
+- "requires": The concept is a prerequisite needed to attempt the question, but is not the focus
+- "applies": The question uses this concept as a tool or technique to solve a different problem
 
 ## Resource Metadata
 Extract paper-level metadata: year, exam board, total marks, duration, rubric instructions, etc.`,
@@ -403,13 +406,16 @@ For every concept that has been identified in this session:
 2. Copy the EXACT verbatim text into a concept update
 3. Set the contentType: definition, theorem, formula, worked_example, lemma, algorithm
 4. Add any relevant metadata (proof outline, derivation context, prerequisites)
+5. Look for prerequisite chains: when the material says "recall that X" or "using Y from earlier",
+   note these dependencies in metadata so the knowledge graph can capture learning order
 
 ## Section Metadata
 For each major section, identify:
 - Learning objectives
-- Prerequisites assumed
+- Prerequisites assumed (concepts that must be understood before this section)
 - Topic weightings (if mentioned)
-- Key formulas or results`,
+- Key formulas or results
+- Prerequisite chains between concepts defined in this section`,
 
 	SPECIFICATION: `You are extracting structured metadata from a course specification.
 
@@ -436,7 +442,10 @@ For EACH problem/exercise:
 If a SOLUTIONS file exists, read it and match solutions to problems.
 
 ## Concept Links
-For each question, identify which concepts it tests, requires, or applies.`,
+For each question, identify which concepts it tests, requires, or applies:
+- "tests": The question directly examines understanding of this concept (it is the focus of the question)
+- "requires": The concept is a prerequisite needed to attempt the question, but is not the focus
+- "applies": The question uses this concept as a tool or technique to solve a different problem`,
 
 	OTHER: `You are extracting structured metadata from study material.
 
@@ -474,7 +483,13 @@ ${hasSolutions ? "\nA SOLUTIONS file is available — you MUST cross-reference i
 - Use exact concept names from get_existing_concepts when updating concepts
 - The metadata fields are freeform JSON — include whatever is relevant
 - You MUST call submit_metadata before finishing — this is how your work is saved
-- Include conceptLinks on questions to connect them to the knowledge graph`;
+- Include conceptLinks on questions to connect them to the knowledge graph
+
+## Confidence Guidance for Concept Links
+- 0.9+: The question explicitly names or defines the concept
+- 0.7-0.89: The concept is strongly implied by the question content
+- 0.5-0.69: The concept is tangentially involved
+- Below 0.5: Do not create the link`;
 }
 
 export async function runMetadataAgent(

@@ -71,8 +71,17 @@ const tools = [
             properties: {
               sourceConcept: { type: "string" },
               targetConcept: { type: "string" },
-              relationship: { type: "string", enum: ["prerequisite", "related_to", "extends", "generalizes", "special_case_of", "contradicts"] },
-              confidence: { type: "number", minimum: 0, maximum: 1 },
+              relationship: {
+                type: "string",
+                enum: ["prerequisite", "related_to", "extends", "generalizes", "special_case_of", "contradicts"],
+                description: "prerequisite: source must be understood before target. extends: source builds upon target with additional structure. generalizes: source is a broader framework containing target. special_case_of: source is a specific instance of target. contradicts: source conflicts with target. related_to: LAST RESORT when no specific type fits.",
+              },
+              confidence: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+                description: "0.9+: explicitly evident from context. 0.7-0.89: strong inference. 0.5-0.69: moderate connection. Do not create links below 0.5.",
+              },
             },
             required: ["sourceConcept", "targetConcept", "relationship"],
           },
@@ -255,9 +264,22 @@ export async function runChatEnrichment(input: EnrichmentInput): Promise<Enrichm
 		const systemPrompt = `You are a knowledge graph enrichment agent. These entities were accessed together during a study chat session. Analyze what relationships should exist between them that are currently missing from the graph.
 
 Focus on:
-- Prerequisite chains between concepts
-- Concept-to-concept links (related_to, extends, generalizes, special_case_of)
-- Connections revealed by the fact that these entities were accessed together in the same study context
+- Prerequisite chains between concepts (A must be understood before B)
+- Extension/generalization relationships (A extends or generalizes B)
+- Special case relationships (A is a specific instance of B)
+- Concept-to-concept links — choose the most specific type:
+  * "prerequisite": Clear learning dependency (source must be understood before target)
+  * "extends": Source builds upon target with additional structure
+  * "generalizes": Source is a broader framework containing target
+  * "special_case_of": Source is a specific instance of target
+  * "related_to": LAST RESORT — only when no specific type fits
+- Connections revealed by the fact that these entities were accessed together
+
+Confidence guidance:
+- 0.9+: Explicitly evident from the conversation context
+- 0.7-0.89: Strong inference from content
+- 0.5-0.69: Moderate connection
+- Below 0.5: Do not create
 
 Do NOT create duplicate relationships that already exist.
 Do NOT create trivial or low-confidence links.

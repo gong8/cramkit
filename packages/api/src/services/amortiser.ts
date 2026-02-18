@@ -26,6 +26,7 @@ export async function amortiseSearchResults(
 			.filter((t) => t.length > 1);
 		if (contentResults.length === 0 || terms.length === 0) return;
 
+		const queryLower = query.toLowerCase().trim();
 		const allConcepts = await db.concept.findMany({
 			where: { sessionId },
 			select: { id: true, name: true },
@@ -36,6 +37,12 @@ export async function amortiseSearchResults(
 		});
 
 		if (matchingConcepts.length === 0) return;
+
+		// Pre-compute exact name matches for confidence scoring:
+		// exact match (query === concept name) is a stronger signal than partial/substring
+		const exactMatchIds = new Set(
+			matchingConcepts.filter((c) => c.name.toLowerCase() === queryLower).map((c) => c.id),
+		);
 
 		const chunkIds = contentResults.map((r) => r.chunkId);
 		const conceptIds = matchingConcepts.map((c) => c.id);
@@ -68,6 +75,9 @@ export async function amortiseSearchResults(
 				if (toCreate.length >= MAX_NEW_RELATIONSHIPS) break;
 				if (existingSet.has(`${result.chunkId}:${concept.id}`)) continue;
 
+				// Exact concept name match gets higher confidence (0.7) than partial (0.6)
+				const confidence = exactMatchIds.has(concept.id) ? 0.7 : 0.6;
+
 				toCreate.push({
 					sessionId,
 					sourceType: "chunk",
@@ -77,7 +87,7 @@ export async function amortiseSearchResults(
 					targetId: concept.id,
 					targetLabel: concept.name,
 					relationship: "related_to",
-					confidence: 0.6,
+					confidence,
 					createdBy: "amortised",
 				});
 			}
@@ -110,6 +120,15 @@ export async function amortiseSearchResults(
 	}
 }
 
+/** Parse aliases string into cleaned, validated alias list */
+function parseAliases(aliases: string | null): string[] {
+	if (!aliases) return [];
+	return aliases
+		.split(",")
+		.map((a) => a.trim())
+		.filter((a) => a.length >= MIN_CONCEPT_NAME_LENGTH);
+}
+
 export async function amortiseRead(
 	sessionId: string,
 	entities: Array<{ type: "chunk" | "resource"; id: string; label: string | null }>,
@@ -130,15 +149,8 @@ export async function amortiseRead(
 		const matchingConcepts = allConcepts.filter((c) => {
 			if (c.name.length < MIN_CONCEPT_NAME_LENGTH) return false;
 			if (text.includes(c.name.toLowerCase())) return true;
-			if (c.aliases) {
-				return c.aliases
-					.split(",")
-					.some(
-						(a) =>
-							a.trim().length >= MIN_CONCEPT_NAME_LENGTH && text.includes(a.trim().toLowerCase()),
-					);
-			}
-			return false;
+			const validAliases = parseAliases(c.aliases);
+			return validAliases.some((a) => text.includes(a.toLowerCase()));
 		});
 
 		if (matchingConcepts.length === 0) return;
@@ -167,9 +179,25 @@ export async function amortiseRead(
 
 		for (const entity of chunkEntities) {
 			if (toCreate.length >= MAX_NEW_RELATIONSHIPS) break;
+			const titleLower = (labelMap.get(entity.id) ?? "").toLowerCase();
+
 			for (const concept of matchingConcepts) {
 				if (toCreate.length >= MAX_NEW_RELATIONSHIPS) break;
 				if (existingSet.has(`${entity.id}:${concept.id}`)) continue;
+
+				// Determine confidence based on where the concept name appears:
+				// - Both title and content: 0.7 (strongest signal for read amortisation)
+				// - Title only: 0.65 (title mention is a strong signal)
+				// - Content only: 0.5 (baseline for read amortisation)
+				const nameLower = concept.name.toLowerCase();
+				const inTitle = titleLower.length > 0 && titleLower.includes(nameLower);
+				const inContent = text.includes(nameLower);
+				let confidence = 0.5;
+				if (inTitle && inContent) {
+					confidence = 0.7;
+				} else if (inTitle) {
+					confidence = 0.65;
+				}
 
 				toCreate.push({
 					sessionId,
@@ -180,7 +208,7 @@ export async function amortiseRead(
 					targetId: concept.id,
 					targetLabel: concept.name,
 					relationship: "related_to",
-					confidence: 0.5,
+					confidence,
 					createdBy: "amortised",
 				});
 			}

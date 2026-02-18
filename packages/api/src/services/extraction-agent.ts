@@ -374,14 +374,34 @@ ${fileList}
 ## Extraction Schema
 When calling submit_extraction, provide:
 - **concepts**: Key topics, theorems, definitions, methods. Each has: name (Title Case), description (brief), aliases (comma-separated, optional)
-- **file_concept_links**: How this resource relates to each concept. relationship: "covers"|"introduces"|"applies"|"references"|"proves". Include chunkTitle for the specific section.
-- **concept_concept_links**: Relationships between concepts. relationship: "prerequisite"|"related_to"|"extends"|"generalizes"|"special_case_of"|"contradicts"
+- **file_concept_links**: How this resource relates to each concept. Include chunkTitle for the specific section.
+  Relationship types:
+  - "introduces": The section presents this concept for the first time with definitions/derivations
+  - "covers": The section discusses this concept substantially (proofs, examples, analysis)
+  - "applies": The section uses this concept as a tool to solve problems or derive other results
+  - "references": The section briefly mentions this concept without substantial treatment
+  - "proves": The section contains a formal proof of this concept (theorem, lemma, proposition)
+- **concept_concept_links**: Relationships between concepts. Choose the MOST SPECIFIC type:
+  - "prerequisite": A must be understood before B. Use when there is a clear logical/mathematical dependency. Example: "Integration" is prerequisite for "Integration by Parts". Direction: source is the prerequisite, target depends on it.
+  - "extends": A builds upon B with additional structure or generality. Example: "Fourier Transform" extends "Fourier Series" (from discrete to continuous).
+  - "generalizes": A is a more general framework that includes B. Example: "Partial Differential Equation" generalizes "Heat Equation".
+  - "special_case_of": A is a specific instance of B. Example: "Laplace's Equation" is special_case_of "Poisson's Equation" (when f=0).
+  - "contradicts": A and B are mutually exclusive or represent opposing approaches.
+  - "related_to": LAST RESORT ONLY. Use only when the connection is real but none of the above types apply. If you're unsure between "prerequisite" and "related_to", prefer "prerequisite" — it's almost always more accurate for mathematical concepts.
+  IMPORTANT: Avoid defaulting to "related_to". For mathematical/scientific content, most connections are either prerequisites, specializations, or extensions. "related_to" should be rare.
 - **question_concept_links**: For past papers/problem sheets — which questions test which concepts. relationship: "tests"|"applies"|"requires"
 
 ## Rules
 - Use Title Case for all concept names
 - Reuse exact existing concept names when the same concept appears
-- Confidence (0-1) should reflect how strongly the relationship holds
+- Confidence scoring guide:
+  - 0.95-1.0: Explicitly stated relationship (e.g., "X requires Y", "X is a special case of Y when...")
+  - 0.85-0.94: Strongly implied by mathematical structure (e.g., a derivation clearly uses concept Y to derive X)
+  - 0.70-0.84: Clear conceptual connection requiring moderate inference
+  - 0.50-0.69: Tangential or weak connection
+  - Below 0.5: Do not create the relationship
+  For prerequisite relationships, bias toward higher confidence (0.8+) — if you've identified it as a prerequisite, it's usually a strong one.
+  For related_to relationships, confidence should typically be 0.6-0.8 since these are weaker connections by definition.
 - For question_concept_links, use the question label as it appears in the material (e.g. "Question 1", "Q1a", "Problem 3")
 - You MUST call submit_extraction before finishing — this is how your work is saved`;
 }

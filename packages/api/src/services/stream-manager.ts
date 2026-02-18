@@ -1,9 +1,9 @@
 import type { PrismaClient } from "@cramkit/shared";
 import { createLogger } from "@cramkit/shared";
 import { enqueueEnrichment } from "../lib/queue.js";
-import { generateConversationTitle } from "./title-generator.js";
 import type { ToolCallData } from "./cli-chat.js";
 import { LineBuffer } from "./line-buffer.js";
+import { generateConversationTitle } from "./title-generator.js";
 
 const log = createLogger("api");
 
