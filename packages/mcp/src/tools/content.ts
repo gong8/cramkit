@@ -15,17 +15,16 @@ interface RelRow {
 
 function extractConceptLinks(type: string, id: string, rows: RelRow[]) {
 	return rows
-		.filter((r) => {
-			if (r.sourceType === "concept") return r.targetType === type && r.targetId === id;
-			if (r.targetType === "concept") return r.sourceType === type && r.sourceId === id;
-			return false;
-		})
+		.filter(
+			(r) =>
+				(r.sourceType === "concept" && r.targetType === type && r.targetId === id) ||
+				(r.targetType === "concept" && r.sourceType === type && r.sourceId === id),
+		)
 		.map((r) => {
-			const fromSource = r.sourceType === "concept";
+			const isSrc = r.sourceType === "concept";
 			return {
-				conceptId: fromSource ? r.sourceId : r.targetId,
-				conceptName:
-					(fromSource ? r.sourceLabel : r.targetLabel) || (fromSource ? r.sourceId : r.targetId),
+				conceptId: isSrc ? r.sourceId : r.targetId,
+				conceptName: (isSrc ? r.sourceLabel : r.targetLabel) || (isSrc ? r.sourceId : r.targetId),
 				relationship: r.relationship,
 				confidence: r.confidence ?? 1,
 			};
@@ -49,39 +48,37 @@ export const contentTools = {
 			query: z.string().describe("Search query"),
 			limit: z.number().optional().describe("Max results (default 10)"),
 		}),
-		execute: async (params: { sessionId: string; query: string; limit?: number }) =>
-			apiClient.searchNotes(params.sessionId, params.query, params.limit),
+		execute: async (p: { sessionId: string; query: string; limit?: number }) =>
+			apiClient.searchNotes(p.sessionId, p.query, p.limit),
 	},
 
 	get_resource_content: {
 		description:
 			"Get the full processed markdown content of a resource. Returns the complete text from all files in the resource as a single string.",
 		parameters: z.object({ resourceId }),
-		execute: async ({ resourceId }: { resourceId: string }) =>
-			apiClient.getResourceContent(resourceId),
+		execute: async (p: { resourceId: string }) => apiClient.getResourceContent(p.resourceId),
 	},
 
 	get_resource_info: {
 		description:
 			"Get resource metadata including its files, chunks, and related concepts from the knowledge graph. Returns resource details, type, constituent files with roles, a list of chunk summaries, and relatedConcepts showing which concepts this resource covers.",
 		parameters: z.object({ resourceId }),
-		execute: async ({ resourceId }: { resourceId: string }) =>
-			fetchWithConcepts("resource", resourceId, () => apiClient.getResource(resourceId)),
+		execute: async (p: { resourceId: string }) =>
+			fetchWithConcepts("resource", p.resourceId, () => apiClient.getResource(p.resourceId)),
 	},
 
 	get_chunk: {
 		description:
 			"Get a specific chunk by ID. Returns the chunk content, title, nodeType, parent resource info, and relatedConcepts from the knowledge graph showing which concepts this chunk covers.",
 		parameters: z.object({ chunkId }),
-		execute: async ({ chunkId }: { chunkId: string }) =>
-			fetchWithConcepts("chunk", chunkId, () => apiClient.getChunk(chunkId)),
+		execute: async (p: { chunkId: string }) =>
+			fetchWithConcepts("chunk", p.chunkId, () => apiClient.getChunk(p.chunkId)),
 	},
 
 	get_resource_index: {
 		description:
 			"Get the hierarchical table of contents / tree structure of a resource. Shows section headings, node types (chapter, section, definition, theorem, proof, example, question), and depth. The tree spans all files in the resource. Use this to understand a resource's structure before diving into specific sections.",
 		parameters: z.object({ resourceId }),
-		execute: async ({ resourceId }: { resourceId: string }) =>
-			apiClient.getResourceTree(resourceId),
+		execute: async (p: { resourceId: string }) => apiClient.getResourceTree(p.resourceId),
 	},
 };

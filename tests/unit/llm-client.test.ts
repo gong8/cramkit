@@ -46,16 +46,12 @@ beforeEach(() => {
 	vi.clearAllMocks();
 });
 
-async function loadChatCompletion() {
-	const mod = await import("../../packages/api/src/services/llm-client.js");
-	return mod.chatCompletion;
-}
+const { chatCompletion } = await import("../../packages/api/src/services/llm-client.js");
 
 describe("chatCompletion", () => {
 	it("returns CLI stdout as response", async () => {
 		setupMockProcess("The answer is 42");
 
-		const chatCompletion = await loadChatCompletion();
 		const result = await chatCompletion([{ role: "user", content: "question" }]);
 
 		expect(result).toBe("The answer is 42");
@@ -64,7 +60,6 @@ describe("chatCompletion", () => {
 	it("passes correct CLI args", async () => {
 		setupMockProcess("ok");
 
-		const chatCompletion = await loadChatCompletion();
 		await chatCompletion([{ role: "user", content: "test" }]);
 
 		expect(mockSpawn).toHaveBeenCalledOnce();
@@ -83,7 +78,6 @@ describe("chatCompletion", () => {
 	it("uses minimal env vars", async () => {
 		setupMockProcess("ok");
 
-		const chatCompletion = await loadChatCompletion();
 		await chatCompletion([{ role: "user", content: "test" }]);
 
 		const spawnOptions = mockSpawn.mock.calls[0][2] as { env: Record<string, unknown> };
@@ -98,7 +92,6 @@ describe("chatCompletion", () => {
 	it("respects model option overrides", async () => {
 		setupMockProcess("ok");
 
-		const chatCompletion = await loadChatCompletion();
 		await chatCompletion([{ role: "user", content: "test" }], {
 			model: "claude-haiku-latest",
 			maxTokens: 2048,
@@ -114,8 +107,6 @@ describe("chatCompletion", () => {
 	it("throws on non-zero exit code", async () => {
 		setupMockProcess("", 1);
 
-		const chatCompletion = await loadChatCompletion();
-
 		await expect(chatCompletion([{ role: "user", content: "test" }])).rejects.toThrow(
 			/Claude CLI error/,
 		);
@@ -123,8 +114,6 @@ describe("chatCompletion", () => {
 
 	it("throws on empty response", async () => {
 		setupMockProcess("");
-
-		const chatCompletion = await loadChatCompletion();
 
 		await expect(chatCompletion([{ role: "user", content: "test" }])).rejects.toThrow(
 			"LLM returned empty response",
@@ -134,7 +123,6 @@ describe("chatCompletion", () => {
 	it("handles system messages via append-system-prompt-file", async () => {
 		setupMockProcess("ok");
 
-		const chatCompletion = await loadChatCompletion();
 		await chatCompletion([
 			{ role: "system", content: "You are helpful" },
 			{ role: "user", content: "Hi" },
@@ -148,7 +136,6 @@ describe("chatCompletion", () => {
 	it("strips null bytes from content", async () => {
 		setupMockProcess("ok");
 
-		const chatCompletion = await loadChatCompletion();
 		await chatCompletion([{ role: "user", content: "test\0value" }]);
 
 		const args = mockSpawn.mock.calls[0][1] as string[];

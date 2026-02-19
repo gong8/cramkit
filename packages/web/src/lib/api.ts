@@ -210,18 +210,25 @@ export function indexResource(sessionId: string, resourceId: string): Promise<vo
 	return post(`/graph/sessions/${sessionId}/index-resource`, { resourceId });
 }
 
+function indexAll(
+	sessionId: string,
+	options: { reindex?: boolean; thoroughness?: GraphThoroughness },
+): Promise<void> {
+	return post(`/graph/sessions/${sessionId}/index-all`, options);
+}
+
 export function indexAllResources(
 	sessionId: string,
 	thoroughness?: GraphThoroughness,
 ): Promise<void> {
-	return post(`/graph/sessions/${sessionId}/index-all`, thoroughness ? { thoroughness } : {});
+	return indexAll(sessionId, { thoroughness });
 }
 
 export function reindexAllResources(
 	sessionId: string,
 	thoroughness?: GraphThoroughness,
 ): Promise<void> {
-	return post(`/graph/sessions/${sessionId}/index-all`, { reindex: true, thoroughness });
+	return indexAll(sessionId, { reindex: true, thoroughness });
 }
 
 export function cancelIndexing(sessionId: string): Promise<void> {
@@ -284,7 +291,7 @@ export function exportSession(sessionId: string): Promise<void> {
 }
 
 export function importSession(file: File): Promise<ImportResult> {
-	const formData = new FormData();
-	formData.append("file", file);
-	return uploadFormData("/sessions/import", formData);
+	const fd = new FormData();
+	fd.append("file", file);
+	return uploadFormData("/sessions/import", fd);
 }

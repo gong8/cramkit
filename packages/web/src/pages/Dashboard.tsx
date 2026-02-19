@@ -1,17 +1,17 @@
 import { DeleteConfirmModal } from "@/components/dashboard/DeleteConfirmModal";
 import { SessionCard } from "@/components/dashboard/SessionCard";
-import { deleteSession, fetchSessions, importSession, updateSession } from "@/lib/api";
+import { useSessionImport } from "@/hooks/useSessionImport";
+import { deleteSession, fetchSessions, updateSession } from "@/lib/api";
 import { createLogger } from "@/lib/logger";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Upload } from "lucide-react";
-import { useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useState } from "react";
+import { Link } from "react-router-dom";
 
 const log = createLogger("web");
 
 export function Dashboard() {
 	const queryClient = useQueryClient();
-	const navigate = useNavigate();
 	const { data: sessions, isLoading } = useQuery({
 		queryKey: ["sessions"],
 		queryFn: () => {
@@ -20,32 +20,11 @@ export function Dashboard() {
 		},
 	});
 
-	const [isImporting, setIsImporting] = useState(false);
-	const [importError, setImportError] = useState<string | null>(null);
-	const fileInputRef = useRef<HTMLInputElement>(null);
+	const { fileInputRef, isImporting, importError, handleImport, dismissError, triggerFileInput } =
+		useSessionImport();
 
 	const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
-
-	const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-		const file = e.target.files?.[0];
-		if (!file) return;
-
-		setIsImporting(true);
-		setImportError(null);
-		log.info(`handleImport — file: ${file.name}`);
-		try {
-			const result = await importSession(file);
-			queryClient.invalidateQueries({ queryKey: ["sessions"] });
-			navigate(`/session/${result.sessionId}`);
-		} catch (err) {
-			log.error("handleImport — failed", err);
-			setImportError(err instanceof Error ? err.message : "Import failed");
-		} finally {
-			setIsImporting(false);
-			if (fileInputRef.current) fileInputRef.current.value = "";
-		}
-	};
 
 	const handleCommitEdit = async (id: string, field: "name" | "module", value: string) => {
 		const session = sessions?.find((s) => s.id === id);
@@ -97,7 +76,7 @@ export function Dashboard() {
 					/>
 					<button
 						type="button"
-						onClick={() => fileInputRef.current?.click()}
+						onClick={triggerFileInput}
 						disabled={isImporting}
 						className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
 					>
@@ -121,11 +100,7 @@ export function Dashboard() {
 				<div className="mb-4 flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
 					<AlertTriangle className="h-4 w-4 shrink-0" />
 					<span>{importError}</span>
-					<button
-						type="button"
-						onClick={() => setImportError(null)}
-						className="ml-auto text-xs hover:underline"
-					>
+					<button type="button" onClick={dismissError} className="ml-auto text-xs hover:underline">
 						Dismiss
 					</button>
 				</div>

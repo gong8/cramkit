@@ -356,26 +356,19 @@ function createStreamParser(emitSSE: SSEEmitter) {
 		emitSSE("tool_call_args", JSON.stringify({ toolCallId: tc.id, toolName: tc.name, args }));
 	}
 
-	function processStreamEvent(event: Record<string, unknown>): void {
+	function processEvent(event: Record<string, unknown>): void {
 		const index = event.index as number;
-		switch (event.type) {
-			case "content_block_start": {
-				const block = event.content_block as Record<string, unknown> | undefined;
-				if (block) handleBlockStart(index, block);
-				break;
-			}
-			case "content_block_delta": {
-				const delta = event.delta as Record<string, unknown> | undefined;
-				if (delta) handleBlockDelta(index, delta);
-				break;
-			}
-			case "content_block_stop":
-				handleBlockStop(index);
-				break;
-			case "message_start":
-				emitUserToolResults(event, emitSSE);
-				break;
-		}
+		const block =
+			event.type === "content_block_start"
+				? (event.content_block as Record<string, unknown>)
+				: undefined;
+		const delta =
+			event.type === "content_block_delta" ? (event.delta as Record<string, unknown>) : undefined;
+
+		if (block) handleBlockStart(index, block);
+		else if (delta) handleBlockDelta(index, delta);
+		else if (event.type === "content_block_stop") handleBlockStop(index);
+		else if (event.type === "message_start") emitUserToolResults(event, emitSSE);
 	}
 
 	return {
@@ -386,7 +379,7 @@ function createStreamParser(emitSSE: SSEEmitter) {
 			}
 			if (msg.type !== "stream_event") return;
 			const event = msg.event as Record<string, unknown> | undefined;
-			if (event) processStreamEvent(event);
+			if (event) processEvent(event);
 		},
 	};
 }
@@ -529,8 +522,15 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 
 	return new ReadableStream({
 		async start(controller) {
-			const emitSSE: SSEEmitter = (event, data) => {
+			let closed = false;
+			const emit: SSEEmitter = (event, data) => {
+				if (closed) return;
 				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+			};
+			const close = () => {
+				if (closed) return;
+				closed = true;
+				controller.close();
 			};
 
 			const { invocationDir, args, model } = await prepareInvocation(options);
@@ -545,30 +545,16 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : "Unknown spawn error";
 				log.error(`cli-chat spawn failed: ${msg}`);
-				emitSSE("error", JSON.stringify({ error: msg }));
-				emitSSE("done", "[DONE]");
-				controller.close();
+				emit("error", JSON.stringify({ error: msg }));
+				emit("done", "[DONE]");
+				close();
 				return;
 			}
 
-			let controllerClosed = false;
-			const safeEmitSSE: SSEEmitter = (event, data) => {
-				if (controllerClosed) return;
-				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
-			};
-
-			const closeController = () => {
-				if (controllerClosed) return;
-				controllerClosed = true;
-				controller.close();
-			};
-
-			const parser = createStreamParser(safeEmitSSE);
-
-			proc.on("close", closeController);
-			proc.on("error", closeController);
-
-			wireProcessLifecycle(proc, safeEmitSSE, parser, startMs, invocationDir, options.signal);
+			const parser = createStreamParser(emit);
+			proc.on("close", close);
+			proc.on("error", close);
+			wireProcessLifecycle(proc, emit, parser, startMs, invocationDir, options.signal);
 		},
 	});
 }

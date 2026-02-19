@@ -9,10 +9,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 	const response = await fetch(`${API_URL}${path}`, {
 		...options,
-		headers: {
-			"Content-Type": "application/json",
-			...options?.headers,
-		},
+		headers: { "Content-Type": "application/json", ...options?.headers },
 	});
 
 	if (!response.ok) {
@@ -25,69 +22,47 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 	return response.json() as Promise<T>;
 }
 
+const get = (path: string) => request<unknown>(path);
+const getAll = (path: string) => request<unknown[]>(path);
+const post = (path: string, data: unknown) =>
+	request<unknown>(path, { method: "POST", body: JSON.stringify(data) });
+
 export const apiClient = {
-	// Sessions
-	listSessions: () => request<unknown[]>("/sessions"),
+	listSessions: () => getAll("/sessions"),
+	getSession: (id: string) => get(`/sessions/${id}`),
 
-	getSession: (sessionId: string) => request<unknown>(`/sessions/${sessionId}`),
+	listResources: (sid: string) => getAll(`/resources/sessions/${sid}/resources`),
+	getResource: (id: string) => get(`/resources/${id}`),
+	getResourceContent: (id: string) => get(`/resources/${id}/content`),
+	getResourceTree: (id: string) => get(`/resources/${id}/tree`),
 
-	// Resources
-	listResources: (sessionId: string) =>
-		request<unknown[]>(`/resources/sessions/${sessionId}/resources`),
+	getChunk: (id: string) => get(`/chunks/${id}`),
 
-	getResource: (resourceId: string) => request<unknown>(`/resources/${resourceId}`),
+	searchNotes: (sid: string, query: string, limit?: number) =>
+		getAll(`/search/sessions/${sid}/search?q=${encodeURIComponent(query)}&limit=${limit || 10}`),
 
-	getResourceContent: (resourceId: string) => request<unknown>(`/resources/${resourceId}/content`),
+	getRelationships: (sid: string) => getAll(`/relationships/sessions/${sid}/relationships`),
+	createRelationship: (sid: string, data: unknown) =>
+		post(`/relationships/sessions/${sid}/relationships`, data),
 
-	getResourceTree: (resourceId: string) => request<unknown>(`/resources/${resourceId}/tree`),
-
-	// Chunks
-	getChunk: (chunkId: string) => request<unknown>(`/chunks/${chunkId}`),
-
-	// Search
-	searchNotes: (sessionId: string, query: string, limit?: number) =>
-		request<unknown[]>(
-			`/search/sessions/${sessionId}/search?q=${encodeURIComponent(query)}&limit=${limit || 10}`,
-		),
-
-	// Relationships
-	getRelationships: (sessionId: string) =>
-		request<unknown[]>(`/relationships/sessions/${sessionId}/relationships`),
-
-	createRelationship: (sessionId: string, data: unknown) =>
-		request<unknown>(`/relationships/sessions/${sessionId}/relationships`, {
-			method: "POST",
-			body: JSON.stringify(data),
-		}),
-
-	// Graph
 	getRelated: (type: string, id: string, relationship?: string) =>
-		request<unknown[]>(
+		getAll(
 			`/graph/related?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}${relationship ? `&relationship=${encodeURIComponent(relationship)}` : ""}`,
 		),
+	listConcepts: (sid: string) => getAll(`/graph/sessions/${sid}/concepts`),
+	getConcept: (id: string) => get(`/graph/concepts/${id}`),
 
-	listConcepts: (sessionId: string) => request<unknown[]>(`/graph/sessions/${sessionId}/concepts`),
+	listPaperQuestions: (id: string) => getAll(`/questions/resources/${id}/questions`),
+	getPaperQuestion: (id: string) => get(`/questions/${id}`),
+	listSessionQuestions: (sid: string) => getAll(`/questions/sessions/${sid}/questions`),
 
-	getConcept: (conceptId: string) => request<unknown>(`/graph/concepts/${conceptId}`),
+	getResourceMetadata: (id: string) => get(`/resources/${id}/metadata`),
 
-	// Questions
-	listPaperQuestions: (resourceId: string) =>
-		request<unknown[]>(`/questions/resources/${resourceId}/questions`),
-
-	getPaperQuestion: (questionId: string) => request<unknown>(`/questions/${questionId}`),
-
-	listSessionQuestions: (sessionId: string) =>
-		request<unknown[]>(`/questions/sessions/${sessionId}/questions`),
-
-	// Resource metadata
-	getResourceMetadata: (resourceId: string) =>
-		request<unknown>(`/resources/${resourceId}/metadata`),
-
-	getGraphLog: (sessionId: string, source?: string, limit?: number) => {
+	getGraphLog: (sid: string, source?: string, limit?: number) => {
 		const params = new URLSearchParams();
 		if (source) params.set("source", source);
 		if (limit) params.set("limit", String(limit));
 		const qs = params.toString();
-		return request<unknown[]>(`/graph/sessions/${sessionId}/graph-log${qs ? `?${qs}` : ""}`);
+		return getAll(`/graph/sessions/${sid}/graph-log${qs ? `?${qs}` : ""}`);
 	},
 };

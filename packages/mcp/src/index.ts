@@ -44,42 +44,34 @@ log.info(
 		` file=${existsSync(FLAG_FILE)})`,
 );
 
-function registerTools(
-	tools: Record<
-		string,
-		{
-			description: string;
-			parameters: { shape: Record<string, unknown> };
-			execute: (params: never) => Promise<unknown>;
-		}
-	>,
-) {
+type ToolDef = {
+	description: string;
+	parameters: { shape: Record<string, unknown> };
+	execute: (params: never) => Promise<unknown>;
+};
+
+function registerTools(tools: Record<string, ToolDef>) {
 	for (const [name, tool] of Object.entries(tools)) {
 		if (forceGraphReads && BLOCKED_TOOLS.has(name)) {
 			log.info(`--force-graph-reads: skipping registration of "${name}"`);
 			continue;
 		}
 
-		server.tool(
-			name,
-			tool.description,
-			tool.parameters.shape,
-			async (params: Record<string, unknown>) => {
-				log.info(`tool called: ${name}`, params);
-				try {
-					const result = await tool.execute(params as never);
-					const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-					log.info(`tool completed: ${name}`);
-					return { content: [{ type: "text" as const, text }] };
-				} catch (error) {
-					log.error(`tool failed: ${name}`, error);
-					return {
-						content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }],
-						isError: true,
-					};
-				}
-			},
-		);
+		server.tool(name, tool.description, tool.parameters.shape, async (params) => {
+			log.info(`tool called: ${name}`, params);
+			try {
+				const result = await tool.execute(params as never);
+				const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+				log.info(`tool completed: ${name}`);
+				return { content: [{ type: "text" as const, text }] };
+			} catch (error) {
+				log.error(`tool failed: ${name}`, error);
+				return {
+					content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }],
+					isError: true,
+				};
+			}
+		});
 	}
 }
 

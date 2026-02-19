@@ -11,6 +11,35 @@ interface SearchResult {
 	resourceId: string;
 }
 
+async function persistAmortisedRelationships(
+	sessionId: string,
+	toCreate: Prisma.RelationshipCreateManyInput[],
+	startTime: number,
+	logDetails: Record<string, unknown>,
+	label: string,
+): Promise<void> {
+	if (toCreate.length === 0) return;
+
+	const db = getDb();
+	await db.relationship.createMany({ data: toCreate });
+	log.info(`${label} — created ${toCreate.length} new relationships`);
+
+	try {
+		await db.graphLog.create({
+			data: {
+				sessionId,
+				source: "amortiser",
+				action: "amortise",
+				relationshipsCreated: toCreate.length,
+				durationMs: Date.now() - startTime,
+				details: JSON.stringify(logDetails),
+			},
+		});
+	} catch (e) {
+		log.warn(`${label} — failed to write GraphLog`, e);
+	}
+}
+
 export async function amortiseSearchResults(
 	sessionId: string,
 	query: string,
@@ -93,28 +122,13 @@ export async function amortiseSearchResults(
 			}
 		}
 
-		if (toCreate.length > 0) {
-			await db.relationship.createMany({ data: toCreate });
-			log.info(
-				`amortiseSearchResults — created ${toCreate.length} new relationships` +
-					` for query "${query}"`,
-			);
-
-			try {
-				await db.graphLog.create({
-					data: {
-						sessionId,
-						source: "amortiser",
-						action: "amortise",
-						relationshipsCreated: toCreate.length,
-						durationMs: Date.now() - amortiseStart,
-						details: JSON.stringify({ query }),
-					},
-				});
-			} catch (e) {
-				log.warn("amortiseSearchResults — failed to write GraphLog", e);
-			}
-		}
+		await persistAmortisedRelationships(
+			sessionId,
+			toCreate,
+			amortiseStart,
+			{ query },
+			"amortiseSearchResults",
+		);
 	} catch (error) {
 		log.error("amortiseSearchResults — failed", error);
 	}
@@ -214,27 +228,13 @@ export async function amortiseRead(
 			}
 		}
 
-		if (toCreate.length > 0) {
-			await db.relationship.createMany({ data: toCreate });
-			log.info(`amortiseRead — created ${toCreate.length} new relationships`);
-
-			try {
-				await db.graphLog.create({
-					data: {
-						sessionId,
-						source: "amortiser",
-						action: "amortise",
-						relationshipsCreated: toCreate.length,
-						durationMs: Date.now() - amortiseStart,
-						details: JSON.stringify({
-							matchText: matchText.slice(0, 200),
-						}),
-					},
-				});
-			} catch (e) {
-				log.warn("amortiseRead — failed to write GraphLog", e);
-			}
-		}
+		await persistAmortisedRelationships(
+			sessionId,
+			toCreate,
+			amortiseStart,
+			{ matchText: matchText.slice(0, 200) },
+			"amortiseRead",
+		);
 	} catch (error) {
 		log.error("amortiseRead — failed", error);
 	}

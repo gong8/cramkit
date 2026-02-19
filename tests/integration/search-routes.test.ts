@@ -1,4 +1,10 @@
-import { createRouteApp, seedSearchData, useTestDb } from "../fixtures/helpers.js";
+import {
+	createRouteApp,
+	findAmortisedRels,
+	seedSearchData,
+	seedSessionWithChunks,
+	useTestDb,
+} from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -74,35 +80,18 @@ describe("search routes", () => {
 
 		await new Promise((resolve) => setTimeout(resolve, 200));
 
-		const amortisedRels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const amortisedRels = await findAmortisedRels(db, session.id);
 
 		expect(amortisedRels.length).toBeGreaterThan(0);
 	});
 
 	it("respects limit across merged results", async () => {
-		const session = await db.session.create({ data: { name: "Limit Test" } });
-		const resource = await db.resource.create({
-			data: {
-				sessionId: session.id,
-				name: "Big Resource",
-				type: "LECTURE_NOTES",
-				isIndexed: true,
-			},
+		const { session } = await seedSessionWithChunks(db, {
+			name: "Limit Test",
+			chunkCount: 10,
 		});
 
-		for (let i = 0; i < 10; i++) {
-			await db.chunk.create({
-				data: {
-					resourceId: resource.id,
-					index: i,
-					content: `PDE content section ${i}`,
-				},
-			});
-		}
-
-		const res = await app.request(`/search/sessions/${session.id}/search?q=PDE&limit=3`);
+		const res = await app.request(`/search/sessions/${session.id}/search?q=Chunk&limit=3`);
 
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, unknown>[];

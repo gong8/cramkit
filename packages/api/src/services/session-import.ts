@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	type ImportStats,
 	conceptExportSchema,
 	conversationExportSchema,
 	createLogger,
@@ -11,8 +12,8 @@ import {
 	relationshipExportSchema,
 	resourceExportSchema,
 } from "@cramkit/shared";
-import type { FileRole, ImportStats } from "@cramkit/shared";
 import JSZip from "jszip";
+import type { z } from "zod";
 
 const log = createLogger("import");
 
@@ -27,9 +28,7 @@ function getAttachmentsDir(): string {
 	return join(DATA_DIR, "chat-attachments");
 }
 
-async function ensureDir(dir: string): Promise<void> {
-	await mkdir(dir, { recursive: true });
-}
+// ── Zip helpers ──────────────────────────────────────────────────────────────
 
 async function readZipJson(zip: JSZip, path: string, optional: true): Promise<unknown | null>;
 async function readZipJson(zip: JSZip, path: string, optional?: false): Promise<unknown>;
@@ -48,6 +47,16 @@ async function readZipBinary(zip: JSZip, path: string): Promise<Buffer | null> {
 	if (!file) return null;
 	return file.async("nodebuffer");
 }
+
+async function writeZipFileToDisk(zip: JSZip, zipPath: string, destPath: string): Promise<boolean> {
+	const content = await readZipBinary(zip, zipPath);
+	if (!content) return false;
+	await mkdir(dirname(destPath), { recursive: true });
+	await writeFile(destPath, content);
+	return true;
+}
+
+// ── Import context ───────────────────────────────────────────────────────────
 
 interface IdMaps {
 	resource: Map<string, string>;
@@ -95,6 +104,11 @@ function createContext(zip: JSZip, db: ReturnType<typeof getDb>, sessionId: stri
 	};
 }
 
+function remapId(maps: IdMaps, mapKey: keyof IdMaps, oldId?: string | null): string | null {
+	if (!oldId) return null;
+	return maps[mapKey].get(oldId) ?? null;
+}
+
 const ENTITY_MAP_KEYS: Record<string, keyof IdMaps> = {
 	resource: "resource",
 	chunk: "chunk",
@@ -111,76 +125,60 @@ function remapEntityId(entityType: string, oldId: string, maps: IdMaps): string 
 	return maps[key].get(oldId) ?? null;
 }
 
-async function writeZipFileToDisk(zip: JSZip, zipPath: string, destPath: string): Promise<boolean> {
-	const content = await readZipBinary(zip, zipPath);
-	if (!content) return false;
-	await ensureDir(dirname(destPath));
-	await writeFile(destPath, content);
-	return true;
-}
+// ── Schema types ─────────────────────────────────────────────────────────────
 
-async function restoreProcessedFile(
-	ctx: ImportContext,
-	oldResourceId: string,
-	processedPath: string,
-	newResourceDir: string,
-): Promise<string | null> {
-	const processedFilename = processedPath.split("/").pop() ?? processedPath;
-	const diskPath = join(newResourceDir, "processed", processedFilename);
-	const wrote = await writeZipFileToDisk(
-		ctx.zip,
-		`resources/${oldResourceId}/${processedPath}`,
-		diskPath,
-	);
-	return wrote ? diskPath : null;
-}
+type ResourceExport = z.infer<typeof resourceExportSchema>;
+type FileEntry = ResourceExport["files"][number];
+type ChunkEntry = ResourceExport["chunks"][number];
+
+// ── Resource import ──────────────────────────────────────────────────────────
 
 async function importResourceFiles(
 	ctx: ImportContext,
 	oldResourceId: string,
-	files: Array<{
-		id: string;
-		filename: string;
-		role: FileRole;
-		processedPath?: string | null;
-		pageCount?: number | null;
-		fileSize?: number | null;
-	}>,
+	files: FileEntry[],
 	newResourceId: string,
 	newResourceDir: string,
 ): Promise<void> {
-	for (const fileEntry of files) {
-		const rawDest = join(newResourceDir, "raw", fileEntry.filename);
+	for (const f of files) {
+		const rawDest = join(newResourceDir, "raw", f.filename);
 		const wrote = await writeZipFileToDisk(
 			ctx.zip,
-			`resources/${oldResourceId}/raw/${fileEntry.filename}`,
+			`resources/${oldResourceId}/raw/${f.filename}`,
 			rawDest,
 		);
 		if (!wrote) {
-			log.warn(`importSession — missing raw file for "${fileEntry.filename}", skipping`);
+			log.warn(`importSession — missing raw file for "${f.filename}", skipping`);
 			continue;
 		}
 
-		const processedDiskPath = fileEntry.processedPath
-			? await restoreProcessedFile(ctx, oldResourceId, fileEntry.processedPath, newResourceDir)
-			: null;
-
-		if (fileEntry.processedPath && !processedDiskPath) {
-			log.warn(`importSession — missing processed file for "${fileEntry.filename}"`);
+		let processedDiskPath: string | null = null;
+		if (f.processedPath) {
+			const processedFilename = f.processedPath.split("/").pop() ?? f.processedPath;
+			const diskPath = join(newResourceDir, "processed", processedFilename);
+			const wroteProcessed = await writeZipFileToDisk(
+				ctx.zip,
+				`resources/${oldResourceId}/${f.processedPath}`,
+				diskPath,
+			);
+			processedDiskPath = wroteProcessed ? diskPath : null;
+			if (!wroteProcessed) {
+				log.warn(`importSession — missing processed file for "${f.filename}"`);
+			}
 		}
 
 		const file = await ctx.db.file.create({
 			data: {
 				resourceId: newResourceId,
-				filename: fileEntry.filename,
-				role: fileEntry.role,
+				filename: f.filename,
+				role: f.role,
 				rawPath: rawDest,
 				processedPath: processedDiskPath,
-				pageCount: fileEntry.pageCount ?? null,
-				fileSize: fileEntry.fileSize ?? null,
+				pageCount: f.pageCount ?? null,
+				fileSize: f.fileSize ?? null,
 			},
 		});
-		ctx.maps.file.set(fileEntry.id, file.id);
+		ctx.maps.file.set(f.id, file.id);
 		ctx.stats.fileCount++;
 	}
 }
@@ -196,44 +194,23 @@ async function copyTreeDirectory(
 	);
 	for (const treePath of treeFiles) {
 		const relativePath = treePath.slice(treePrefix.length);
-		const destPath = join(newResourceDir, "tree", relativePath);
-		await writeZipFileToDisk(zip, treePath, destPath);
+		await writeZipFileToDisk(zip, treePath, join(newResourceDir, "tree", relativePath));
 	}
 }
 
 async function importResourceChunks(
 	ctx: ImportContext,
-	chunks: Array<{
-		id: string;
-		sourceFileId?: string | null;
-		parentId?: string | null;
-		index: number;
-		depth: number;
-		nodeType: string;
-		slug?: string | null;
-		diskPath?: string | null;
-		title?: string | null;
-		content: string;
-		startPage?: number | null;
-		endPage?: number | null;
-		keywords?: string | null;
-	}>,
+	chunks: ChunkEntry[],
 	newResourceId: string,
 ): Promise<void> {
 	const sorted = [...chunks].sort((a, b) => a.depth - b.depth || a.index - b.index);
 
-	const remap = (map: Map<string, string>, id?: string | null) =>
-		id ? (map.get(id) ?? null) : null;
-
 	for (const entry of sorted) {
-		const newSourceFileId = remap(ctx.maps.file, entry.sourceFileId);
-		const newParentId = remap(ctx.maps.chunk, entry.parentId);
-
 		const chunk = await ctx.db.chunk.create({
 			data: {
 				resourceId: newResourceId,
-				sourceFileId: newSourceFileId,
-				parentId: newParentId,
+				sourceFileId: remapId(ctx.maps, "file", entry.sourceFileId),
+				parentId: remapId(ctx.maps, "chunk", entry.parentId),
 				index: entry.index,
 				depth: entry.depth,
 				nodeType: entry.nodeType,
@@ -252,87 +229,88 @@ async function importResourceChunks(
 	}
 }
 
-async function importResources(ctx: ImportContext, resourceIds: string[]): Promise<void> {
-	for (const oldResourceId of resourceIds) {
-		const rawResource = await readZipJson(
-			ctx.zip,
-			`resources/${oldResourceId}/resource.json`,
-			true,
-		);
-		if (!rawResource) {
-			log.warn(`importSession — missing resource ${oldResourceId}, skipping`);
-			continue;
-		}
+async function importQuestions(
+	ctx: ImportContext,
+	oldResourceId: string,
+	newResourceId: string,
+): Promise<void> {
+	const raw = await readZipJson(ctx.zip, `resources/${oldResourceId}/questions.json`, true);
+	if (!raw) return;
 
-		const resourceData = resourceExportSchema.parse(rawResource);
-
-		const resource = await ctx.db.resource.create({
+	const questions = paperQuestionExportSchema.array().parse(raw);
+	for (const q of questions) {
+		const pq = await ctx.db.paperQuestion.create({
 			data: {
+				resourceId: newResourceId,
 				sessionId: ctx.sessionId,
-				name: resourceData.name,
-				type: resourceData.type,
-				label: resourceData.label ?? null,
-				splitMode: resourceData.splitMode,
-				isIndexed: resourceData.isIndexed,
-				isGraphIndexed: resourceData.isGraphIndexed,
-				metadata: resourceData.metadata ?? null,
-				isMetaIndexed: resourceData.isMetaIndexed ?? false,
-				metaIndexDurationMs: resourceData.metaIndexDurationMs ?? null,
+				chunkId: remapId(ctx.maps, "chunk", q.chunkId),
+				questionNumber: q.questionNumber,
+				parentNumber: q.parentNumber ?? null,
+				marks: q.marks ?? null,
+				questionType: q.questionType ?? null,
+				commandWords: q.commandWords ?? null,
+				content: q.content,
+				markSchemeText: q.markSchemeText ?? null,
+				solutionText: q.solutionText ?? null,
+				metadata: q.metadata ?? null,
 			},
 		});
-		ctx.maps.resource.set(oldResourceId, resource.id);
-		ctx.stats.resourceCount++;
+		ctx.maps.question.set(q.id, pq.id);
+	}
+	log.debug(`importSession — imported ${questions.length} questions for resource ${newResourceId}`);
+}
 
-		const newResourceDir = getResourceDir(ctx.sessionId, resource.id);
+async function importSingleResource(ctx: ImportContext, oldResourceId: string): Promise<void> {
+	const raw = await readZipJson(ctx.zip, `resources/${oldResourceId}/resource.json`, true);
+	if (!raw) {
+		log.warn(`importSession — missing resource ${oldResourceId}, skipping`);
+		return;
+	}
 
-		await importResourceFiles(ctx, oldResourceId, resourceData.files, resource.id, newResourceDir);
-		await copyTreeDirectory(ctx.zip, oldResourceId, newResourceDir);
-		await importResourceChunks(ctx, resourceData.chunks, resource.id);
+	const data = resourceExportSchema.parse(raw);
 
-		// Import PaperQuestion records
-		const rawQuestions = await readZipJson(
-			ctx.zip,
-			`resources/${oldResourceId}/questions.json`,
-			true,
-		);
-		if (rawQuestions) {
-			const questions = paperQuestionExportSchema.array().parse(rawQuestions);
-			for (const q of questions) {
-				const newChunkId = q.chunkId ? (ctx.maps.chunk.get(q.chunkId) ?? null) : null;
-				const pq = await ctx.db.paperQuestion.create({
-					data: {
-						resourceId: resource.id,
-						sessionId: ctx.sessionId,
-						chunkId: newChunkId,
-						questionNumber: q.questionNumber,
-						parentNumber: q.parentNumber ?? null,
-						marks: q.marks ?? null,
-						questionType: q.questionType ?? null,
-						commandWords: q.commandWords ?? null,
-						content: q.content,
-						markSchemeText: q.markSchemeText ?? null,
-						solutionText: q.solutionText ?? null,
-						metadata: q.metadata ?? null,
-					},
-				});
-				ctx.maps.question.set(q.id, pq.id);
-			}
-			log.debug(
-				`importSession — imported ${questions.length} questions for "${resourceData.name}"`,
-			);
-		}
+	const resource = await ctx.db.resource.create({
+		data: {
+			sessionId: ctx.sessionId,
+			name: data.name,
+			type: data.type,
+			label: data.label ?? null,
+			splitMode: data.splitMode,
+			isIndexed: data.isIndexed,
+			isGraphIndexed: data.isGraphIndexed,
+			metadata: data.metadata ?? null,
+			isMetaIndexed: data.isMetaIndexed ?? false,
+			metaIndexDurationMs: data.metaIndexDurationMs ?? null,
+		},
+	});
+	ctx.maps.resource.set(oldResourceId, resource.id);
+	ctx.stats.resourceCount++;
 
-		log.debug(
-			`importSession — imported resource "${resourceData.name}" (${resourceData.files.length} files, ${resourceData.chunks.length} chunks)`,
-		);
+	const newResourceDir = getResourceDir(ctx.sessionId, resource.id);
+
+	await importResourceFiles(ctx, oldResourceId, data.files, resource.id, newResourceDir);
+	await copyTreeDirectory(ctx.zip, oldResourceId, newResourceDir);
+	await importResourceChunks(ctx, data.chunks, resource.id);
+	await importQuestions(ctx, oldResourceId, resource.id);
+
+	log.debug(
+		`importSession — imported resource "${data.name}" (${data.files.length} files, ${data.chunks.length} chunks)`,
+	);
+}
+
+async function importResources(ctx: ImportContext, resourceIds: string[]): Promise<void> {
+	for (const id of resourceIds) {
+		await importSingleResource(ctx, id);
 	}
 }
 
-async function importConcepts(ctx: ImportContext): Promise<void> {
-	const rawConcepts = await readZipJson(ctx.zip, "concepts.json", true);
-	if (!rawConcepts) return;
+// ── Knowledge graph import ───────────────────────────────────────────────────
 
-	const concepts = conceptExportSchema.array().parse(rawConcepts);
+async function importConcepts(ctx: ImportContext): Promise<void> {
+	const raw = await readZipJson(ctx.zip, "concepts.json", true);
+	if (!raw) return;
+
+	const concepts = conceptExportSchema.array().parse(raw);
 
 	for (const entry of concepts) {
 		const concept = await ctx.db.concept.create({
@@ -355,10 +333,10 @@ async function importConcepts(ctx: ImportContext): Promise<void> {
 }
 
 async function importRelationships(ctx: ImportContext): Promise<void> {
-	const rawRelationships = await readZipJson(ctx.zip, "relationships.json", true);
-	if (!rawRelationships) return;
+	const raw = await readZipJson(ctx.zip, "relationships.json", true);
+	if (!raw) return;
 
-	const relationships = relationshipExportSchema.array().parse(rawRelationships);
+	const relationships = relationshipExportSchema.array().parse(raw);
 
 	for (const entry of relationships) {
 		const newSourceId = remapEntityId(entry.sourceType, entry.sourceId, ctx.maps);
@@ -391,13 +369,17 @@ async function importRelationships(ctx: ImportContext): Promise<void> {
 	log.debug(`importSession — imported ${ctx.stats.relationshipCount} relationships`);
 }
 
+// ── Conversation import ──────────────────────────────────────────────────────
+
 async function importMessageAttachments(
 	ctx: ImportContext,
-	attachments: Array<{ id: string; filename: string; contentType: string; fileSize: number }>,
+	attachments: z.infer<typeof conversationExportSchema>["messages"][number]["attachments"],
 	messageId: string,
 ): Promise<void> {
+	if (!attachments?.length) return;
+
 	const attachmentsDir = getAttachmentsDir();
-	await ensureDir(attachmentsDir);
+	await mkdir(attachmentsDir, { recursive: true });
 
 	for (const att of attachments) {
 		const ext = extname(att.filename) || ".bin";
@@ -425,13 +407,13 @@ async function importMessageAttachments(
 
 async function importConversations(ctx: ImportContext, conversationIds: string[]): Promise<void> {
 	for (const oldConvId of conversationIds) {
-		const rawConv = await readZipJson(ctx.zip, `conversations/${oldConvId}.json`, true);
-		if (!rawConv) {
+		const raw = await readZipJson(ctx.zip, `conversations/${oldConvId}.json`, true);
+		if (!raw) {
 			log.warn(`importSession — missing conversation ${oldConvId}, skipping`);
 			continue;
 		}
 
-		const convData = conversationExportSchema.parse(rawConv);
+		const convData = conversationExportSchema.parse(raw);
 
 		const conversation = await ctx.db.conversation.create({
 			data: { sessionId: ctx.sessionId, title: convData.title },
@@ -451,9 +433,7 @@ async function importConversations(ctx: ImportContext, conversationIds: string[]
 			ctx.maps.message.set(msgEntry.id, message.id);
 			ctx.stats.messageCount++;
 
-			if (msgEntry.attachments?.length) {
-				await importMessageAttachments(ctx, msgEntry.attachments, message.id);
-			}
+			await importMessageAttachments(ctx, msgEntry.attachments, message.id);
 		}
 
 		log.debug(
@@ -461,6 +441,8 @@ async function importConversations(ctx: ImportContext, conversationIds: string[]
 		);
 	}
 }
+
+// ── Main entry point ─────────────────────────────────────────────────────────
 
 /**
  * Import a session from a .cramkit.zip archive buffer.

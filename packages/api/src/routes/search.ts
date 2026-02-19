@@ -176,64 +176,47 @@ searchRoutes.get("/sessions/:sessionId/search", async (c) => {
 		}),
 	]);
 
-	// Convert PaperQuestion matches into ContentResult format
-	const questionContentResults: ContentResult[] = questionResults.map((q) => ({
-		chunkId: q.chunkId ?? q.id,
-		resourceId: q.resource.id,
-		resourceName: q.resource.name,
-		resourceType: q.resource.type,
-		title: `Q${q.questionNumber}${q.marks ? ` [${q.marks} marks]` : ""}`,
-		content: q.content,
-		source: "content" as const,
-		score: 2,
-		keywords: [],
-	}));
-
-	// Convert Concept content matches into ContentResult format
-	const conceptContentResults: ContentResult[] = conceptResults
-		.filter((c) => c.content)
-		.map((c) => ({
-			chunkId: c.id,
-			resourceId: "",
-			resourceName: "",
-			resourceType: "",
-			title: `${c.name}${c.contentType ? ` (${c.contentType})` : ""}`,
-			content: c.content as string,
-			source: "graph" as const,
-			score: 3,
-			keywords: [],
-			relatedConcepts: [{ name: c.name, relationship: c.contentType ?? "defines" }],
-		}));
-
 	const allResults = buildContentResults(contentChunks, graphResults, queryTerms, parsed.data.q);
 
-	// Merge additional results and re-score
-	for (const qr of questionContentResults) {
-		const { score, matchedKeywords } = scoreChunk(
-			{ title: qr.title, content: qr.content, keywords: null, nodeType: "question" },
-			queryTerms,
-			parsed.data.q,
-			false,
-		);
-		qr.score += score;
-		qr.keywords = matchedKeywords;
-		allResults.push(qr);
-	}
-	for (const cr of conceptContentResults) {
-		const { score, matchedKeywords } = scoreChunk(
-			{
-				title: cr.title,
-				content: cr.content,
-				keywords: null,
+	// Merge question and concept matches with scoring
+	const extraResults: Array<ContentResult & { nodeType: string; isGraph: boolean }> = [
+		...questionResults.map((q) => ({
+			chunkId: q.chunkId ?? q.id,
+			resourceId: q.resource.id,
+			resourceName: q.resource.name,
+			resourceType: q.resource.type,
+			title: `Q${q.questionNumber}${q.marks ? ` [${q.marks} marks]` : ""}`,
+			content: q.content,
+			source: "content" as const,
+			score: 2,
+			keywords: [] as string[],
+			nodeType: "question",
+			isGraph: false,
+		})),
+		...conceptResults
+			.filter((c) => c.content)
+			.map((c) => ({
+				chunkId: c.id,
+				resourceId: "",
+				resourceName: "",
+				resourceType: "",
+				title: `${c.name}${c.contentType ? ` (${c.contentType})` : ""}`,
+				content: c.content as string,
+				source: "graph" as const,
+				score: 3,
+				keywords: [] as string[],
+				relatedConcepts: [{ name: c.name, relationship: c.contentType ?? "defines" }],
 				nodeType: "definition",
-			},
-			queryTerms,
-			parsed.data.q,
-			true,
-		);
-		cr.score += score;
-		cr.keywords = matchedKeywords;
-		allResults.push(cr);
+				isGraph: true,
+			})),
+	];
+
+	for (const r of extraResults) {
+		const scorable = { title: r.title, content: r.content, keywords: null, nodeType: r.nodeType };
+		const { score, matchedKeywords } = scoreChunk(scorable, queryTerms, parsed.data.q, r.isGraph);
+		r.score += score;
+		r.keywords = matchedKeywords;
+		allResults.push(r);
 	}
 
 	allResults.sort((a, b) => b.score - a.score);

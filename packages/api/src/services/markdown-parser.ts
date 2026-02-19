@@ -9,6 +9,8 @@ export interface TreeNode {
 	endPage?: number;
 }
 
+// ── Regex patterns ──────────────────────────────────────────────────────────
+
 const HEADING_REGEX = /^(#{1,6})\s+(.+)$/;
 
 /**
@@ -24,9 +26,14 @@ const CHAPTER_LINE_REGEX = /^Chapter\s+(\d+)$/i;
 /** Page separators from MarkItDown: "-- 3 of 24 --" */
 const PAGE_SEPARATOR_REGEX = /^--\s*\d+\s+of\s+\d+\s*--$/;
 
-/** Running headers repeated on every page: "1.2. WHAT IS A PDE?  3" or "CHAPTER 1. INTRODUCTION" */
-const RUNNING_HEADER_REGEX = /^\d+\.\d+\.\s+[A-Z][A-Z\s?!]+\d*$/;
-const CHAPTER_HEADER_REGEX = /^\d+\s+CHAPTER\s+\d+\.\s+[A-Z]/;
+/** Running headers repeated on every page */
+const NOISE_PATTERNS: RegExp[] = [
+	PAGE_SEPARATOR_REGEX,
+	/^\d+\.\d+\.\s+[A-Z][A-Z\s?!]+\d*$/, // "1.2. WHAT IS A PDE?  3"
+	/^\d+\s+CHAPTER\s+\d+\.\s+[A-Z]/, // "CHAPTER 1. INTRODUCTION"
+];
+
+const PAGE_MARKER_REGEX = /<!--\s*Page\s+(\d+)\s*-->/gi;
 
 const NODE_TYPE_PATTERNS: Array<[RegExp, string]> = [
 	[/^(definition|def\.)\b/i, "definition"],
@@ -40,17 +47,17 @@ const NODE_TYPE_PATTERNS: Array<[RegExp, string]> = [
 	[/^(proposition|prop\.)\b/i, "theorem"],
 ];
 
+// ── Small helpers ───────────────────────────────────────────────────────────
+
 function inferNodeType(title: string, depth: number): string {
 	for (const [pattern, type] of NODE_TYPE_PATTERNS) {
 		if (pattern.test(title.trim())) return type;
 	}
-	if (depth === 1) return "chapter";
-	return "section";
+	return depth === 1 ? "chapter" : "section";
 }
 
-/** Extract page number from MarkItDown page markers like <!-- Page 3 --> */
 function extractPageNumber(text: string, mode: "first" | "last" = "last"): number | undefined {
-	const matches = [...text.matchAll(/<!--\s*Page\s+(\d+)\s*-->/gi)];
+	const matches = [...text.matchAll(PAGE_MARKER_REGEX)];
 	if (matches.length === 0) return undefined;
 	const match = mode === "first" ? matches[0] : matches[matches.length - 1];
 	return Number.parseInt(match[1], 10);
@@ -60,17 +67,17 @@ function normalizeTabs(line: string): string {
 	return line.replace(/\t/g, " ").trim();
 }
 
-function hasSectionNumbers(lines: string[]): boolean {
-	return lines.some((line) => SECTION_NUMBER_REGEX.test(normalizeTabs(line)));
+function isNoiseLine(trimmed: string): boolean {
+	return NOISE_PATTERNS.some((rx) => rx.test(trimmed));
 }
 
-function isNoiseLine(trimmed: string): boolean {
-	return (
-		PAGE_SEPARATOR_REGEX.test(trimmed) ||
-		RUNNING_HEADER_REGEX.test(trimmed) ||
-		CHAPTER_HEADER_REGEX.test(trimmed)
-	);
+function nextNonEmptyLine(lines: string[], start: number): { text: string; index: number } | null {
+	let j = start;
+	while (j < lines.length && lines[j].trim() === "") j++;
+	return j < lines.length ? { text: lines[j].trim(), index: j } : null;
 }
+
+// ── PDF preprocessing ───────────────────────────────────────────────────────
 
 function tryParseChapterHeading(
 	trimmed: string,
@@ -80,35 +87,23 @@ function tryParseChapterHeading(
 	const chapterMatch = trimmed.match(CHAPTER_LINE_REGEX);
 	if (!chapterMatch) return null;
 
-	let j = i + 1;
-	while (j < lines.length && lines[j].trim() === "") j++;
-
-	if (j < lines.length) {
-		const nextTrimmed = lines[j].trim();
-		const isValidTitle =
-			nextTrimmed.length > 0 &&
-			nextTrimmed.length < 100 &&
-			!SECTION_NUMBER_REGEX.test(nextTrimmed.replace(/\t/g, " "));
-		if (isValidTitle) {
-			return {
-				heading: `# Chapter ${chapterMatch[1]}: ${nextTrimmed}`,
-				nextIndex: j + 1,
-			};
-		}
+	const next = nextNonEmptyLine(lines, i + 1);
+	if (next && next.text.length < 100 && !SECTION_NUMBER_REGEX.test(next.text.replace(/\t/g, " "))) {
+		return { heading: `# Chapter ${chapterMatch[1]}: ${next.text}`, nextIndex: next.index + 1 };
 	}
 
 	return { heading: `# Chapter ${chapterMatch[1]}`, nextIndex: i + 1 };
 }
 
 function tryParseSectionHeading(trimmed: string): string | null {
-	const sectionMatch = trimmed.match(SECTION_NUMBER_REGEX);
-	if (!sectionMatch) return null;
+	const m = trimmed.match(SECTION_NUMBER_REGEX);
+	if (!m) return null;
+	const level = Math.min((m[1].match(/\./g) || []).length + 1, 6);
+	return `${"#".repeat(level)} ${m[1]} ${m[2].trim()}`;
+}
 
-	const number = sectionMatch[1];
-	const title = sectionMatch[2].trim();
-	const dots = (number.match(/\./g) || []).length;
-	const level = Math.min(dots + 1, 6);
-	return `${"#".repeat(level)} ${number} ${title}`;
+function hasSectionNumbers(lines: string[]): boolean {
+	return lines.some((line) => SECTION_NUMBER_REGEX.test(normalizeTabs(line)));
 }
 
 /**
@@ -121,7 +116,6 @@ function tryParseSectionHeading(trimmed: string): string | null {
  * Also strips page separators ("-- 3 of 24 --") and running headers
  * repeated on each page.
  */
-
 export function preprocessPdfMarkdown(markdown: string): string {
 	const lines = markdown.split("\n");
 
@@ -156,37 +150,7 @@ function convertSectionLines(lines: string[]): string[] {
 	return output;
 }
 
-/**
- * Parse markdown into a tree based on heading structure.
- * Pure function, no LLM or I/O.
- */
-function createRootNode(filename: string, processed: string): TreeNode {
-	return {
-		title: filename.replace(/\.[^.]+$/, ""),
-		content: "",
-		depth: 0,
-		order: 0,
-		nodeType: "section",
-		children: [],
-		startPage: extractPageNumber(processed, "first"),
-		endPage: extractPageNumber(processed),
-	};
-}
-
-export function parseMarkdownTree(markdown: string, filename: string): TreeNode {
-	const processed = preprocessPdfMarkdown(markdown);
-	const root = createRootNode(filename, processed);
-	const segments = parseSegments(processed.split("\n"), root);
-
-	if (segments.length === 0) {
-		root.nodeType = inferNodeType(root.title, 0);
-		return root;
-	}
-
-	buildTreeFromSegments(root, segments);
-	mergeShortLeaves(root);
-	return root;
-}
+// ── Tree building ───────────────────────────────────────────────────────────
 
 interface Segment {
 	level: number;
@@ -246,9 +210,7 @@ function buildTreeFromSegments(root: TreeNode, segments: Segment[]): void {
 	}
 }
 
-function isShortLeaf(node: TreeNode): boolean {
-	return node.children.length === 0 && node.content.length < 50;
-}
+// ── Short-leaf merging ──────────────────────────────────────────────────────
 
 function formatMergedLeaf(node: TreeNode): string {
 	return node.content ? `**${node.title}**: ${node.content}` : `**${node.title}**`;
@@ -265,7 +227,7 @@ function mergeShortLeaves(node: TreeNode): void {
 
 	const kept: TreeNode[] = [];
 	for (const child of node.children) {
-		if (isShortLeaf(child)) {
+		if (child.children.length === 0 && child.content.length < 50) {
 			node.content = appendContent(node.content, formatMergedLeaf(child));
 		} else {
 			child.order = kept.length;
@@ -275,13 +237,43 @@ function mergeShortLeaves(node: TreeNode): void {
 	node.children = kept;
 }
 
-/** Check if a markdown document contains headings (including PDF section numbers) */
-function isHeadingLine(line: string): boolean {
-	if (HEADING_REGEX.test(line)) return true;
-	const trimmed = normalizeTabs(line);
-	return SECTION_NUMBER_REGEX.test(trimmed) || CHAPTER_LINE_REGEX.test(trimmed);
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Parse markdown into a tree based on heading structure.
+ * Pure function, no LLM or I/O.
+ */
+export function parseMarkdownTree(markdown: string, filename: string): TreeNode {
+	const processed = preprocessPdfMarkdown(markdown);
+
+	const root: TreeNode = {
+		title: filename.replace(/\.[^.]+$/, ""),
+		content: "",
+		depth: 0,
+		order: 0,
+		nodeType: "section",
+		children: [],
+		startPage: extractPageNumber(processed, "first"),
+		endPage: extractPageNumber(processed),
+	};
+
+	const segments = parseSegments(processed.split("\n"), root);
+
+	if (segments.length === 0) {
+		root.nodeType = inferNodeType(root.title, 0);
+		return root;
+	}
+
+	buildTreeFromSegments(root, segments);
+	mergeShortLeaves(root);
+	return root;
 }
 
+/** Check if a markdown document contains headings (including PDF section numbers) */
 export function hasHeadings(markdown: string): boolean {
-	return markdown.split("\n").some(isHeadingLine);
+	return markdown.split("\n").some((line) => {
+		if (HEADING_REGEX.test(line)) return true;
+		const trimmed = normalizeTabs(line);
+		return SECTION_NUMBER_REGEX.test(trimmed) || CHAPTER_LINE_REGEX.test(trimmed);
+	});
 }

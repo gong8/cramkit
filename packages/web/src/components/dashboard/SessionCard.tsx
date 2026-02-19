@@ -1,5 +1,6 @@
 import type { SessionSummary } from "@/lib/api";
 import { BookOpen, MoreVertical, Pencil, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -43,6 +44,35 @@ function InlineEditInput({
 			placeholder={placeholder}
 			className={className}
 		/>
+	);
+}
+
+function MenuItem({
+	icon,
+	label,
+	onClick,
+	destructive,
+}: {
+	icon: ReactNode;
+	label: string;
+	onClick: () => void;
+	destructive?: boolean;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				onClick();
+			}}
+			className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm ${
+				destructive ? "text-destructive hover:bg-destructive/10" : "hover:bg-accent"
+			}`}
+		>
+			{icon}
+			{label}
+		</button>
 	);
 }
 
@@ -137,43 +167,25 @@ export function SessionCard({ session, onCommitEdit, onRequestDelete }: SessionC
 
 				{menuOpen && (
 					<div className="absolute right-0 top-8 z-10 w-44 rounded-md border border-border bg-background py-1 shadow-lg">
-						<button
-							type="button"
-							onClick={(e) => {
-								e.preventDefault();
-								e.stopPropagation();
-								startEdit("name", session.name);
-							}}
-							className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent"
-						>
-							<Pencil className="h-3.5 w-3.5" />
-							Rename
-						</button>
-						<button
-							type="button"
-							onClick={(e) => {
-								e.preventDefault();
-								e.stopPropagation();
-								startEdit("module", session.module ?? "");
-							}}
-							className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent"
-						>
-							<BookOpen className="h-3.5 w-3.5" />
-							Change Module
-						</button>
-						<button
-							type="button"
-							onClick={(e) => {
-								e.preventDefault();
-								e.stopPropagation();
+						<MenuItem
+							icon={<Pencil className="h-3.5 w-3.5" />}
+							label="Rename"
+							onClick={() => startEdit("name", session.name)}
+						/>
+						<MenuItem
+							icon={<BookOpen className="h-3.5 w-3.5" />}
+							label="Change Module"
+							onClick={() => startEdit("module", session.module ?? "")}
+						/>
+						<MenuItem
+							icon={<Trash2 className="h-3.5 w-3.5" />}
+							label="Delete"
+							destructive
+							onClick={() => {
 								setMenuOpen(false);
 								onRequestDelete(session.id, session.name);
 							}}
-							className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-						>
-							<Trash2 className="h-3.5 w-3.5" />
-							Delete
-						</button>
+						/>
 					</div>
 				)}
 			</div>

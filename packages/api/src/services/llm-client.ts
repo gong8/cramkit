@@ -15,13 +15,14 @@ export function getCliModel(model: string): string {
 	return "sonnet";
 }
 
-export async function chatCompletion(
-	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-	options?: { model?: string; temperature?: number; maxTokens?: number },
-): Promise<string> {
-	const model = getCliModel(options?.model || LLM_MODEL);
-	log.info(`chatCompletion — model=${model}, messages=${messages.length}`);
+interface PreparedMessages {
+	systemParts: string[];
+	prompt: string;
+}
 
+function prepareMessages(
+	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+): PreparedMessages {
 	const clean = messages.map((m) => ({ ...m, content: m.content.replaceAll("\0", "") }));
 
 	const systemParts = clean.filter((m) => m.role === "system").map((m) => m.content);
@@ -34,9 +35,66 @@ export async function chatCompletion(
 		)
 		.join("\n\n")
 		.trim();
+
 	if (!prompt) {
 		throw new Error("No user prompt found in messages");
 	}
+
+	return { systemParts, prompt };
+}
+
+function writeSystemPrompt(tempDir: string, systemParts: string[], args: string[]): void {
+	if (systemParts.length > 0) {
+		const systemPromptPath = join(tempDir, "system-prompt.txt");
+		writeFileSync(systemPromptPath, systemParts.join("\n\n"));
+		args.push("--append-system-prompt-file", systemPromptPath);
+	}
+}
+
+function spawnClaude(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+	return new Promise((resolve, reject) => {
+		const { PATH, HOME, SHELL, TERM } = process.env;
+		const proc = spawn("claude", args, {
+			cwd,
+			env: { PATH, HOME, SHELL, TERM },
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+
+		proc.stdin?.end();
+
+		let stdout = "";
+		let stderr = "";
+
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+		});
+		proc.stderr?.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString();
+		});
+
+		proc.on("close", (code) => {
+			if (code !== 0) {
+				const output = (stderr || stdout).slice(0, 500);
+				reject(new Error(`Claude CLI error (exit code ${code}): ${output}`));
+				return;
+			}
+			resolve({ stdout, stderr });
+		});
+
+		proc.on("error", (err) => {
+			reject(new Error(`Claude CLI spawn error: ${err.message}`));
+		});
+	});
+}
+
+export async function chatCompletion(
+	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+	options?: { model?: string; temperature?: number; maxTokens?: number },
+): Promise<string> {
+	const model = getCliModel(options?.model || LLM_MODEL);
+	log.info(`chatCompletion — model=${model}, messages=${messages.length}`);
+
+	const { systemParts, prompt } = prepareMessages(messages);
 
 	const tempDir = join(tmpdir(), `cramkit-llm-${randomUUID().slice(0, 8)}`);
 	mkdirSync(tempDir, { recursive: true });
@@ -53,58 +111,18 @@ export async function chatCompletion(
 		"--no-session-persistence",
 	];
 
-	if (systemParts.length > 0) {
-		const systemPromptPath = join(tempDir, "system-prompt.txt");
-		writeFileSync(systemPromptPath, systemParts.join("\n\n"));
-		args.push("--append-system-prompt-file", systemPromptPath);
-	}
-
+	writeSystemPrompt(tempDir, systemParts, args);
 	args.push(prompt);
 
-	return new Promise<string>((resolve, reject) => {
-		const { PATH, HOME, SHELL, TERM } = process.env;
-		const proc = spawn("claude", args, {
-			cwd: tempDir,
-			env: { PATH, HOME, SHELL, TERM },
-			stdio: ["pipe", "pipe", "pipe"],
-		});
+	const { stdout } = await spawnClaude(args, tempDir);
+	const content = stdout.trim();
 
-		proc.stdin?.end();
+	if (!content) {
+		throw new Error("LLM returned empty response");
+	}
 
-		let stdout = "";
-		let stderr = "";
-
-		proc.stdout?.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString();
-		});
-
-		proc.stderr?.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString();
-		});
-
-		proc.on("close", (code) => {
-			if (code !== 0) {
-				const output = (stderr || stdout).slice(0, 500);
-				log.error(`chatCompletion — CLI exited with code ${code}: ${output}`);
-				reject(new Error(`Claude CLI error (exit code ${code}): ${output}`));
-				return;
-			}
-
-			const content = stdout.trim();
-			if (!content) {
-				reject(new Error("LLM returned empty response"));
-				return;
-			}
-
-			log.info(`chatCompletion — response ${content.length} chars`);
-			resolve(content);
-		});
-
-		proc.on("error", (err) => {
-			log.error(`chatCompletion — spawn error: ${err.message}`);
-			reject(new Error(`Claude CLI spawn error: ${err.message}`));
-		});
-	});
+	log.info(`chatCompletion — response ${content.length} chars`);
+	return content;
 }
 
 interface ToolDefinition {
@@ -147,21 +165,7 @@ export async function chatCompletionWithTool<T>(
 		`chatCompletionWithTool — model=${model}, tool=${tool.name}, messages=${messages.length}`,
 	);
 
-	const clean = messages.map((m) => ({ ...m, content: m.content.replaceAll("\0", "") }));
-
-	const systemParts = clean.filter((m) => m.role === "system").map((m) => m.content);
-	const prompt = clean
-		.filter((m) => m.role !== "system")
-		.map((m) =>
-			m.role === "assistant"
-				? `<previous_response>\n${m.content}\n</previous_response>`
-				: m.content,
-		)
-		.join("\n\n")
-		.trim();
-	if (!prompt) {
-		throw new Error("No user prompt found in messages");
-	}
+	const { systemParts, prompt } = prepareMessages(messages);
 
 	const tempDir = join(tmpdir(), `cramkit-tool-${randomUUID().slice(0, 8)}`);
 	mkdirSync(tempDir, { recursive: true });
@@ -250,71 +254,25 @@ rl.on("line", (line) => {
 		"--no-session-persistence",
 	];
 
-	if (systemParts.length > 0) {
-		const systemPromptPath = join(tempDir, "system-prompt.txt");
-		writeFileSync(systemPromptPath, systemParts.join("\n\n"));
-		args.push("--append-system-prompt-file", systemPromptPath);
-	}
-
+	writeSystemPrompt(tempDir, systemParts, args);
 	args.push(prompt);
 
-	return new Promise<T>((resolve, reject) => {
-		const { PATH, HOME, SHELL, TERM } = process.env;
-		const proc = spawn("claude", args, {
-			cwd: tempDir,
-			env: { PATH, HOME, SHELL, TERM },
-			stdio: ["pipe", "pipe", "pipe"],
-		});
+	try {
+		await spawnClaude(args, tempDir);
 
-		proc.stdin?.end();
+		if (!existsSync(resultPath)) {
+			throw new Error("Model did not call the extraction tool — no result.json produced");
+		}
 
-		let stdout = "";
-		let stderr = "";
-
-		proc.stdout?.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString();
-		});
-		proc.stderr?.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString();
-		});
-
-		proc.on("close", (code) => {
-			try {
-				if (code !== 0) {
-					const output = (stderr || stdout).slice(0, 500);
-					log.error(`chatCompletionWithTool — CLI exited with code ${code}: ${output}`);
-					reject(new Error(`Claude CLI error (exit code ${code}): ${output}`));
-					return;
-				}
-
-				if (!existsSync(resultPath)) {
-					reject(new Error("Model did not call the extraction tool — no result.json produced"));
-					return;
-				}
-
-				const raw = readFileSync(resultPath, "utf-8");
-				const parsed = JSON.parse(raw) as T;
-				log.info(`chatCompletionWithTool — got result (${raw.length} chars)`);
-				resolve(parsed);
-			} catch (err) {
-				reject(err instanceof Error ? err : new Error(String(err)));
-			} finally {
-				try {
-					rmSync(tempDir, { recursive: true, force: true });
-				} catch {
-					// best-effort cleanup
-				}
-			}
-		});
-
-		proc.on("error", (err) => {
-			log.error(`chatCompletionWithTool — spawn error: ${err.message}`);
-			reject(new Error(`Claude CLI spawn error: ${err.message}`));
-			try {
-				rmSync(tempDir, { recursive: true, force: true });
-			} catch {
-				// best-effort cleanup
-			}
-		});
-	});
+		const raw = readFileSync(resultPath, "utf-8");
+		const parsed = JSON.parse(raw) as T;
+		log.info(`chatCompletionWithTool — got result (${raw.length} chars)`);
+		return parsed;
+	} finally {
+		try {
+			rmSync(tempDir, { recursive: true, force: true });
+		} catch {
+			// best-effort cleanup
+		}
+	}
 }

@@ -359,6 +359,18 @@ export async function seedSearchData(db: PrismaClient) {
 	return { session, resource, chunkWithContent, chunkGraphOnly, chunkBoth };
 }
 
+export function findAmortisedRels(db: PrismaClient, sessionId: string) {
+	return db.relationship.findMany({
+		where: { sessionId, createdBy: "amortised" },
+	});
+}
+
+export function countAmortisedRels(db: PrismaClient, sessionId: string) {
+	return db.relationship.count({
+		where: { sessionId, createdBy: "amortised" },
+	});
+}
+
 export async function cleanDb(db: PrismaClient) {
 	await db.indexJob.deleteMany();
 	await db.indexBatch.deleteMany();

@@ -208,46 +208,94 @@ async function buildChunkPlan(
 	resourceId: string,
 ): Promise<ChunkPlan> {
 	const splitMode = resource.splitMode || "auto";
-	const wantSplit = shouldSplit(splitMode, resource.type, fileTrees[0]?.rawContent);
+	const isSingle = fileTrees.length === 1;
+	const wantSplit = isSingle
+		? shouldSplit(splitMode, resource.type, fileTrees[0].rawContent)
+		: shouldSplit(splitMode, resource.type);
 
-	if (fileTrees.length === 1 && wantSplit) {
-		const { fileId, tree } = fileTrees[0];
-		const mappingLookup = await writeTreeAndBuildLookup(
-			resource.sessionId,
-			resourceId,
-			resource.name,
-			tree,
-		);
-		return { type: "split-single", fileId, tree, mappingLookup };
-	}
-
-	if (fileTrees.length === 1) {
-		const { fileId, rawContent } = fileTrees[0];
-		return { type: "flat", fileId, title: resource.name, content: rawContent };
-	}
-
-	if (shouldSplit(splitMode, resource.type)) {
-		const combinedRoot = buildCombinedRoot(resource.name, fileTrees, resource.files);
-		const mappingLookup = await writeTreeAndBuildLookup(
-			resource.sessionId,
-			resourceId,
-			resource.name,
-			combinedRoot,
-		);
+	if (!wantSplit) {
 		return {
-			type: "split-multi",
-			combinedRoot,
-			fileTrees: fileTrees.map((ft) => ({ fileId: ft.fileId, tree: ft.tree })),
-			mappingLookup,
+			type: "flat",
+			fileId: fileTrees[0].fileId,
+			title: resource.name,
+			content: isSingle
+				? fileTrees[0].rawContent
+				: fileTrees.map((ft) => ft.rawContent).join("\n\n---\n\n"),
 		};
 	}
 
+	const tree = isSingle
+		? fileTrees[0].tree
+		: buildCombinedRoot(resource.name, fileTrees, resource.files);
+
+	const mappingLookup = await writeTreeAndBuildLookup(
+		resource.sessionId,
+		resourceId,
+		resource.name,
+		tree,
+	);
+
+	if (isSingle) {
+		return { type: "split-single", fileId: fileTrees[0].fileId, tree, mappingLookup };
+	}
+
 	return {
-		type: "flat",
-		fileId: fileTrees[0].fileId,
-		title: resource.name,
-		content: fileTrees.map((ft) => ft.rawContent).join("\n\n---\n\n"),
+		type: "split-multi",
+		combinedRoot: tree,
+		fileTrees: fileTrees.map((ft) => ({ fileId: ft.fileId, tree: ft.tree })),
+		mappingLookup,
 	};
+}
+
+async function insertChunks(
+	tx: Prisma.TransactionClient,
+	resourceId: string,
+	plan: ChunkPlan,
+): Promise<number> {
+	const counter = { value: 0 };
+
+	if (plan.type === "flat") {
+		await tx.chunk.create({
+			data: {
+				resourceId,
+				sourceFileId: plan.fileId,
+				index: 0,
+				title: plan.title,
+				content: plan.content,
+			},
+		});
+		return 1;
+	}
+
+	if (plan.type === "split-single") {
+		await createChunkTree(
+			tx,
+			resourceId,
+			plan.fileId,
+			null,
+			plan.tree,
+			plan.mappingLookup,
+			counter,
+		);
+		return counter.value;
+	}
+
+	const rootChunk = await tx.chunk.create({
+		data: nodeToChunkData(
+			resourceId,
+			null,
+			null,
+			counter.value++,
+			plan.combinedRoot,
+			plan.mappingLookup.get(plan.combinedRoot),
+		),
+	});
+
+	for (const { fileId, tree } of plan.fileTrees) {
+		await createChunkTree(tx, resourceId, fileId, rootChunk.id, tree, plan.mappingLookup, counter);
+	}
+
+	return counter.value;
 }
 
 async function executeChunkPlan(
@@ -255,63 +303,9 @@ async function executeChunkPlan(
 	resourceId: string,
 	plan: ChunkPlan,
 ): Promise<number> {
-	const counter = { value: 0 };
 	await tx.chunk.deleteMany({ where: { resourceId } });
 
-	switch (plan.type) {
-		case "split-single": {
-			await createChunkTree(
-				tx,
-				resourceId,
-				plan.fileId,
-				null,
-				plan.tree,
-				plan.mappingLookup,
-				counter,
-			);
-			break;
-		}
-
-		case "flat": {
-			await tx.chunk.create({
-				data: {
-					resourceId,
-					sourceFileId: plan.fileId,
-					index: 0,
-					title: plan.title,
-					content: plan.content,
-				},
-			});
-			counter.value = 1;
-			break;
-		}
-
-		case "split-multi": {
-			const rootChunk = await tx.chunk.create({
-				data: nodeToChunkData(
-					resourceId,
-					null,
-					null,
-					counter.value++,
-					plan.combinedRoot,
-					plan.mappingLookup.get(plan.combinedRoot),
-				),
-			});
-
-			for (const { fileId, tree } of plan.fileTrees) {
-				await createChunkTree(
-					tx,
-					resourceId,
-					fileId,
-					rootChunk.id,
-					tree,
-					plan.mappingLookup,
-					counter,
-				);
-			}
-			break;
-		}
-	}
+	const chunkCount = await insertChunks(tx, resourceId, plan);
 
 	await tx.resource.update({
 		where: { id: resourceId },
@@ -323,7 +317,22 @@ async function executeChunkPlan(
 		},
 	});
 
-	return counter.value;
+	return chunkCount;
+}
+
+async function saveIndexError(
+	db: ReturnType<typeof getDb>,
+	resourceId: string,
+	msg: string,
+): Promise<void> {
+	try {
+		await db.resource.update({
+			where: { id: resourceId },
+			data: { indexErrorMessage: msg },
+		});
+	} catch (dbErr) {
+		log.error(`processResource — failed to write indexErrorMessage for ${resourceId}`, dbErr);
+	}
 }
 
 export async function processResource(resourceId: string): Promise<void> {
@@ -356,13 +365,6 @@ export async function processResource(resourceId: string): Promise<void> {
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
 		log.error(`processResource — failed "${resource.name}"`, error);
-		try {
-			await db.resource.update({
-				where: { id: resourceId },
-				data: { indexErrorMessage: msg },
-			});
-		} catch (dbErr) {
-			log.error(`processResource — failed to write indexErrorMessage for ${resourceId}`, dbErr);
-		}
+		await saveIndexError(db, resourceId, msg);
 	}
 }

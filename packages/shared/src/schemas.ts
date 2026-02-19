@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 const nopt = <T extends z.ZodTypeAny>(schema: T) => schema.nullable().optional();
+const noptStr = () => nopt(z.string());
+const noptInt = () => nopt(z.number().int());
 
 export const ResourceTypeEnum = z.enum([
 	"LECTURE_NOTES",
@@ -17,10 +19,10 @@ export const SplitModeEnum = z.enum(["auto", "split", "single"]);
 export const GraphThoroughnessEnum = z.enum(["quick", "standard", "thorough"]);
 
 const sessionOptionalFields = {
-	module: nopt(z.string()),
+	module: noptStr(),
 	examDate: nopt(z.union([z.string().date(), z.string().datetime()])),
-	scope: nopt(z.string()),
-	notes: nopt(z.string()),
+	scope: noptStr(),
+	notes: noptStr(),
 };
 
 export const createSessionSchema = z.object({
@@ -47,16 +49,16 @@ export const createResourceSchema = z.object({
 
 export const updateResourceSchema = z.object({
 	name: z.string().min(1).optional(),
-	label: nopt(z.string()),
+	label: noptStr(),
 });
 
 const relationshipFields = {
 	sourceType: z.string(),
 	sourceId: z.string(),
-	sourceLabel: nopt(z.string()),
+	sourceLabel: noptStr(),
 	targetType: z.string(),
 	targetId: z.string(),
-	targetLabel: nopt(z.string()),
+	targetLabel: noptStr(),
 	relationship: z.string(),
 };
 
@@ -113,39 +115,39 @@ export const fileExportSchema = z.object({
 	filename: z.string(),
 	role: FileRoleEnum,
 	rawPath: z.string(),
-	processedPath: nopt(z.string()),
-	pageCount: nopt(z.number().int()),
-	fileSize: nopt(z.number().int()),
+	processedPath: noptStr(),
+	pageCount: noptInt(),
+	fileSize: noptInt(),
 });
 
 export const chunkExportSchema = z.object({
 	id: z.string(),
-	sourceFileId: nopt(z.string()),
-	parentId: nopt(z.string()),
+	sourceFileId: noptStr(),
+	parentId: noptStr(),
 	index: z.number().int(),
 	depth: z.number().int(),
 	nodeType: z.string(),
-	slug: nopt(z.string()),
-	diskPath: nopt(z.string()),
-	title: nopt(z.string()),
+	slug: noptStr(),
+	diskPath: noptStr(),
+	title: noptStr(),
 	content: z.string(),
-	startPage: nopt(z.number().int()),
-	endPage: nopt(z.number().int()),
-	keywords: nopt(z.string()),
-	metadata: nopt(z.string()),
+	startPage: noptInt(),
+	endPage: noptInt(),
+	keywords: noptStr(),
+	metadata: noptStr(),
 });
 
 export const resourceExportSchema = z.object({
 	id: z.string(),
 	name: z.string(),
 	type: ResourceTypeEnum,
-	label: nopt(z.string()),
+	label: noptStr(),
 	splitMode: z.string(),
 	isIndexed: z.boolean(),
 	isGraphIndexed: z.boolean(),
-	metadata: nopt(z.string()),
+	metadata: noptStr(),
 	isMetaIndexed: z.boolean().optional(),
-	metaIndexDurationMs: nopt(z.number().int()),
+	metaIndexDurationMs: noptInt(),
 	files: z.array(fileExportSchema),
 	chunks: z.array(chunkExportSchema),
 });
@@ -153,27 +155,27 @@ export const resourceExportSchema = z.object({
 export const conceptExportSchema = z.object({
 	id: z.string(),
 	name: z.string(),
-	description: nopt(z.string()),
-	aliases: nopt(z.string()),
-	content: nopt(z.string()),
-	contentType: nopt(z.string()),
-	metadata: nopt(z.string()),
+	description: noptStr(),
+	aliases: noptStr(),
+	content: noptStr(),
+	contentType: noptStr(),
+	metadata: noptStr(),
 	createdBy: z.string(),
 });
 
 export const paperQuestionExportSchema = z.object({
 	id: z.string(),
 	resourceId: z.string(),
-	chunkId: nopt(z.string()),
+	chunkId: noptStr(),
 	questionNumber: z.string(),
-	parentNumber: nopt(z.string()),
-	marks: nopt(z.number().int()),
-	questionType: nopt(z.string()),
-	commandWords: nopt(z.string()),
+	parentNumber: noptStr(),
+	marks: noptInt(),
+	questionType: noptStr(),
+	commandWords: noptStr(),
 	content: z.string(),
-	markSchemeText: nopt(z.string()),
-	solutionText: nopt(z.string()),
-	metadata: nopt(z.string()),
+	markSchemeText: noptStr(),
+	solutionText: noptStr(),
+	metadata: noptStr(),
 });
 
 export const relationshipExportSchema = z.object({
@@ -187,7 +189,7 @@ export const messageExportSchema = z.object({
 	id: z.string(),
 	role: z.string(),
 	content: z.string(),
-	toolCalls: nopt(z.string()),
+	toolCalls: noptStr(),
 	attachments: z
 		.array(
 			z.object({

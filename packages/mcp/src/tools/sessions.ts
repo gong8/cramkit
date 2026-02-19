@@ -12,19 +12,15 @@ export const sessionTools = {
 	get_session: {
 		description: "Get full details of a cram session including exam scope and notes",
 		parameters: z.object({ sessionId }),
-		execute: async ({ sessionId }: { sessionId: string }) => apiClient.getSession(sessionId),
+		execute: async (p: { sessionId: string }) => apiClient.getSession(p.sessionId),
 	},
 
 	get_exam_scope: {
 		description: "Get the exam scope and any extra notes for a session",
 		parameters: z.object({ sessionId }),
-		execute: async ({ sessionId }: { sessionId: string }) => {
-			const session = (await apiClient.getSession(sessionId)) as Record<string, unknown>;
-			return {
-				scope: session.scope,
-				notes: session.notes,
-				examDate: session.examDate,
-			};
+		execute: async (p: { sessionId: string }) => {
+			const session = (await apiClient.getSession(p.sessionId)) as Record<string, unknown>;
+			return { scope: session.scope, notes: session.notes, examDate: session.examDate };
 		},
 	},
 };

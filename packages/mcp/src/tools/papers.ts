@@ -13,14 +13,21 @@ interface ResourceInfo {
 }
 
 interface QuestionSummary {
-	id: string;
 	questionNumber: string;
-	parentNumber: string | null;
 	marks: number | null;
 	questionType: string | null;
-	commandWords: string | null;
-	relatedConcepts: Array<{ name: string; relationship: string }>;
+	relatedConcepts: Array<{ name: string }>;
 	parts?: QuestionSummary[];
+}
+
+function summarizeQuestion(q: QuestionSummary): Record<string, unknown> {
+	return {
+		questionNumber: q.questionNumber,
+		marks: q.marks,
+		questionType: q.questionType,
+		relatedConcepts: q.relatedConcepts.map((c) => c.name),
+		parts: q.parts?.map(summarizeQuestion),
+	};
 }
 
 async function listResourcesByTypeWithGraph(
@@ -30,44 +37,31 @@ async function listResourcesByTypeWithGraph(
 	sid: string,
 ) {
 	const resources = (await apiClient.listResources(sid)) as ResourceInfo[];
-	const filtered = resources.filter((r) => r.type === type);
+	return Promise.all(
+		resources
+			.filter((r) => r.type === type)
+			.map(async (r) => {
+				const base = {
+					resourceId: r.id,
+					name: r.name,
+					hasCompanion: r.label === companionLabel || r.files.some((f) => f.role === companionRole),
+					files: r.files.map((f) => ({ id: f.id, filename: f.filename, role: f.role })),
+				};
 
-	const results = await Promise.all(
-		filtered.map(async (r) => {
-			const base = {
-				resourceId: r.id,
-				name: r.name,
-				hasCompanion: r.label === companionLabel || r.files.some((f) => f.role === companionRole),
-				files: r.files.map((f) => ({ id: f.id, filename: f.filename, role: f.role })),
-			};
+				if (!r.isMetaIndexed) return base;
 
-			// If meta-indexed, include graph data
-			if (r.isMetaIndexed) {
 				try {
 					const questions = (await apiClient.listPaperQuestions(r.id)) as QuestionSummary[];
-					const metadata = r.metadata ? JSON.parse(r.metadata) : null;
-					const summarize = (q: QuestionSummary): Record<string, unknown> => ({
-						questionNumber: q.questionNumber,
-						marks: q.marks,
-						questionType: q.questionType,
-						relatedConcepts: q.relatedConcepts.map((c) => c.name),
-						parts: q.parts?.map(summarize),
-					});
 					return {
 						...base,
-						metadata,
-						questions: questions.map(summarize),
+						metadata: r.metadata ? JSON.parse(r.metadata) : null,
+						questions: questions.map(summarizeQuestion),
 					};
 				} catch {
 					return base;
 				}
-			}
-
-			return base;
-		}),
+			}),
 	);
-
-	return results;
 }
 
 export const paperTools = {
@@ -75,31 +69,34 @@ export const paperTools = {
 		description:
 			"List all past paper resources with their questions, marks, types, and tested concepts. Returns graph data when available.",
 		parameters: z.object({ sessionId }),
-		execute: async ({ sessionId }: { sessionId: string }) =>
-			listResourcesByTypeWithGraph("PAST_PAPER", "includes_mark_scheme", "MARK_SCHEME", sessionId),
+		execute: async (p: { sessionId: string }) =>
+			listResourcesByTypeWithGraph(
+				"PAST_PAPER",
+				"includes_mark_scheme",
+				"MARK_SCHEME",
+				p.sessionId,
+			),
 	},
 
 	get_past_paper: {
 		description: "Get a specific past paper's content.",
 		parameters: z.object({ resourceId }),
-		execute: async ({ resourceId }: { resourceId: string }) =>
-			apiClient.getResourceContent(resourceId),
+		execute: async (p: { resourceId: string }) => apiClient.getResourceContent(p.resourceId),
 	},
 
 	list_problem_sheets: {
 		description:
 			"List all problem sheet resources with their questions, marks, and tested concepts. Returns graph data when available.",
 		parameters: z.object({ sessionId }),
-		execute: async ({ sessionId }: { sessionId: string }) =>
-			listResourcesByTypeWithGraph("PROBLEM_SHEET", "includes_solutions", "SOLUTIONS", sessionId),
+		execute: async (p: { sessionId: string }) =>
+			listResourcesByTypeWithGraph("PROBLEM_SHEET", "includes_solutions", "SOLUTIONS", p.sessionId),
 	},
 
 	list_paper_questions: {
 		description:
 			"List all exam questions for a past paper or problem sheet with marks, types, command words, and tested concepts. Returns hierarchical question tree.",
 		parameters: z.object({ resourceId }),
-		execute: async ({ resourceId }: { resourceId: string }) =>
-			apiClient.listPaperQuestions(resourceId),
+		execute: async (p: { resourceId: string }) => apiClient.listPaperQuestions(p.resourceId),
 	},
 
 	get_paper_question: {
@@ -108,7 +105,6 @@ export const paperTools = {
 		parameters: z.object({
 			questionId: z.string().describe("The question ID"),
 		}),
-		execute: async ({ questionId }: { questionId: string }) =>
-			apiClient.getPaperQuestion(questionId),
+		execute: async (p: { questionId: string }) => apiClient.getPaperQuestion(p.questionId),
 	},
 };

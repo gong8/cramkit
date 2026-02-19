@@ -71,29 +71,102 @@ async function extractWithRetries(
 
 type RelData = Prisma.RelationshipCreateManyInput;
 
-function makeRel(
-	sessionId: string,
-	sourceType: string,
-	sourceId: string,
-	sourceLabel: string,
-	targetId: string,
-	targetLabel: string,
-	relationship: string,
-	confidence: number,
-	createdFromResourceId: string,
-): RelData {
+interface ResolvedLink {
+	sourceType: string;
+	sourceId: string;
+	sourceLabel: string;
+	targetId: string;
+	targetLabel: string;
+	relationship: string;
+	confidence: number;
+}
+
+function resolveLinks(
+	result: ExtractionResult,
+	conceptMap: Map<string, string>,
+	chunkByTitle: Map<string, string>,
+	chunks: ChunkInfo[],
+	resourceId: string,
+	resourceName: string,
+): ResolvedLink[] {
+	const resolved: ResolvedLink[] = [];
+
+	for (const link of result.file_concept_links) {
+		const target = resolveConcept(link.conceptName, conceptMap);
+		if (!target) continue;
+
+		let sourceType = "resource";
+		let sourceId = resourceId;
+		let sourceLabel = resourceName;
+
+		if (link.chunkTitle) {
+			const chunkId = fuzzyMatchTitle(link.chunkTitle, chunkByTitle);
+			if (chunkId) {
+				sourceType = "chunk";
+				sourceId = chunkId;
+				sourceLabel = link.chunkTitle;
+			}
+		}
+
+		resolved.push({
+			sourceType,
+			sourceId,
+			sourceLabel,
+			targetId: target.id,
+			targetLabel: target.name,
+			relationship: link.relationship,
+			confidence: link.confidence ?? 0.8,
+		});
+	}
+
+	for (const link of result.concept_concept_links) {
+		const source = resolveConcept(link.sourceConcept, conceptMap);
+		const target = resolveConcept(link.targetConcept, conceptMap);
+		if (!source || !target) continue;
+
+		resolved.push({
+			sourceType: "concept",
+			sourceId: source.id,
+			sourceLabel: source.name,
+			targetId: target.id,
+			targetLabel: target.name,
+			relationship: link.relationship,
+			confidence: link.confidence ?? 0.7,
+		});
+	}
+
+	for (const link of result.question_concept_links) {
+		const target = resolveConcept(link.conceptName, conceptMap);
+		if (!target) continue;
+
+		const matchingChunk = findChunkByLabel(chunks, link.questionLabel);
+		resolved.push({
+			sourceType: matchingChunk ? "chunk" : "resource",
+			sourceId: matchingChunk?.id || resourceId,
+			sourceLabel: link.questionLabel,
+			targetId: target.id,
+			targetLabel: target.name,
+			relationship: link.relationship,
+			confidence: link.confidence ?? 0.8,
+		});
+	}
+
+	return resolved;
+}
+
+function toRelData(link: ResolvedLink, sessionId: string, resourceId: string): RelData {
 	return {
 		sessionId,
-		sourceType,
-		sourceId,
-		sourceLabel,
+		sourceType: link.sourceType,
+		sourceId: link.sourceId,
+		sourceLabel: link.sourceLabel,
 		targetType: "concept",
-		targetId,
-		targetLabel,
-		relationship,
-		confidence,
+		targetId: link.targetId,
+		targetLabel: link.targetLabel,
+		relationship: link.relationship,
+		confidence: link.confidence,
 		createdBy: "system",
-		createdFromResourceId,
+		createdFromResourceId: resourceId,
 	};
 }
 
@@ -115,81 +188,8 @@ function buildRelationshipData(
 	resourceId: string,
 	resourceName: string,
 ): RelData[] {
-	const relationships: RelData[] = [];
-
-	for (const link of result.file_concept_links) {
-		const target = resolveConcept(link.conceptName, conceptMap);
-		if (!target) continue;
-
-		let sourceType = "resource";
-		let sourceId = resourceId;
-		let sourceLabel = resourceName;
-
-		if (link.chunkTitle) {
-			const chunkId = fuzzyMatchTitle(link.chunkTitle, chunkByTitle);
-			if (chunkId) {
-				sourceType = "chunk";
-				sourceId = chunkId;
-				sourceLabel = link.chunkTitle;
-			}
-		}
-
-		relationships.push(
-			makeRel(
-				sessionId,
-				sourceType,
-				sourceId,
-				sourceLabel,
-				target.id,
-				target.name,
-				link.relationship,
-				link.confidence ?? 0.8,
-				resourceId,
-			),
-		);
-	}
-
-	for (const link of result.concept_concept_links) {
-		const source = resolveConcept(link.sourceConcept, conceptMap);
-		const target = resolveConcept(link.targetConcept, conceptMap);
-		if (!source || !target) continue;
-
-		relationships.push(
-			makeRel(
-				sessionId,
-				"concept",
-				source.id,
-				source.name,
-				target.id,
-				target.name,
-				link.relationship,
-				link.confidence ?? 0.7,
-				resourceId,
-			),
-		);
-	}
-
-	for (const link of result.question_concept_links) {
-		const target = resolveConcept(link.conceptName, conceptMap);
-		if (!target) continue;
-
-		const matchingChunk = findChunkByLabel(chunks, link.questionLabel);
-		relationships.push(
-			makeRel(
-				sessionId,
-				matchingChunk ? "chunk" : "resource",
-				matchingChunk?.id || resourceId,
-				link.questionLabel,
-				target.id,
-				target.name,
-				link.relationship,
-				link.confidence ?? 0.8,
-				resourceId,
-			),
-		);
-	}
-
-	return relationships;
+	const links = resolveLinks(result, conceptMap, chunkByTitle, chunks, resourceId, resourceName);
+	return deduplicateRelationships(links.map((l) => toRelData(l, sessionId, resourceId)));
 }
 
 function deduplicateRelationships(relationships: RelData[]): RelData[] {
@@ -283,16 +283,14 @@ async function writeResultToDb(
 				const conceptMap = await loadConceptMap(tx, resource.sessionId);
 				const chunkByTitle = buildChunkTitleMap(chunks);
 
-				const relationships = deduplicateRelationships(
-					buildRelationshipData(
-						result,
-						conceptMap,
-						chunkByTitle,
-						chunks,
-						resource.sessionId,
-						resource.id,
-						resource.name,
-					),
+				const relationships = buildRelationshipData(
+					result,
+					conceptMap,
+					chunkByTitle,
+					chunks,
+					resource.sessionId,
+					resource.id,
+					resource.name,
 				);
 
 				if (relationships.length > 0) {
@@ -316,14 +314,7 @@ async function writeResultToDb(
 	}
 }
 
-export async function indexResourceGraph(
-	resourceId: string,
-	thoroughness?: Thoroughness,
-	signal?: AbortSignal,
-	indexerLog?: IndexerLogger,
-): Promise<void> {
-	const db = getDb();
-
+async function loadResource(db: ReturnType<typeof getDb>, resourceId: string) {
 	const resource = await db.resource.findUnique({
 		where: { id: resourceId },
 		include: {
@@ -348,10 +339,48 @@ export async function indexResourceGraph(
 	if (!resource) {
 		throw new GraphIndexError("Resource not found", "unknown", resourceId);
 	}
-
 	if (!resource.isIndexed) {
 		throw new GraphIndexError("Not content-indexed yet", "unknown", resourceId);
 	}
+
+	return resource;
+}
+
+function groupRelationshipsByLabel(
+	rels: Array<{
+		sourceLabel: string | null;
+		targetLabel: string | null;
+		relationship: string;
+		confidence: number;
+	}>,
+): ExtractionAgentInput["existingRelationships"] {
+	const relMap: ExtractionAgentInput["existingRelationships"] = new Map();
+	for (const rel of rels) {
+		for (const label of [rel.sourceLabel, rel.targetLabel]) {
+			if (!label) continue;
+			if (!relMap.has(label)) relMap.set(label, []);
+			relMap.get(label)?.push(rel);
+		}
+	}
+	return relMap;
+}
+
+function countTotalLinks(result: ExtractionResult): number {
+	return (
+		result.file_concept_links.length +
+		result.concept_concept_links.length +
+		result.question_concept_links.length
+	);
+}
+
+export async function indexResourceGraph(
+	resourceId: string,
+	thoroughness?: Thoroughness,
+	signal?: AbortSignal,
+	indexerLog?: IndexerLogger,
+): Promise<void> {
+	const db = getDb();
+	const resource = await loadResource(db, resourceId);
 
 	const mode = thoroughness ?? "standard";
 	const activeLog = indexerLog ?? log;
@@ -361,47 +390,28 @@ export async function indexResourceGraph(
 
 	const startTime = Date.now();
 
-	// Fetch existing concepts and their relationships for the agent
-	const existingConcepts = await db.concept.findMany({
-		where: { sessionId: resource.sessionId },
-		select: { name: true, description: true },
-	});
-
-	const existingRels = await db.relationship.findMany({
-		where: { sessionId: resource.sessionId, createdBy: "system" },
-		select: {
-			sourceLabel: true,
-			targetLabel: true,
-			relationship: true,
-			confidence: true,
-		},
-	});
-
-	// Group relationships by concept name
-	const relMap = new Map<
-		string,
-		Array<{
-			sourceLabel: string | null;
-			targetLabel: string | null;
-			relationship: string;
-			confidence: number;
-		}>
-	>();
-	for (const rel of existingRels) {
-		for (const label of [rel.sourceLabel, rel.targetLabel]) {
-			if (label) {
-				if (!relMap.has(label)) relMap.set(label, []);
-				relMap.get(label)?.push(rel);
-			}
-		}
-	}
+	const [existingConcepts, existingRels] = await Promise.all([
+		db.concept.findMany({
+			where: { sessionId: resource.sessionId },
+			select: { name: true, description: true },
+		}),
+		db.relationship.findMany({
+			where: { sessionId: resource.sessionId, createdBy: "system" },
+			select: {
+				sourceLabel: true,
+				targetLabel: true,
+				relationship: true,
+				confidence: true,
+			},
+		}),
+	]);
 
 	const agentInput: ExtractionAgentInput = {
 		resource: { name: resource.name, type: resource.type, label: resource.label },
 		files: resource.files,
 		chunks: resource.chunks,
 		existingConcepts,
-		existingRelationships: relMap,
+		existingRelationships: groupRelationshipsByLabel(existingRels),
 		thoroughness: mode,
 	};
 
@@ -417,10 +427,7 @@ export async function indexResourceGraph(
 		startTime,
 	);
 
-	const totalRels =
-		result.file_concept_links.length +
-		result.concept_concept_links.length +
-		result.question_concept_links.length;
+	const totalRels = countTotalLinks(result);
 
 	try {
 		await db.graphLog.create({

@@ -6,17 +6,18 @@ export const chatAttachmentAdapter: AttachmentAdapter = {
 	accept: "image/jpeg,image/png,image/gif,image/webp",
 
 	async add({ file }) {
+		const pending = (id: string, name: string, contentType: string) => ({
+			id,
+			type: "image" as const,
+			name,
+			contentType,
+			file,
+			status: { type: "requires-action" as const, reason: "composer-send" as const },
+		});
+
 		const restoreMatch = file.name.match(/^__restore__([^_]+)__(.+)$/);
 		if (restoreMatch) {
-			const [, id, originalName] = restoreMatch;
-			return {
-				id,
-				type: "image" as const,
-				name: originalName,
-				contentType: file.type,
-				file,
-				status: { type: "requires-action" as const, reason: "composer-send" as const },
-			};
+			return pending(restoreMatch[1], restoreMatch[2], file.type);
 		}
 
 		const formData = new FormData();
@@ -25,23 +26,15 @@ export const chatAttachmentAdapter: AttachmentAdapter = {
 			method: "POST",
 			body: formData,
 		});
-		if (!res.ok) {
-			throw new Error(`Upload failed: ${res.status}`);
-		}
+		if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+
 		const { id, filename, contentType } = (await res.json()) as {
 			id: string;
 			url: string;
 			filename: string;
 			contentType: string;
 		};
-		return {
-			id,
-			type: "image" as const,
-			name: filename,
-			contentType,
-			file,
-			status: { type: "requires-action" as const, reason: "composer-send" as const },
-		};
+		return pending(id, filename, contentType);
 	},
 
 	async send(attachment) {
@@ -113,10 +106,8 @@ function parseTextToolCalls(text: string) {
 	}));
 
 	const cleanText = text
-		.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-		.replace(/<tool_result>[\s\S]*?<\/tool_result>/g, "")
-		.replace(/<tool_call[\s\S]*$/, "")
-		.replace(/<tool_result[\s\S]*$/, "")
+		.replace(/<tool_(?:call|result)>[\s\S]*?<\/tool_(?:call|result)>/g, "")
+		.replace(/<tool_(?:call|result)[\s\S]*$/, "")
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();
 
@@ -143,34 +134,40 @@ function toToolCallPart(
 
 function buildContentParts(state: SseState): ContentPart[] {
 	const { cleanText, parsedCalls } = parseTextToolCalls(state.textContent);
+	const parts: ContentPart[] = [];
 
-	return [
-		...(state.thinkingText ? [{ type: "reasoning" as const, text: state.thinkingText }] : []),
-		...[...state.toolCalls.values()].map((tc) =>
-			toToolCallPart(tc.toolCallId, tc.toolName, tc.args ?? {}, tc.result, tc.isError),
-		),
-		...parsedCalls.map((pc) => toToolCallPart(pc.id, pc.toolName, pc.args, pc.result, false)),
-		{ type: "text" as const, text: cleanText },
-	];
+	if (state.thinkingText) parts.push({ type: "reasoning", text: state.thinkingText });
+
+	for (const tc of state.toolCalls.values()) {
+		parts.push(toToolCallPart(tc.toolCallId, tc.toolName, tc.args ?? {}, tc.result, tc.isError));
+	}
+	for (const pc of parsedCalls) {
+		parts.push(toToolCallPart(pc.id, pc.toolName, pc.args, pc.result, false));
+	}
+
+	parts.push({ type: "text", text: cleanText });
+	return parts;
+}
+
+type MsgRecord = Record<string, unknown> | null | undefined;
+
+function asMsg(message: unknown): MsgRecord {
+	return message as MsgRecord;
 }
 
 function extractAttachmentIds(message: unknown): string[] {
-	const msg = message as Record<string, unknown> | null | undefined;
+	const msg = asMsg(message);
 	if (!msg) return [];
 
 	const ids = new Set<string>();
 
-	// From explicit attachments array (freshly uploaded images)
 	if (Array.isArray(msg.attachments)) {
 		for (const att of msg.attachments) {
-			const a = att as Record<string, unknown> | null | undefined;
-			if (typeof a?.id === "string" && a.id) {
-				ids.add(a.id);
-			}
+			const id = (att as MsgRecord)?.id;
+			if (typeof id === "string" && id) ids.add(id);
 		}
 	}
 
-	// From image content parts (images loaded from history / regeneration)
 	if (Array.isArray(msg.content)) {
 		for (const part of msg.content as Array<Record<string, unknown>>) {
 			if (part.type === "image" && typeof part.image === "string") {
@@ -186,14 +183,14 @@ function extractAttachmentIds(message: unknown): string[] {
 const CUID_PATTERN = /^c[a-z0-9]{20,}$/;
 
 function extractRewindId(message: unknown): string | undefined {
-	const msg = message as Record<string, unknown> | null | undefined;
+	const msg = asMsg(message);
 	if (!msg?.id) return undefined;
 	const msgId = msg.id as string;
 	return CUID_PATTERN.test(msgId) ? msgId : undefined;
 }
 
 function extractUserText(message: unknown): string {
-	const msg = message as Record<string, unknown> | null | undefined;
+	const msg = asMsg(message);
 	if (!msg?.content || !Array.isArray(msg.content)) return "";
 	return (
 		msg.content
@@ -250,13 +247,34 @@ function handleSseEvent(
 	}
 }
 
+function processSseLine(
+	line: string,
+	state: SseState,
+	ctx: { eventType: string },
+): "done" | "updated" | null {
+	if (line.startsWith("event: ")) {
+		ctx.eventType = line.slice(7);
+		return null;
+	}
+	if (!line.startsWith("data: ")) return null;
+
+	const data = line.slice(6);
+	if (data === "[DONE]") return "done";
+
+	try {
+		if (handleSseEvent(ctx.eventType, JSON.parse(data), state)) return "updated";
+	} catch {}
+	ctx.eventType = "content";
+	return null;
+}
+
 async function* readSseStream(
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	state: SseState,
 ): AsyncGenerator<ChatModelRunResult> {
 	const decoder = new TextDecoder();
 	let buffer = "";
-	let eventType = "content";
+	const ctx = { eventType: "content" };
 	const snapshot = () => ({ content: buildContentParts(state) }) as ChatModelRunResult;
 
 	try {
@@ -272,19 +290,12 @@ async function* readSseStream(
 				const line = raw.trim();
 				if (!line) continue;
 
-				if (line.startsWith("event: ")) {
-					eventType = line.slice(7);
-				} else if (line.startsWith("data: ")) {
-					const data = line.slice(6);
-					if (data === "[DONE]") {
-						yield snapshot();
-						return;
-					}
-					try {
-						if (handleSseEvent(eventType, JSON.parse(data), state)) yield snapshot();
-					} catch {}
-					eventType = "content";
+				const result = processSseLine(line, state, ctx);
+				if (result === "done") {
+					yield snapshot();
+					return;
 				}
+				if (result === "updated") yield snapshot();
 			}
 		}
 	} finally {

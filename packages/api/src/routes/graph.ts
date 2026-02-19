@@ -17,6 +17,20 @@ const log = createLogger("api");
 
 export const graphRoutes = new Hono();
 
+type Thoroughness = "quick" | "standard" | "thorough";
+
+async function resolveSessionThoroughness(
+	sessionId: string,
+	override?: string,
+): Promise<Thoroughness> {
+	if (override) return override as Thoroughness;
+	const session = await getDb().session.findUnique({
+		where: { id: sessionId },
+		select: { graphThoroughness: true },
+	});
+	return (session?.graphThoroughness ?? "standard") as Thoroughness;
+}
+
 function conceptRelationshipWhere(sessionId: string, conceptId: string) {
 	return {
 		sessionId,
@@ -78,18 +92,15 @@ graphRoutes.get("/related", async (c) => {
 	let where: Record<string, unknown>;
 
 	if (type === "resource") {
-		// For resources, also include chunk-level relationships belonging to this resource
 		const resource = await db.resource.findUnique({
 			where: { id },
 			select: { sessionId: true },
 		});
 		if (!resource) return c.json({ error: "Resource not found" }, 404);
 
-		const chunks = await db.chunk.findMany({
-			where: { resourceId: id },
-			select: { id: true },
-		});
-		const chunkIds = chunks.map((ch) => ch.id);
+		const chunkIds = (
+			await db.chunk.findMany({ where: { resourceId: id }, select: { id: true } })
+		).map((ch) => ch.id);
 
 		const orConditions: Record<string, unknown>[] = [
 			{ sourceType: "resource", sourceId: id },
@@ -120,7 +131,6 @@ graphRoutes.get("/related", async (c) => {
 });
 
 graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
-	const db = getDb();
 	const sessionId = c.req.param("sessionId");
 	const body = await c.req.json();
 	const parsed = indexResourceRequestSchema.safeParse(body);
@@ -132,17 +142,8 @@ graphRoutes.post("/sessions/:sessionId/index-resource", async (c) => {
 		return c.json({ error: parsed.error.flatten() }, 400);
 	}
 
-	const session = await db.session.findUnique({
-		where: { id: sessionId },
-		select: { graphThoroughness: true },
-	});
-	const thoroughness = parsed.data.thoroughness ?? session?.graphThoroughness ?? "standard";
-
-	await enqueueSessionGraphIndexing(
-		sessionId,
-		[parsed.data.resourceId],
-		thoroughness as "quick" | "standard" | "thorough",
-	);
+	const thoroughness = await resolveSessionThoroughness(sessionId, parsed.data.thoroughness);
+	await enqueueSessionGraphIndexing(sessionId, [parsed.data.resourceId], thoroughness);
 	log.info(
 		`POST /graph/sessions/${sessionId}/index-resource — queued ${parsed.data.resourceId} [thoroughness=${thoroughness}]`,
 	);
@@ -159,11 +160,7 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 		? parsed.data
 		: { reindex: body?.reindex === true, thoroughness: undefined };
 
-	const session = await db.session.findUnique({
-		where: { id: sessionId },
-		select: { graphThoroughness: true },
-	});
-	const thoroughness = bodyThoroughness ?? session?.graphThoroughness ?? "standard";
+	const thoroughness = await resolveSessionThoroughness(sessionId, bodyThoroughness);
 
 	const resources = await db.resource.findMany({
 		where: {
@@ -182,11 +179,7 @@ graphRoutes.post("/sessions/:sessionId/index-all", async (c) => {
 		});
 	}
 
-	await enqueueSessionGraphIndexing(
-		sessionId,
-		resourceIds,
-		thoroughness as "quick" | "standard" | "thorough",
-	);
+	await enqueueSessionGraphIndexing(sessionId, resourceIds, thoroughness);
 	log.info(
 		`POST /graph/sessions/${sessionId}/index-all — queued ${resourceIds.length} resources (reindex=${reindex}, thoroughness=${thoroughness})`,
 	);

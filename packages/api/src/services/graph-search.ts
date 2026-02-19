@@ -15,23 +15,46 @@ export interface GraphSearchResult {
 	relatedConcepts: Array<{ name: string; relationship: string }>;
 }
 
-interface RelSides {
+interface RelSide {
 	conceptId: string;
 	entityId: string;
 	entityType: string;
+	relationship: string;
 }
 
-function resolveRelSides(
-	rel: { sourceType: string; sourceId: string; targetType: string; targetId: string },
-	conceptIds: string[],
-): RelSides | null {
-	if (rel.sourceType === "concept" && conceptIds.includes(rel.sourceId)) {
-		return { conceptId: rel.sourceId, entityId: rel.targetId, entityType: rel.targetType };
+function resolveRelSide(
+	rel: {
+		sourceType: string;
+		sourceId: string;
+		targetType: string;
+		targetId: string;
+		relationship: string;
+	},
+	conceptIds: Set<string>,
+): RelSide | null {
+	if (rel.sourceType === "concept" && conceptIds.has(rel.sourceId)) {
+		return {
+			conceptId: rel.sourceId,
+			entityId: rel.targetId,
+			entityType: rel.targetType,
+			relationship: rel.relationship,
+		};
 	}
-	if (rel.targetType === "concept" && conceptIds.includes(rel.targetId)) {
-		return { conceptId: rel.targetId, entityId: rel.sourceId, entityType: rel.sourceType };
+	if (rel.targetType === "concept" && conceptIds.has(rel.targetId)) {
+		return {
+			conceptId: rel.targetId,
+			entityId: rel.sourceId,
+			entityType: rel.sourceType,
+			relationship: rel.relationship,
+		};
 	}
 	return null;
+}
+
+function appendToMap<K, V>(map: Map<K, V[]>, key: K, value: V) {
+	const list = map.get(key);
+	if (list) list.push(value);
+	else map.set(key, [value]);
 }
 
 export async function searchGraph(
@@ -60,56 +83,59 @@ export async function searchGraph(
 	}
 
 	log.info(`searchGraph — found ${concepts.length} matching concepts for "${query}"`);
-	const conceptIds = concepts.map((c) => c.id);
+	const conceptIds = new Set(concepts.map((c) => c.id));
 	const conceptNames = new Map(concepts.map((c) => [c.id, c.name]));
 
 	const relationships = await db.relationship.findMany({
 		where: {
 			sessionId,
 			OR: [
-				{ sourceType: "concept", sourceId: { in: conceptIds } },
-				{ targetType: "concept", targetId: { in: conceptIds } },
+				{ sourceType: "concept", sourceId: { in: [...conceptIds] } },
+				{ targetType: "concept", targetId: { in: [...conceptIds] } },
 			],
 		},
 	});
 
 	const chunkIds = new Set<string>();
-	const resourceIds = new Set<string>();
 	const chunkConceptMap = new Map<string, Array<{ name: string; relationship: string }>>();
-
-	const addConcept = (chunkId: string, name: string, relationship: string) => {
-		let list = chunkConceptMap.get(chunkId);
-		if (!list) {
-			list = [];
-			chunkConceptMap.set(chunkId, list);
-		}
-		list.push({ name, relationship });
-	};
+	const resourceConceptEntries: Array<{
+		resourceId: string;
+		name: string;
+		relationship: string;
+	}> = [];
 
 	for (const rel of relationships) {
-		const sides = resolveRelSides(rel, conceptIds);
-		if (!sides) continue;
-		const name = conceptNames.get(sides.conceptId) || "";
+		const side = resolveRelSide(rel, conceptIds);
+		if (!side) continue;
+		const name = conceptNames.get(side.conceptId) ?? "";
 
-		if (sides.entityType === "chunk") {
-			chunkIds.add(sides.entityId);
-			addConcept(sides.entityId, name, rel.relationship);
-		} else if (sides.entityType === "resource") {
-			resourceIds.add(sides.entityId);
+		if (side.entityType === "chunk") {
+			chunkIds.add(side.entityId);
+			appendToMap(chunkConceptMap, side.entityId, { name, relationship: side.relationship });
+		} else if (side.entityType === "resource") {
+			resourceConceptEntries.push({
+				resourceId: side.entityId,
+				name,
+				relationship: side.relationship,
+			});
 		}
 	}
 
-	if (resourceIds.size > 0) {
+	if (resourceConceptEntries.length > 0) {
+		const resourceIds = [...new Set(resourceConceptEntries.map((e) => e.resourceId))];
 		const resourceChunks = await db.chunk.findMany({
-			where: { resourceId: { in: Array.from(resourceIds) } },
+			where: { resourceId: { in: resourceIds } },
 			select: { id: true, resourceId: true },
 		});
 		for (const rc of resourceChunks) {
 			chunkIds.add(rc.id);
-			for (const rel of relationships) {
-				const sides = resolveRelSides(rel, conceptIds);
-				if (!sides || sides.entityType !== "resource" || sides.entityId !== rc.resourceId) continue;
-				addConcept(rc.id, conceptNames.get(sides.conceptId) || "", rel.relationship);
+			for (const entry of resourceConceptEntries) {
+				if (entry.resourceId === rc.resourceId) {
+					appendToMap(chunkConceptMap, rc.id, {
+						name: entry.name,
+						relationship: entry.relationship,
+					});
+				}
 			}
 		}
 	}
@@ -120,10 +146,8 @@ export async function searchGraph(
 	}
 
 	const chunks = await db.chunk.findMany({
-		where: { id: { in: Array.from(chunkIds) } },
-		include: {
-			resource: { select: { id: true, name: true, type: true } },
-		},
+		where: { id: { in: [...chunkIds] } },
+		include: { resource: { select: { id: true, name: true, type: true } } },
 		take: limit,
 	});
 
@@ -139,6 +163,6 @@ export async function searchGraph(
 		nodeType: chunk.nodeType,
 		keywords: chunk.keywords,
 		source: "graph" as const,
-		relatedConcepts: chunkConceptMap.get(chunk.id) || [],
+		relatedConcepts: chunkConceptMap.get(chunk.id) ?? [],
 	}));
 }

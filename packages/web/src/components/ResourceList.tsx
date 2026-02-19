@@ -48,20 +48,6 @@ function ResourceContent({ resourceId }: { resourceId: string }) {
 	);
 }
 
-function GraphIndexBadge({ resource }: { resource: Resource }) {
-	if (!resource.isIndexed) return null;
-	if (resource.isGraphIndexed) {
-		return <span className="text-xs text-violet-600">Indexed</span>;
-	}
-	return null;
-}
-
-function BatchStatus({ status }: { status?: BatchResource["status"] }) {
-	if (status === "indexing") return <span className="text-xs text-amber-600">Indexing...</span>;
-	if (status === "pending") return <span className="text-xs text-muted-foreground">Queued</span>;
-	return null;
-}
-
 function ResourceLabel({ label }: { label?: string | null }) {
 	if (label === "includes_mark_scheme") {
 		return (
@@ -152,6 +138,35 @@ function FileRow({
 	);
 }
 
+function StatusBadges({
+	resource,
+	batchStatus,
+}: {
+	resource: Resource;
+	batchStatus?: BatchResource["status"];
+}) {
+	return (
+		<>
+			{resource.indexErrorMessage ? (
+				<span className="text-xs text-destructive" title={resource.indexErrorMessage}>
+					Failed
+				</span>
+			) : (
+				<span
+					className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
+				>
+					{resource.isIndexed ? "Ready" : "Processing"}
+				</span>
+			)}
+			{batchStatus === "indexing" && <span className="text-xs text-amber-600">Indexing...</span>}
+			{batchStatus === "pending" && <span className="text-xs text-muted-foreground">Queued</span>}
+			{resource.isIndexed && resource.isGraphIndexed && (
+				<span className="text-xs text-violet-600">Indexed</span>
+			)}
+		</>
+	);
+}
+
 function ResourceRow({
 	resource,
 	batchStatus,
@@ -193,24 +208,26 @@ function ResourceRow({
 		}
 	};
 
-	const expandProps = canExpand
-		? {
-				className: "flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-accent/50",
-				role: "button" as const,
-				tabIndex: 0,
-				onClick: onToggleExpand,
-				onKeyDown: (e: React.KeyboardEvent) => {
-					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault();
-						onToggleExpand();
-					}
-				},
-			}
-		: { className: "flex items-center justify-between px-3 py-2" };
+	const headerClass = canExpand
+		? "flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-accent/50"
+		: "flex items-center justify-between px-3 py-2";
 
 	return (
 		<div className="rounded-md border border-border">
-			<div {...expandProps}>
+			<div
+				className={headerClass}
+				{...(canExpand && {
+					role: "button" as const,
+					tabIndex: 0,
+					onClick: onToggleExpand,
+					onKeyDown: (e: React.KeyboardEvent) => {
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							onToggleExpand();
+						}
+					},
+				})}
+			>
 				<div className="flex items-center gap-3">
 					{canExpand &&
 						(isExpanded ? (
@@ -245,19 +262,7 @@ function ResourceRow({
 					onClick={(e) => e.stopPropagation()}
 					onKeyDown={(e) => e.stopPropagation()}
 				>
-					{resource.indexErrorMessage ? (
-						<span className="text-xs text-destructive" title={resource.indexErrorMessage}>
-							Failed
-						</span>
-					) : (
-						<span
-							className={`text-xs ${resource.isIndexed ? "text-green-600" : "text-muted-foreground"}`}
-						>
-							{resource.isIndexed ? "Ready" : "Processing"}
-						</span>
-					)}
-					<BatchStatus status={batchStatus} />
-					<GraphIndexBadge resource={resource} />
+					<StatusBadges resource={resource} batchStatus={batchStatus} />
 					<button
 						type="button"
 						onClick={startRename}

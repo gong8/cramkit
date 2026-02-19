@@ -1,5 +1,11 @@
 import { amortiseRead, amortiseSearchResults } from "../../packages/api/src/services/amortiser.js";
-import { seedSessionWithChunks, seedSessionWithConcept, useTestDb } from "../fixtures/helpers.js";
+import {
+	countAmortisedRels,
+	findAmortisedRels,
+	seedSessionWithChunks,
+	seedSessionWithConcept,
+	useTestDb,
+} from "../fixtures/helpers.js";
 
 const db = useTestDb();
 
@@ -16,9 +22,7 @@ describe("amortiseSearchResults", () => {
 
 		await amortiseSearchResults(session.id, "Heat Equation", contentResults);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const rels = await findAmortisedRels(db, session.id);
 
 		expect(rels.length).toBeGreaterThan(0);
 		for (const rel of rels) {
@@ -47,7 +51,6 @@ describe("amortiseSearchResults", () => {
 	it("confidence is 0.6 for partial/substring match in search", async () => {
 		const { session, resource, chunks } = await seedSessionWithConcept(db);
 
-		// "Heat" partially matches "Heat Equation" but is not an exact match
 		await amortiseSearchResults(session.id, "Heat", [
 			{ chunkId: chunks[0].id, resourceId: resource.id },
 		]);
@@ -66,15 +69,10 @@ describe("amortiseSearchResults", () => {
 		const contentResults = [{ chunkId: chunks[0].id, resourceId: resource.id }];
 
 		await amortiseSearchResults(session.id, "Heat Equation", contentResults);
-		const countAfterFirst = await db.relationship.count({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const countAfterFirst = await countAmortisedRels(db, session.id);
 
-		// Run again — should not create duplicates
 		await amortiseSearchResults(session.id, "Heat Equation", contentResults);
-		const countAfterSecond = await db.relationship.count({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const countAfterSecond = await countAmortisedRels(db, session.id);
 
 		expect(countAfterSecond).toBe(countAfterFirst);
 	});
@@ -95,10 +93,7 @@ describe("amortiseSearchResults", () => {
 
 		await amortiseSearchResults(session.id, "Heat", contentResults);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBeLessThanOrEqual(10);
 	});
 
@@ -109,10 +104,7 @@ describe("amortiseSearchResults", () => {
 			{ chunkId: chunks[0].id, resourceId: resource.id },
 		]);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBe(0);
 	});
 
@@ -121,15 +113,11 @@ describe("amortiseSearchResults", () => {
 
 		await amortiseSearchResults(session.id, "Heat Equation", []);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBe(0);
 	});
 
 	it("never throws", async () => {
-		// Even with invalid session ID, amortiser should swallow errors
 		await expect(
 			amortiseSearchResults("nonexistent-session", "test", [
 				{ chunkId: "bad-id", resourceId: "bad-id" },
@@ -150,9 +138,7 @@ describe("amortiseRead", () => {
 
 		await amortiseRead(session.id, entities, "The Heat Equation is fundamental");
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const rels = await findAmortisedRels(db, session.id);
 
 		expect(rels.length).toBe(2);
 		for (const rel of rels) {
@@ -185,9 +171,7 @@ describe("amortiseRead", () => {
 
 		await amortiseRead(
 			session.id,
-			// label (title) contains the concept name
 			[{ type: "chunk", id: chunks[0].id, label: "Heat Equation Overview" }],
-			// matchText also contains the concept name
 			"The Heat Equation is fundamental to thermal analysis",
 		);
 
@@ -204,9 +188,7 @@ describe("amortiseRead", () => {
 
 		await amortiseRead(
 			session.id,
-			// label (title) contains the concept name "Heat Equation"
 			[{ type: "chunk", id: chunks[0].id, label: "Heat Equation Overview" }],
-			// matchText contains alias "diffusion equation" but NOT "Heat Equation"
 			"The diffusion equation describes thermal diffusion",
 		);
 
@@ -215,8 +197,6 @@ describe("amortiseRead", () => {
 		});
 
 		expect(rel).not.toBeNull();
-		// Matched via alias in content, concept name in title but NOT in content
-		// inTitle = true, inContent = false (name not in text), so confidence = 0.65
 		expect(rel?.confidence).toBe(0.65);
 	});
 
@@ -229,9 +209,7 @@ describe("amortiseRead", () => {
 			"The diffusion equation describes heat flow",
 		);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const rels = await findAmortisedRels(db, session.id);
 
 		expect(rels.length).toBe(1);
 		expect(rels[0].targetId).toBe(concept.id);
@@ -250,10 +228,7 @@ describe("amortiseRead", () => {
 			"PD is mentioned here",
 		);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBe(0);
 	});
 
@@ -269,19 +244,13 @@ describe("amortiseRead", () => {
 			},
 		});
 
-		// "DE" and "PDE" are too short (< 3 chars for DE, = 3 for PDE)
-		// Only "partial diff eq" should match
 		await amortiseRead(
 			session.id,
 			[{ type: "chunk", id: chunks[0].id, label: chunks[0].title }],
 			"The DE is simple",
 		);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
-		// "DE" is only 2 chars so it's skipped; concept name doesn't match either
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBe(0);
 	});
 
@@ -303,9 +272,7 @@ describe("amortiseRead", () => {
 			"The navier stokes system governs fluid flow",
 		);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const rels = await findAmortisedRels(db, session.id);
 
 		expect(rels.length).toBe(1);
 		expect(rels[0].targetId).toBe(concept.id);
@@ -318,14 +285,10 @@ describe("amortiseRead", () => {
 		const text = "Heat Equation stuff";
 
 		await amortiseRead(session.id, entities, text);
-		const countFirst = await db.relationship.count({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const countFirst = await countAmortisedRels(db, session.id);
 
 		await amortiseRead(session.id, entities, text);
-		const countSecond = await db.relationship.count({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const countSecond = await countAmortisedRels(db, session.id);
 
 		expect(countSecond).toBe(countFirst);
 	});
@@ -347,10 +310,7 @@ describe("amortiseRead", () => {
 
 		await amortiseRead(session.id, entities, "Heat Equation Heat Transfer Heat Diffusion");
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBeLessThanOrEqual(10);
 	});
 
@@ -363,10 +323,7 @@ describe("amortiseRead", () => {
 			"quantum mechanics is unrelated",
 		);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBe(0);
 	});
 
@@ -375,10 +332,7 @@ describe("amortiseRead", () => {
 
 		await amortiseRead(session.id, [], "Heat Equation");
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBe(0);
 	});
 
@@ -391,10 +345,7 @@ describe("amortiseRead", () => {
 			"",
 		);
 
-		const rels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
-
+		const rels = await findAmortisedRels(db, session.id);
 		expect(rels.length).toBe(0);
 	});
 

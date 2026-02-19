@@ -44,13 +44,17 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
 	unknown: "Unknown Error",
 };
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
 	const seconds = ms / 1000;
 	if (seconds < 60) return `${seconds.toFixed(1)}s`;
 	const mins = Math.floor(seconds / 60);
 	const secs = Math.ceil(seconds % 60);
 	return `${mins}m ${secs}s`;
+}
+
+function plural(n: number, word: string): string {
+	return `${n} ${word}${n !== 1 ? "s" : ""}`;
 }
 
 function formatEta(seconds: number): string {
@@ -169,108 +173,107 @@ function PhaseIndicator({ phase }: { phase: PhaseInfo }) {
 	);
 }
 
+function PhaseProgress({
+	completed,
+	total,
+	failed,
+	running,
+	startedAt,
+}: {
+	completed: number;
+	total: number;
+	failed: number;
+	running?: number;
+	startedAt: number;
+}) {
+	const eta = computePhaseEta(completed, total, startedAt, null);
+	return (
+		<div className="flex items-center gap-3 text-muted-foreground">
+			<span>
+				{completed}/{total} complete
+			</span>
+			{(running ?? 0) > 0 && <span className="text-primary">{running} running</span>}
+			{failed > 0 && <span className="text-destructive">{failed} failed</span>}
+			{eta && <span>{eta} remaining</span>}
+		</div>
+	);
+}
+
+const PHASE_INFO: Record<number, { title: string; description: string }> = {
+	1: {
+		title: "Phase 1: Building concept foundation",
+		description:
+			"Processing lectures and specifications sequentially to establish the concept graph before linking other materials.",
+	},
+	2: {
+		title: "Phase 2: Linking papers and sheets",
+		description: "",
+	},
+	3: {
+		title: "Phase 3: Cross-linking concepts",
+		description:
+			"Analyzing the full knowledge graph to find missing connections between concepts from different resources.",
+	},
+	4: {
+		title: "Phase 4: Cleaning up knowledge graph",
+		description: "Deduplicating relationships, removing orphans, merging similar concepts.",
+	},
+	5: {
+		title: "Phase 5: Enriching knowledge graph",
+		description:
+			"Extracting questions, marks, mark schemes, definitions, and theorems into the graph.",
+	},
+};
+
 function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus }) {
 	const elapsed = Date.now() - (status.batch?.startedAt ?? Date.now());
+	const startedAt = status.batch?.startedAt ?? Date.now();
+	const current = phase.current;
+	const info = current ? PHASE_INFO[current] : null;
+
+	const phase2Desc =
+		current === 2
+			? `Processing ${phase.phase2.total} resource${phase.phase2.total !== 1 ? "s" : ""} in parallel (${phase.phase2.concurrency} concurrent) — linking to concepts established in Phase 1.`
+			: "";
 
 	return (
 		<div className="space-y-1.5 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
-			{phase.current === 1 && (
+			{info && (
 				<>
-					<div className="font-medium text-primary">Phase 1: Building concept foundation</div>
+					<div className="font-medium text-primary">{info.title}</div>
 					<div className="text-muted-foreground">
-						Processing lectures and specifications sequentially to establish the concept graph
-						before linking other materials.
-					</div>
-					<div className="flex items-center gap-3 text-muted-foreground">
-						<span>
-							{phase.phase1.completed}/{phase.phase1.total} complete
-						</span>
-						{phase.phase1.failed > 0 && (
-							<span className="text-destructive">{phase.phase1.failed} failed</span>
-						)}
-						{(() => {
-							const eta = computePhaseEta(
-								phase.phase1.completed,
-								phase.phase1.total,
-								status.batch?.startedAt ?? Date.now(),
-								null,
-							);
-							return eta ? <span>{eta} remaining</span> : null;
-						})()}
+						{current === 2 ? phase2Desc : info.description}
 					</div>
 				</>
 			)}
 
-			{phase.current === 2 && (
-				<>
-					<div className="font-medium text-primary">Phase 2: Linking papers and sheets</div>
-					<div className="text-muted-foreground">
-						Processing {phase.phase2.total} resource{phase.phase2.total !== 1 ? "s" : ""} in
-						parallel ({phase.phase2.concurrency} concurrent) — linking to concepts established in
-						Phase 1.
-					</div>
-					<div className="flex items-center gap-3 text-muted-foreground">
-						<span>
-							{phase.phase2.completed}/{phase.phase2.total} complete
-						</span>
-						{phase.phase2.running > 0 && (
-							<span className="text-primary">{phase.phase2.running} running</span>
-						)}
-						{phase.phase2.failed > 0 && (
-							<span className="text-destructive">{phase.phase2.failed} failed</span>
-						)}
-						{(() => {
-							const eta = computePhaseEta(
-								phase.phase2.completed,
-								phase.phase2.total,
-								status.batch?.startedAt ?? Date.now(),
-								null,
-							);
-							return eta ? <span>{eta} remaining</span> : null;
-						})()}
-					</div>
-				</>
+			{current === 1 && (
+				<PhaseProgress
+					completed={phase.phase1.completed}
+					total={phase.phase1.total}
+					failed={phase.phase1.failed}
+					startedAt={startedAt}
+				/>
+			)}
+			{current === 2 && (
+				<PhaseProgress
+					completed={phase.phase2.completed}
+					total={phase.phase2.total}
+					failed={phase.phase2.failed}
+					running={phase.phase2.running}
+					startedAt={startedAt}
+				/>
+			)}
+			{current === 5 && phase.phase5?.total != null && (
+				<PhaseProgress
+					completed={phase.phase5.completed ?? 0}
+					total={phase.phase5.total}
+					failed={phase.phase5.failed ?? 0}
+					startedAt={startedAt}
+				/>
 			)}
 
-			{phase.current === 3 && (
-				<>
-					<div className="font-medium text-primary">Phase 3: Cross-linking concepts</div>
-					<div className="text-muted-foreground">
-						Analyzing the full knowledge graph to find missing connections between concepts from
-						different resources.
-					</div>
-				</>
-			)}
-
-			{phase.current === 4 && (
-				<>
-					<div className="font-medium text-primary">Phase 4: Cleaning up knowledge graph</div>
-					<div className="text-muted-foreground">
-						Deduplicating relationships, removing orphans, merging similar concepts.
-					</div>
-				</>
-			)}
-
-			{phase.current === 5 && (
-				<>
-					<div className="font-medium text-primary">Phase 5: Enriching knowledge graph</div>
-					<div className="text-muted-foreground">
-						Extracting questions, marks, mark schemes, definitions, and theorems into the graph.
-					</div>
-					{phase.phase5?.total != null && (
-						<div className="flex items-center gap-3 text-muted-foreground">
-							<span>
-								{phase.phase5.completed ?? 0}/{phase.phase5.total} complete
-							</span>
-							{(phase.phase5.failed ?? 0) > 0 && (
-								<span className="text-destructive">{phase.phase5.failed} failed</span>
-							)}
-						</div>
-					)}
-				</>
-			)}
-
-			{phase.current === null && status.batch?.cancelled && (
+			{current === null && status.batch?.cancelled && (
 				<div className="font-medium text-muted-foreground">Indexing cancelled</div>
 			)}
 
@@ -284,7 +287,7 @@ function PhaseDetail({ phase, status }: { phase: PhaseInfo; status: IndexStatus 
 					` | Cleanup: ${phase.phase4.stats.duplicatesRemoved} dupes, ${phase.phase4.stats.conceptsMerged} merged`}
 				{phase.phase5?.status === "completed" &&
 					phase.phase5.completed != null &&
-					` | Enriched: ${phase.phase5.completed} resource${phase.phase5.completed !== 1 ? "s" : ""}`}
+					` | Enriched: ${plural(phase.phase5.completed, "resource")}`}
 			</div>
 		</div>
 	);
@@ -416,67 +419,86 @@ export function IndexProgressSection({ indexStatus, batchFailed }: IndexProgress
 				</div>
 			)}
 
-			{/* Phase 3 status */}
-			{phase?.phase3.status === "completed" && (
-				<div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
-					<Check className="h-3.5 w-3.5" />
-					<span>
-						Cross-linking complete
-						{phase.phase3.linksAdded !== undefined &&
-							` — ${phase.phase3.linksAdded} new connection${phase.phase3.linksAdded !== 1 ? "s" : ""} found`}
-					</span>
-				</div>
-			)}
-			{phase?.phase3.status === "failed" && (
-				<div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-					<AlertTriangle className="h-3.5 w-3.5" />
-					<span>
-						Cross-linking failed (non-fatal)
-						{phase.phase3.error && `: ${phase.phase3.error}`}
-					</span>
-				</div>
-			)}
-
-			{/* Phase 4 status */}
-			{phase?.phase4.status === "completed" && (
-				<div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
-					<Sparkles className="h-3.5 w-3.5" />
-					<span>
-						Cleanup complete
-						{phase.phase4.stats &&
-							` — ${phase.phase4.stats.duplicatesRemoved} duplicate${phase.phase4.stats.duplicatesRemoved !== 1 ? "s" : ""} removed, ${phase.phase4.stats.conceptsMerged} concept${phase.phase4.stats.conceptsMerged !== 1 ? "s" : ""} merged`}
-					</span>
-				</div>
-			)}
-			{phase?.phase4.status === "failed" && (
-				<div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-					<AlertTriangle className="h-3.5 w-3.5" />
-					<span>
-						Cleanup failed (non-fatal)
-						{phase.phase4.error && `: ${phase.phase4.error}`}
-					</span>
-				</div>
-			)}
-
-			{/* Phase 5 status */}
-			{phase?.phase5?.status === "completed" && (
-				<div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
-					<FileSearch className="h-3.5 w-3.5" />
-					<span>
-						Enrichment complete
-						{phase.phase5.completed != null &&
-							` — ${phase.phase5.completed} resource${phase.phase5.completed !== 1 ? "s" : ""} enriched`}
-						{(phase.phase5.failed ?? 0) > 0 && `, ${phase.phase5.failed} failed`}
-					</span>
-				</div>
-			)}
-			{phase?.phase5?.status === "failed" && (
-				<div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-					<AlertTriangle className="h-3.5 w-3.5" />
-					<span>Enrichment failed (non-fatal)</span>
-				</div>
+			{phase && (
+				<PhaseStatusBanners phase3={phase.phase3} phase4={phase.phase4} phase5={phase.phase5} />
 			)}
 		</div>
+	);
+}
+
+function StatusBanner({
+	variant,
+	icon,
+	children,
+}: {
+	variant: "success" | "warning";
+	icon: React.ReactNode;
+	children: React.ReactNode;
+}) {
+	const styles =
+		variant === "success"
+			? "border-green-200 bg-green-50 text-green-700"
+			: "border-amber-200 bg-amber-50 text-amber-700";
+	return (
+		<div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${styles}`}>
+			{icon}
+			<span>{children}</span>
+		</div>
+	);
+}
+
+function PhaseStatusBanners({
+	phase3,
+	phase4,
+	phase5,
+}: {
+	phase3: PhaseInfo["phase3"];
+	phase4: PhaseInfo["phase4"];
+	phase5: PhaseInfo["phase5"];
+}) {
+	return (
+		<>
+			{phase3.status === "completed" && (
+				<StatusBanner variant="success" icon={<Check className="h-3.5 w-3.5" />}>
+					Cross-linking complete
+					{phase3.linksAdded !== undefined &&
+						` — ${plural(phase3.linksAdded, "new connection")} found`}
+				</StatusBanner>
+			)}
+			{phase3.status === "failed" && (
+				<StatusBanner variant="warning" icon={<AlertTriangle className="h-3.5 w-3.5" />}>
+					Cross-linking failed (non-fatal)
+					{phase3.error && `: ${phase3.error}`}
+				</StatusBanner>
+			)}
+
+			{phase4.status === "completed" && (
+				<StatusBanner variant="success" icon={<Sparkles className="h-3.5 w-3.5" />}>
+					Cleanup complete
+					{phase4.stats &&
+						` — ${plural(phase4.stats.duplicatesRemoved, "duplicate")} removed, ${plural(phase4.stats.conceptsMerged, "concept")} merged`}
+				</StatusBanner>
+			)}
+			{phase4.status === "failed" && (
+				<StatusBanner variant="warning" icon={<AlertTriangle className="h-3.5 w-3.5" />}>
+					Cleanup failed (non-fatal)
+					{phase4.error && `: ${phase4.error}`}
+				</StatusBanner>
+			)}
+
+			{phase5?.status === "completed" && (
+				<StatusBanner variant="success" icon={<FileSearch className="h-3.5 w-3.5" />}>
+					Enrichment complete
+					{phase5.completed != null && ` — ${plural(phase5.completed, "resource")} enriched`}
+					{(phase5.failed ?? 0) > 0 && `, ${phase5.failed} failed`}
+				</StatusBanner>
+			)}
+			{phase5?.status === "failed" && (
+				<StatusBanner variant="warning" icon={<AlertTriangle className="h-3.5 w-3.5" />}>
+					Enrichment failed (non-fatal)
+				</StatusBanner>
+			)}
+		</>
 	);
 }
 

@@ -1,4 +1,10 @@
-import { mockLlmByResourceType, seedPdeSession, useTestDb } from "../fixtures/helpers.js";
+import {
+	countAmortisedRels,
+	findAmortisedRels,
+	mockLlmByResourceType,
+	seedPdeSession,
+	useTestDb,
+} from "../fixtures/helpers.js";
 
 vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	chatCompletion: vi.fn(),
@@ -81,18 +87,14 @@ describe("full indexing flow", () => {
 		}));
 		await amortiseSearchResults(session.id, "Method Of Characteristics", contentResults);
 
-		const amortisedRels = await db.relationship.findMany({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const amortisedRels = await findAmortisedRels(db, session.id);
 		expect(amortisedRels.length).toBeGreaterThan(0);
 
 		const reSearchResults = await searchGraph(session.id, "Method Of Characteristics", 20);
 		expect(reSearchResults.length).toBeGreaterThanOrEqual(searchResults.length);
 
 		const resourceToReindex = resources[0];
-		const amortisedBefore = await db.relationship.count({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const amortisedBefore = await countAmortisedRels(db, session.id);
 
 		vi.mocked(chatCompletion).mockResolvedValue(
 			JSON.stringify({
@@ -113,9 +115,7 @@ describe("full indexing flow", () => {
 		expect(systemRelsForResource.length).toBe(1);
 		expect(systemRelsForResource[0].targetLabel).toBe("Heat Equation");
 
-		const amortisedAfter = await db.relationship.count({
-			where: { sessionId: session.id, createdBy: "amortised" },
-		});
+		const amortisedAfter = await countAmortisedRels(db, session.id);
 		expect(amortisedAfter).toBe(amortisedBefore);
 
 		const conceptToDelete = concepts.find((c) => c.name === "Wave Equation");

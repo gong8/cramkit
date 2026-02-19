@@ -121,6 +121,24 @@ function buildChunkTree<T extends { id: string; parentId: string | null }>(
 	return roots;
 }
 
+function amortiseChunks(
+	sessionId: string,
+	resourceName: string,
+	chunks: Array<{ id: string; title: string | null; keywords: string | null }>,
+) {
+	if (chunks.length === 0) return;
+	const matchText = [
+		resourceName,
+		...chunks.map((ch) => [ch.title, ch.keywords].filter(Boolean).join(" ")),
+	].join(" ");
+	const entities = chunks.map((ch) => ({
+		type: "chunk" as const,
+		id: ch.id,
+		label: ch.title,
+	}));
+	amortiseRead(sessionId, entities, matchText);
+}
+
 function parseFormMetadata(formData: FormData) {
 	return createResourceSchema.safeParse({
 		name: formData.get("name") as string,
@@ -245,17 +263,8 @@ resourcesRoutes.get("/:id", async (c) => {
 	if (result instanceof Response) return result;
 	log.info(`GET /resources/${result.id} — found "${result.name}"`);
 
-	if (result.chunks && result.chunks.length > 0) {
-		const matchText = [
-			result.name,
-			...result.chunks.map((ch) => [ch.title, ch.keywords].filter(Boolean).join(" ")),
-		].join(" ");
-		const entities = result.chunks.map((ch) => ({
-			type: "chunk" as const,
-			id: ch.id,
-			label: ch.title,
-		}));
-		amortiseRead(result.sessionId, entities, matchText);
+	if (result.chunks) {
+		amortiseChunks(result.sessionId, result.name, result.chunks);
 	}
 
 	return c.json(result);
@@ -275,18 +284,7 @@ resourcesRoutes.get("/:id/content", async (c) => {
 		}),
 	]);
 
-	if (chunks.length > 0) {
-		const matchText = [
-			result.name,
-			...chunks.map((ch) => [ch.title, ch.keywords].filter(Boolean).join(" ")),
-		].join(" ");
-		const entities = chunks.map((ch) => ({
-			type: "chunk" as const,
-			id: ch.id,
-			label: ch.title,
-		}));
-		amortiseRead(result.sessionId, entities, matchText);
-	}
+	amortiseChunks(result.sessionId, result.name, chunks);
 
 	log.info(`GET /resources/${result.id}/content — ${content.length} chars`);
 	return c.json({ id: result.id, name: result.name, type: result.type, content });

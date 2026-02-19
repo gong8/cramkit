@@ -78,35 +78,30 @@ function updateStreamState(
 	eventType: string,
 	parsed: Record<string, unknown>,
 ): void {
-	switch (eventType) {
-		case "content":
-			if (parsed.content) stream.fullContent += parsed.content;
-			break;
-		case "tool_call_start": {
-			const idx = stream.toolCallsData.length;
-			stream.toolCallsData.push({
-				toolCallId: parsed.toolCallId as string,
-				toolName: parsed.toolName as string,
-				args: {},
-			});
-			toolCallIndex.set(parsed.toolCallId as string, idx);
-			break;
-		}
-		case "tool_call_args": {
-			const idx = toolCallIndex.get(parsed.toolCallId as string);
-			if (idx !== undefined) {
-				stream.toolCallsData[idx].args = parsed.args as Record<string, unknown>;
-			}
-			break;
-		}
-		case "tool_result": {
-			const idx = toolCallIndex.get(parsed.toolCallId as string);
-			if (idx !== undefined) {
-				stream.toolCallsData[idx].result = parsed.result as string;
-				stream.toolCallsData[idx].isError = parsed.isError as boolean;
-			}
-			break;
-		}
+	if (eventType === "content" && parsed.content) {
+		stream.fullContent += parsed.content;
+		return;
+	}
+
+	if (eventType === "tool_call_start") {
+		const idx = stream.toolCallsData.length;
+		stream.toolCallsData.push({
+			toolCallId: parsed.toolCallId as string,
+			toolName: parsed.toolName as string,
+			args: {},
+		});
+		toolCallIndex.set(parsed.toolCallId as string, idx);
+		return;
+	}
+
+	const idx = toolCallIndex.get(parsed.toolCallId as string);
+	if (idx === undefined) return;
+
+	if (eventType === "tool_call_args") {
+		stream.toolCallsData[idx].args = parsed.args as Record<string, unknown>;
+	} else if (eventType === "tool_result") {
+		stream.toolCallsData[idx].result = parsed.result as string;
+		stream.toolCallsData[idx].isError = parsed.isError as boolean;
 	}
 }
 
@@ -134,8 +129,14 @@ function extractAccessedEntities(toolCalls: ToolCallData[]): {
 	sessionId: string | null;
 } {
 	const entities: Array<{ type: string; id: string }> = [];
-	const linkedPairs = new Set<string>();
 	let sessionId: string | null = null;
+
+	const toolArgMap: Record<string, { type: string; idKey: string }> = {
+		get_concept: { type: "concept", idKey: "conceptId" },
+		get_chunk: { type: "chunk", idKey: "chunkId" },
+		get_resource_info: { type: "resource", idKey: "resourceId" },
+		get_resource_content: { type: "resource", idKey: "resourceId" },
+	};
 
 	for (const tc of toolCalls) {
 		const tool = tc.toolName.replace(/^mcp__cramkit__/, "");
@@ -145,31 +146,14 @@ function extractAccessedEntities(toolCalls: ToolCallData[]): {
 			sessionId = args.sessionId;
 		}
 
-		switch (tool) {
-			case "get_concept":
-				if (args.conceptId) entities.push({ type: "concept", id: args.conceptId as string });
-				break;
-			case "get_chunk":
-				if (args.chunkId) entities.push({ type: "chunk", id: args.chunkId as string });
-				break;
-			case "get_related":
-				if (args.id && args.type)
-					entities.push({ type: args.type as string, id: args.id as string });
-				break;
-			case "get_resource_info":
-			case "get_resource_content":
-				if (args.resourceId) entities.push({ type: "resource", id: args.resourceId as string });
-				break;
-			case "create_link":
-				if (args.sourceId && args.targetId) {
-					linkedPairs.add(`${args.sourceType}:${args.sourceId}`);
-					linkedPairs.add(`${args.targetType}:${args.targetId}`);
-				}
-				break;
+		const mapping = toolArgMap[tool];
+		if (mapping && args[mapping.idKey]) {
+			entities.push({ type: mapping.type, id: args[mapping.idKey] as string });
+		} else if (tool === "get_related" && args.id && args.type) {
+			entities.push({ type: args.type as string, id: args.id as string });
 		}
 	}
 
-	// Deduplicate and exclude entities the agent already explicitly linked
 	const seen = new Set<string>();
 	const deduped = entities.filter((e) => {
 		const key = `${e.type}:${e.id}`;
@@ -250,20 +234,16 @@ async function consumeStream(
 	const toolCallIndex = new Map<string, number>();
 	const lineBuffer = new LineBuffer();
 	const currentEventType = { value: "content" };
+	let status: "complete" | "error" = "complete";
 
 	try {
-		while (true) {
+		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
 
 			for (const line of lineBuffer.push(decoder.decode(value, { stream: true }))) {
 				const parsed = parseSSELine(line, currentEventType);
-				if (!parsed) continue;
-
-				if (parsed.data === "[DONE]") {
-					await finalizeStream(stream, db, emit, "complete");
-					return;
-				}
+				if (!parsed || parsed.data === "[DONE]") continue;
 
 				try {
 					const obj = JSON.parse(parsed.data);
@@ -274,15 +254,15 @@ async function consumeStream(
 				}
 			}
 		}
-
-		await finalizeStream(stream, db, emit, "complete");
 	} catch (error) {
 		log.error("stream-manager — streaming error", error);
-		await finalizeStream(stream, db, emit, "error");
+		status = "error";
 	} finally {
 		reader.releaseLock();
-		scheduleCleanup(stream.conversationId);
 	}
+
+	await finalizeStream(stream, db, emit, status);
+	scheduleCleanup(stream.conversationId);
 }
 
 function createEmitter(stream: ActiveStream): (event: string, data: string) => void {
@@ -380,26 +360,17 @@ export function subscribe(conversationId: string, cb: Subscriber): SubscribeHand
 	});
 
 	const eq = createEventQueue(cb, () => {
-		if (stream.status !== "streaming" && eq.isEmpty) {
-			resolveDelivered();
-		}
+		if (stream.status !== "streaming" && eq.isEmpty) resolveDelivered();
 	});
 
 	for (const { event, data } of stream.events) {
 		eq.enqueue(event, data);
 	}
 
-	if (stream.status !== "streaming") {
-		return {
-			unsubscribe: () => {
-				eq.stop();
-				resolveDelivered();
-			},
-			delivered,
-		};
+	if (stream.status === "streaming") {
+		stream.subscribers.add(eq.enqueue);
 	}
 
-	stream.subscribers.add(eq.enqueue);
 	return {
 		unsubscribe: () => {
 			eq.stop();

@@ -1,6 +1,7 @@
 import { createLogger, createSessionSchema, getDb, updateSessionSchema } from "@cramkit/shared";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import type { ZodType } from "zod";
 import { exportSession } from "../services/session-export.js";
 import { importSession } from "../services/session-import.js";
 
@@ -15,21 +16,12 @@ async function findSessionOr404(c: Context, id: string) {
 	return session;
 }
 
-function validateOrError<T>(
-	c: Context,
-	schema: {
-		safeParse: (
-			d: unknown,
-		) => { success: true; data: T } | { success: false; error: { flatten: () => unknown } };
-	},
-	body: unknown,
-) {
+function validateOrError<T>(c: Context, schema: ZodType<T>, body: unknown) {
 	const parsed = schema.safeParse(body);
 	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 	return { data: parsed.data };
 }
 
-// List sessions
 sessionsRoutes.get("/", async (c) => {
 	const db = getDb();
 	const sessions = await db.session.findMany({
@@ -52,23 +44,22 @@ sessionsRoutes.get("/", async (c) => {
 	);
 });
 
-// Get session detail
 sessionsRoutes.get("/:id", async (c) => {
 	const db = getDb();
+	const id = c.req.param("id");
 	const session = await db.session.findUnique({
-		where: { id: c.req.param("id") },
+		where: { id },
 		include: { resources: { include: { files: true }, orderBy: { createdAt: "desc" } } },
 	});
 
 	if (!session) {
-		log.warn(`GET /sessions/${c.req.param("id")} — not found`);
+		log.warn(`GET /sessions/${id} — not found`);
 		return c.json({ error: "Session not found" }, 404);
 	}
 	log.info(`GET /sessions/${session.id} — found "${session.name}"`);
 	return c.json(session);
 });
 
-// Create session
 sessionsRoutes.post("/", async (c) => {
 	const db = getDb();
 	const result = validateOrError(c, createSessionSchema, await c.req.json());
@@ -85,7 +76,6 @@ sessionsRoutes.post("/", async (c) => {
 	return c.json(session, 201);
 });
 
-// Update session
 sessionsRoutes.patch("/:id", async (c) => {
 	const db = getDb();
 	const result = validateOrError(c, updateSessionSchema, await c.req.json());
@@ -105,7 +95,6 @@ sessionsRoutes.patch("/:id", async (c) => {
 	return c.json(session);
 });
 
-// Clear knowledge graph for a session
 sessionsRoutes.delete("/:id/graph", async (c) => {
 	const db = getDb();
 	const id = c.req.param("id");
@@ -125,7 +114,6 @@ sessionsRoutes.delete("/:id/graph", async (c) => {
 	return c.json({ ok: true });
 });
 
-// Export session as .cramkit.zip
 sessionsRoutes.get("/:id/export", async (c) => {
 	const id = c.req.param("id");
 	const result = await findSessionOr404(c, id);
@@ -153,7 +141,6 @@ sessionsRoutes.get("/:id/export", async (c) => {
 	}
 });
 
-// Import session from .cramkit.zip
 sessionsRoutes.post("/import", async (c) => {
 	const body = await c.req.parseBody();
 	const file = body.file;
@@ -183,7 +170,6 @@ sessionsRoutes.post("/import", async (c) => {
 	}
 });
 
-// Delete session
 sessionsRoutes.delete("/:id", async (c) => {
 	const db = getDb();
 	const id = c.req.param("id");

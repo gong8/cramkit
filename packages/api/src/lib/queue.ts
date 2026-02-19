@@ -1026,50 +1026,28 @@ export async function getSessionBatchStatus(sessionId: string): Promise<BatchSta
 	const p2Running = p2Resources.filter((r) => r.status === "indexing").length;
 	const p2Done = p2Resources.length === 0 || p2Completed + p2Failed >= p2Resources.length;
 
-	// Determine cross-linking status (in-memory → DB → default)
-	const clStatus = crossLinkStatus.get(batch.id);
-	let phase3Status: PhaseInfo["phase3"];
-	if (batch.status === "cancelled") {
-		phase3Status = batch.phase3Status ? JSON.parse(batch.phase3Status) : { status: "skipped" };
-	} else if (clStatus) {
-		phase3Status = { ...clStatus };
-	} else if (batch.phase3Status) {
-		phase3Status = JSON.parse(batch.phase3Status);
-	} else if (batch.status === "completed") {
-		phase3Status = { status: "completed" };
-	} else {
-		phase3Status = { status: "pending" };
-	}
+	const resolvePhaseStatus = <T>(inMemory: T | undefined, persisted: string | null): T => {
+		if (batch.status === "cancelled") {
+			return persisted ? JSON.parse(persisted) : ({ status: "skipped" } as T);
+		}
+		if (inMemory) return { ...inMemory };
+		if (persisted) return JSON.parse(persisted);
+		if (batch.status === "completed") return { status: "completed" } as T;
+		return { status: "pending" } as T;
+	};
 
-	// Determine cleanup status (in-memory → DB → default)
-	const cuStatus = cleanupStatus.get(batch.id);
-	let phase4Status: PhaseInfo["phase4"];
-	if (batch.status === "cancelled") {
-		phase4Status = batch.phase4Status ? JSON.parse(batch.phase4Status) : { status: "skipped" };
-	} else if (cuStatus) {
-		phase4Status = { ...cuStatus };
-	} else if (batch.phase4Status) {
-		phase4Status = JSON.parse(batch.phase4Status);
-	} else if (batch.status === "completed") {
-		phase4Status = { status: "completed" };
-	} else {
-		phase4Status = { status: "pending" };
-	}
-
-	// Determine metadata extraction status (in-memory → DB → default)
-	const mdStatus = metadataStatus.get(batch.id);
-	let phase5Status: PhaseInfo["phase5"];
-	if (batch.status === "cancelled") {
-		phase5Status = batch.phase5Status ? JSON.parse(batch.phase5Status) : { status: "skipped" };
-	} else if (mdStatus) {
-		phase5Status = { ...mdStatus };
-	} else if (batch.phase5Status) {
-		phase5Status = JSON.parse(batch.phase5Status);
-	} else if (batch.status === "completed") {
-		phase5Status = { status: "completed" };
-	} else {
-		phase5Status = { status: "pending" };
-	}
+	const phase3Status = resolvePhaseStatus<PhaseInfo["phase3"]>(
+		crossLinkStatus.get(batch.id),
+		batch.phase3Status,
+	);
+	const phase4Status = resolvePhaseStatus<PhaseInfo["phase4"]>(
+		cleanupStatus.get(batch.id),
+		batch.phase4Status,
+	);
+	const phase5Status = resolvePhaseStatus<PhaseInfo["phase5"]>(
+		metadataStatus.get(batch.id),
+		batch.phase5Status,
+	);
 
 	// Determine current phase
 	let currentPhase: PhaseInfo["current"] = null;

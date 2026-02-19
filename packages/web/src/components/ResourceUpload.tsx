@@ -257,6 +257,67 @@ function CheckboxField({
 	);
 }
 
+function TypeSpecificOptions({
+	form,
+	dispatch,
+}: {
+	form: FormState;
+	dispatch: React.Dispatch<FormAction>;
+}) {
+	switch (form.resourceType) {
+		case "PAST_PAPER":
+			return (
+				<>
+					<CheckboxField
+						checked={form.hasMarkScheme}
+						onChange={(v) => dispatch({ type: "setHasMarkScheme", value: v })}
+						label="PDF includes mark scheme"
+					/>
+					{!form.hasMarkScheme && (
+						<SecondaryFilePicker
+							id="mark-scheme-file"
+							label="Mark Scheme"
+							file={form.markSchemeFile}
+							onFileChange={(f) => dispatch({ type: "setMarkSchemeFile", file: f })}
+							onClear={() => dispatch({ type: "setMarkSchemeFile", file: null })}
+							buttonLabel="Choose mark scheme PDF"
+						/>
+					)}
+				</>
+			);
+		case "PROBLEM_SHEET":
+			return (
+				<>
+					<CheckboxField
+						checked={form.hasSolutions}
+						onChange={(v) => dispatch({ type: "setHasSolutions", value: v })}
+						label="PDF includes solutions"
+					/>
+					{!form.hasSolutions && (
+						<SecondaryFilePicker
+							id="solutions-file"
+							label="Solutions"
+							file={form.solutionsFile}
+							onFileChange={(f) => dispatch({ type: "setSolutionsFile", file: f })}
+							onClear={() => dispatch({ type: "setSolutionsFile", file: null })}
+							buttonLabel="Choose solutions PDF"
+						/>
+					)}
+				</>
+			);
+		case "LECTURE_NOTES":
+			return (
+				<CheckboxField
+					checked={form.splitMode === "split"}
+					onChange={(v) => dispatch({ type: "setSplitMode", value: v ? "split" : "auto" })}
+					label="Split into chunks for indexing"
+				/>
+			);
+		default:
+			return null;
+	}
+}
+
 function DetailsStep({
 	form,
 	dispatch,
@@ -276,10 +337,6 @@ function DetailsStep({
 	onSubmit: () => void;
 	uploading: boolean;
 }) {
-	const showMarkScheme = form.resourceType === "PAST_PAPER";
-	const showSolutions = form.resourceType === "PROBLEM_SHEET";
-	const showSplitMode = form.resourceType === "LECTURE_NOTES";
-
 	return (
 		<>
 			<h2 className="mb-4 text-lg font-semibold">
@@ -305,29 +362,7 @@ function DetailsStep({
 					</div>
 				)}
 
-				{showMarkScheme && (
-					<CheckboxField
-						checked={form.hasMarkScheme}
-						onChange={(v) => dispatch({ type: "setHasMarkScheme", value: v })}
-						label="PDF includes mark scheme"
-					/>
-				)}
-
-				{showSolutions && (
-					<CheckboxField
-						checked={form.hasSolutions}
-						onChange={(v) => dispatch({ type: "setHasSolutions", value: v })}
-						label="PDF includes solutions"
-					/>
-				)}
-
-				{showSplitMode && (
-					<CheckboxField
-						checked={form.splitMode === "split"}
-						onChange={(v) => dispatch({ type: "setSplitMode", value: v ? "split" : "auto" })}
-						label="Split into chunks for indexing"
-					/>
-				)}
+				<TypeSpecificOptions form={form} dispatch={dispatch} />
 
 				<FilePicker
 					files={form.files}
@@ -336,28 +371,6 @@ function DetailsStep({
 					onFileChange={onFileChange}
 					onRemoveFile={(i) => dispatch({ type: "removeFile", index: i })}
 				/>
-
-				{showMarkScheme && !form.hasMarkScheme && (
-					<SecondaryFilePicker
-						id="mark-scheme-file"
-						label="Mark Scheme"
-						file={form.markSchemeFile}
-						onFileChange={(f) => dispatch({ type: "setMarkSchemeFile", file: f })}
-						onClear={() => dispatch({ type: "setMarkSchemeFile", file: null })}
-						buttonLabel="Choose mark scheme PDF"
-					/>
-				)}
-
-				{showSolutions && !form.hasSolutions && (
-					<SecondaryFilePicker
-						id="solutions-file"
-						label="Solutions"
-						file={form.solutionsFile}
-						onFileChange={(f) => dispatch({ type: "setSolutionsFile", file: f })}
-						onClear={() => dispatch({ type: "setSolutionsFile", file: null })}
-						buttonLabel="Choose solutions PDF"
-					/>
-				)}
 
 				<div className="flex items-center justify-between pt-2">
 					<button
