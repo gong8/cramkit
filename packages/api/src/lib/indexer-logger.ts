@@ -52,8 +52,8 @@ function formatArgs(args: unknown[]): string {
  */
 export class IndexerLogger implements Logger {
 	private readonly console: Logger;
-	private readonly logDir: string;
-	private readonly agentsDir: string;
+	private readonly logDir!: string;
+	private readonly agentsDir!: string;
 	private batchStream: WriteStream | null = null;
 	private phaseStream: WriteStream | null = null;
 	private currentPhase: number | null = null;

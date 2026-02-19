@@ -76,6 +76,7 @@ describe("queue", () => {
 				id,
 				expect.any(String),
 				expect.any(AbortSignal),
+				expect.any(Object),
 			);
 		}
 	});

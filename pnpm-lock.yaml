@@ -50,13 +50,16 @@ importers:
         version: 3.10.1
       markitdown-ts:
         specifier: ^0.0.10
-        version: 0.0.10(zod@4.3.6)
+        version: 0.0.10(zod@3.25.76)
       p-queue:
         specifier: ^8.1.0
         version: 8.1.1
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
     devDependencies:
       '@types/archiver':
         specifier: ^7.0.0
@@ -4166,19 +4169,19 @@ packages:
 
 snapshots:
 
-  '@ai-sdk/gateway@3.0.46(zod@4.3.6)':
+  '@ai-sdk/gateway@3.0.46(zod@3.25.76)':
     dependencies:
       '@ai-sdk/provider': 3.0.8
-      '@ai-sdk/provider-utils': 4.0.15(zod@4.3.6)
+      '@ai-sdk/provider-utils': 4.0.15(zod@3.25.76)
       '@vercel/oidc': 3.1.0
-      zod: 4.3.6
+      zod: 3.25.76
 
-  '@ai-sdk/provider-utils@4.0.15(zod@4.3.6)':
+  '@ai-sdk/provider-utils@4.0.15(zod@3.25.76)':
     dependencies:
       '@ai-sdk/provider': 3.0.8
       '@standard-schema/spec': 1.1.0
       eventsource-parser: 3.0.6
-      zod: 4.3.6
+      zod: 3.25.76
 
   '@ai-sdk/provider@3.0.8':
     dependencies:
@@ -5578,13 +5581,13 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  ai@6.0.86(zod@4.3.6):
+  ai@6.0.86(zod@3.25.76):
     dependencies:
-      '@ai-sdk/gateway': 3.0.46(zod@4.3.6)
+      '@ai-sdk/gateway': 3.0.46(zod@3.25.76)
       '@ai-sdk/provider': 3.0.8
-      '@ai-sdk/provider-utils': 4.0.15(zod@4.3.6)
+      '@ai-sdk/provider-utils': 4.0.15(zod@3.25.76)
       '@opentelemetry/api': 1.9.0
-      zod: 4.3.6
+      zod: 3.25.76
 
   ajv-formats@3.0.1(ajv@8.18.0):
     optionalDependencies:
@@ -6681,11 +6684,11 @@ snapshots:
 
   markdown-table@3.0.4: {}
 
-  markitdown-ts@0.0.10(zod@4.3.6):
+  markitdown-ts@0.0.10(zod@3.25.76):
     dependencies:
       '@joplin/turndown-plugin-gfm': 1.0.64
       '@xmldom/xmldom': 0.9.8
-      ai: 6.0.86(zod@4.3.6)
+      ai: 6.0.86(zod@3.25.76)
       jsdom: 25.0.1
       mammoth: 1.11.0
       mime-types: 2.1.35
