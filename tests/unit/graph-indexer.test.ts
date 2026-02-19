@@ -13,6 +13,14 @@ vi.mock("../../packages/api/src/services/llm-client.js", () => ({
 	BLOCKED_BUILTIN_TOOLS: [],
 }));
 
+vi.mock("../../packages/api/src/services/errors.js", async () => {
+	const actual = await vi.importActual("../../packages/api/src/services/errors.js");
+	return {
+		...(actual as object),
+		sleep: vi.fn().mockResolvedValue(undefined),
+	};
+});
+
 vi.mock("../../packages/api/src/services/extraction-agent.js", () => ({
 	runExtractionAgent: vi.fn().mockImplementation(async (input: { resource: { type: string } }) => {
 		const { chatCompletion: cc } = await import("../../packages/api/src/services/llm-client.js");

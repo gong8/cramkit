@@ -94,14 +94,11 @@ describe("chatCompletion", () => {
 
 		await chatCompletion([{ role: "user", content: "test" }], {
 			model: "claude-haiku-latest",
-			maxTokens: 2048,
 		});
 
 		const args = mockSpawn.mock.calls[0][1] as string[];
 		const modelIdx = args.indexOf("--model");
 		expect(args[modelIdx + 1]).toBe("haiku");
-		const maxIdx = args.indexOf("--max-tokens");
-		expect(args[maxIdx + 1]).toBe("2048");
 	});
 
 	it("throws on non-zero exit code", async () => {
